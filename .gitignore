@@ -4,3 +4,7 @@ __pycache__/
 .pytest_cache/
 # runtime data lives under $XDG_DATA_HOME/sandesh/, never in the repo
 *.db
+# dev/test tooling — not part of the stdlib-only deliverable
+.venv/
+.env
+test-reports/
