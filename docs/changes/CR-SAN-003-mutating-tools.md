@@ -29,8 +29,20 @@ Register via `@mcp.tool()`, each with a required `project_id`, each delegating p
 
 - `sandesh_send`/`sandesh_reply` pass `store` (write bodies); `register`/`unregister`/
   `actioned` pass only `con` (D3).
-- `sandesh_register`/`sandesh_send` pass `project=project_id` so the library can enforce
-  the address-format-matches-project rule.
+- `sandesh_register`/`sandesh_send`/`sandesh_reply` pass `project=project_id` so the library
+  can enforce the address-format-matches-project rule (gap-analysis DRIFT-2 — `reply` too,
+  for consistency).
+- **No explicit commit (gap-analysis):** every write fn commits internally
+  (`register`/`send`/`set_status`/`deactivate`/`notifier_tombstone`; `reply`→`send`;
+  `unregister` soft-delete→`deactivate`). Tools reuse the read-tool pattern
+  (`_ctx` → lib call → `try/finally con.close()`) and MUST NOT add a redundant `con.commit()`.
+- **`to`/`cc` typing (gap-analysis DRIFT-1):** `send` iterates `to`/`cc` as lists
+  (`for a in lst`), so a lone `str` would iterate **characters**. Type them `list[str] | None`
+  and defensively coerce a single `str` → `[str]`.
+- **Required params (applying CR-SAN-002's deferred VERIFY lesson):** genuinely-required
+  params have **no silent defaults** — `addr` (register), `recipient`+`requester`
+  (unregister), `from_addr`+`subject` (send), `parent_id`+`from_addr` (reply), `msg_id`
+  (actioned) are required; only truly-optional params (`kind`, `cc`, `body_text`, …) default.
 
 ### §S2 — Error mapping verified (D5)
 Library validation/authorization errors surface as `ToolError` with the original message
@@ -48,7 +60,7 @@ Library validation/authorization errors surface as `ToolError` with the original
 - [ ] **AC4** — `sandesh_send(project_id, from_addr, to, subject, …)` creates a message
       (recipient sees it via `inbox`/`fetch`); passes `store` and `project=project_id`.
 - [ ] **AC5** — `sandesh_reply(project_id, parent_id, from_addr, …)` creates a reply linked via
-      `in_reply_to`; passes `store`.
+      `in_reply_to`; passes `store` and `project=project_id`.
 - [ ] **AC6** — `sandesh_unregister(project_id, recipient, requester)` returns the library's
       result (e.g. `('tombstoned', pid)` for a live address, soft-delete otherwise).
 - [ ] **AC7** — `sandesh_actioned(project_id, msg_id)` sets the message status to `actioned`.
