@@ -50,7 +50,10 @@ memory. These are design inputs; a CR re-confirms the pin at implementation time
 | Run / transport | `mcp.run(transport="stdio")`; transports are `"stdio" | "sse" | "streamable-http"`, default `stdio` |
 | Structured output | auto-derived from return type annotation (`structured_output` override available) |
 | Error surface | raise `ToolError` (`mcp.server.fastmcp.exceptions`) → returned to client as a tool error; unhandled exceptions also surface but lose shape |
-| In-process test entry | `await mcp.call_tool(name, args)` and `await mcp.list_tools()`; full loopback via `mcp.shared.memory` |
+| In-process test entry | `await mcp.call_tool(name, args)` and `await mcp.list_tools()` — returns *converted* output (`Sequence[ContentBlock] | dict`), not the raw value |
+| In-memory client↔server | `create_connected_server_and_client_session(...)` (`mcp.shared.memory`) — a real `ClientSession` over an in-memory transport (protocol round-trip, no subprocess) |
+| Real-subprocess client | `StdioServerParameters(command=…, args=…)` + `stdio_client(...)` + `ClientSession` (top-level `mcp` exports); `session.initialize()` → `list_tools()` / `call_tool()` |
+| Manual inspector | `mcp dev app/mcp_server.py` launches the MCP Inspector (browser UI) for hands-on smoke testing |
 
 ## 4. Design decisions
 
@@ -58,20 +61,32 @@ memory. These are design inputs; a CR re-confirms the pin at implementation time
 (mirrors the Model-B "one process per session" shape; no port management, no auth). HTTP
 transports are out of scope; revisit only if a shared multi-client server is ever needed.
 
-**D2 — Dependency isolation.** `mcp` is the first non-stdlib dependency. It is imported
-**only** by `mcp_server.py`. The CLI path (`bin/sandesh` → `cli.py` → `sandesh_db.py` /
-`notify.py`) must remain importable with **zero** third-party packages. Therefore `mcp`
-installs into an isolated environment (a venv under the install dir, or a documented
-`pip --user`), used only by the MCP entrypoint — the CLI never imports it.
+**D2 — Dependency isolation via a dedicated venv + wrapper (DECIDED).** `mcp` is the first
+non-stdlib dependency. It is imported **only** by `mcp_server.py`. The CLI path
+(`bin/sandesh` → `cli.py` → `sandesh_db.py` / `notify.py`) must remain importable with
+**zero** third-party packages. Mechanism:
+- `install.sh` creates a **dedicated venv** at `<install>/.venv` and installs the pinned
+  `mcp` into it (the only place `mcp` ever lives).
+- `install.sh` writes a wrapper launcher `bin/sandesh-mcp` that
+  `exec "$DEST/.venv/bin/python" "$DEST/app/mcp_server.py" "$@"` — i.e. the MCP server runs
+  on the **venv interpreter**, while `bin/sandesh` (the CLI) keeps running on system
+  `python3`. Two launchers, two interpreters, by design.
+- The user points their MCP client at `sandesh-mcp` (see §7a). The CLI never sees `mcp`.
+(`pip --user` was the alternative; rejected — it pollutes the global environment and
+couples the CLI's interpreter to a third-party package.)
 
 **D3 — Thin adapter, no new logic.** Each tool mirrors `cli.py::_ctx`: resolve store via
 `sandesh_db.store_dir(project_id)`, connect via `sandesh_db.connect(store)`, call the one
 mapped `sandesh_db.*` function, return its value. Body-touching tools (`send`, `reply`,
 `fetch`) pass `store`; the rest pass only `con`.
 
-**D4 — Explicit `project_id` on every tool.** No CWD/git inference (a daemon has none) —
-consistent with the library's existing contract. `project_id` is a required parameter of
-every tool.
+**D4 — `project_id` on every tool, with a `$SANDESH_PROJECT` fallback.** No CWD/git
+inference (a daemon has none) — consistent with the library's existing contract. Every tool
+takes a `project_id` parameter; if it is omitted, the server falls back to the
+`$SANDESH_PROJECT` environment variable (the same precedence the CLI already uses), and
+errors if neither is present. This lets a client register a per-project server once
+(`claude mcp add … --env SANDESH_PROJECT=<id>`, see §7a) so the agent can call tools
+without repeating `project_id`, while still allowing an explicit override per call.
 
 **D5 — Error mapping.** Library-raised validation/authorization errors (bad address
 format, unauthorized unregister, duplicate registration) are caught and re-raised as
@@ -83,7 +98,8 @@ invented for MCP; none is dropped.
 
 ## 5. Tool surface (the WHAT)
 
-Each tool takes `project_id` (required) plus the verb's own parameters, and delegates:
+Each tool takes `project_id` (optional — falls back to `$SANDESH_PROJECT`, see D4) plus
+the verb's own parameters, and delegates:
 
 | MCP tool | delegates to | passes |
 |---|---|---|
@@ -115,6 +131,39 @@ a shutdown hook (see `CLAUDE.md` "The wake mechanism").
 - Adoption is incremental: an agent can use the CLI and the MCP server simultaneously
   during transition.
 
+## 7a. Deployment & client registration (DECIDED)
+
+A stdio MCP server is **a command the client spawns** — "deploying" means giving the client
+a runnable command (`command` + `args` + `env`). For Sandesh that command is the
+`bin/sandesh-mcp` wrapper from D2.
+
+**Install →** `./install.sh` (creates the venv + `sandesh-mcp` wrapper, symlinks it onto
+PATH alongside `sandesh`). **Register with Claude Code:**
+```bash
+# user scope (all your projects); bake a default project via env so tools can omit project_id
+claude mcp add sandesh --scope user --env SANDESH_PROJECT=<id> -- sandesh-mcp
+```
+which writes (Claude Code uses `~/.claude.json` for user/local scope, `.mcp.json` in the
+repo for project scope):
+```json
+{ "mcpServers": {
+    "sandesh": { "type": "stdio", "command": "sandesh-mcp", "args": [],
+                 "env": { "SANDESH_PROJECT": "<id>" } } } }
+```
+
+**Scope guidance (default = user scope).** Register **user-scoped** for personal use across
+projects. A team that wants Sandesh wired into a specific repo commits a project-scoped
+`.mcp.json` (`--scope project`); Claude Code prompts each member to approve it on first use.
+`install.sh` does **not** auto-edit any client config — it prints the `claude mcp add`
+command for the user to run (least-surprise; no silent edits to `~/.claude.json`).
+
+**Manage:** `claude mcp list` / `claude mcp get sandesh` / `claude mcp remove sandesh`;
+the in-session `/mcp` panel shows status + exposed tools.
+
+(Claude **Desktop** uses a separate `claude_desktop_config.json` with the same
+`command`/`args`/`env` shape — the SDK's own `mcp install` targets Desktop only. Supporting
+Desktop is a doc note, not extra code.)
+
 ## 8. Success criteria
 
 1. An MCP client can call all 10 tools over stdio and get results equal to the
@@ -123,6 +172,27 @@ a shutdown hook (see `CLAUDE.md` "The wake mechanism").
 3. `notify` is untouched and remains the wake path.
 4. Adapter tests prove per-tool parity with the library; the existing 24 unit tests stay
    green.
+
+## 8a. Testing strategy — three tiers (DECIDED)
+
+The MCP analog of "unit tests + Playwright browser E2E": progressively more realistic, each
+tier catching what the cheaper one cannot.
+
+| Tier | Mechanism | Exercises | Where |
+|---|---|---|---|
+| **T1 — Unit / parity** (in-process) | `FastMCP.call_tool(name, args)` / `list_tools()` | tool registration + adapter delegates correctly to `sandesh_db.*` (unwrap converted output) | CR-SAN-001..003 |
+| **T2 — Integration** (in-memory client↔server) | `create_connected_server_and_client_session` + real `ClientSession` | the real MCP **protocol** round-trip (serialization, structured output, `ToolError` over the wire) without a subprocess | CR-SAN-004 |
+| **T3 — E2E smoke** (real subprocess over stdio) | `StdioServerParameters(command="sandesh-mcp")` + `stdio_client` + `ClientSession.initialize()` → `list_tools()` / `call_tool()` | the **installed wrapper + venv + transport** end-to-end — the Playwright-equivalent of launching the real browser | CR-SAN-004 |
+
+- **T3 is the dedicated smoke test:** it spawns the actual `sandesh-mcp` wrapper (built by
+  `install.sh`), proving the deployment artifact works — not just the Python module. It runs
+  against a temp `XDG_DATA_HOME`, does a `sandesh_setup` → `sandesh_send` → `sandesh_fetch`
+  round trip over real stdio, and asserts the message survives the protocol boundary.
+- **Manual smoke:** `mcp dev app/mcp_server.py` opens the MCP Inspector (browser UI) for
+  hands-on exploration — the human equivalent of T3.
+- T2/T3 require the `mcp` venv (they import the client); they are gated to run only when the
+  venv exists, so the stdlib-only CLI test path (`python3 tests/test_sandesh.py`) is never
+  coupled to `mcp`.
 
 ## 9. Out of scope / future
 
@@ -135,6 +205,7 @@ a shutdown hook (see `CLAUDE.md` "The wake mechanism").
 
 | CR | Scope | Depends on |
 |---|---|---|
-| CR-SAN-001 | Foundation: dependency isolation + `install.sh` wiring, `FastMCP` app, `_ctx(project_id)` helper, `ToolError` mapping (D2/D3/D5), stdio entrypoint, in-process test harness, proven with `sandesh_setup` | — |
-| CR-SAN-002 | Read/query tools: `sandesh_addressbook`, `sandesh_inbox`, `sandesh_fetch`, `sandesh_thread` + parity tests | CR-SAN-001 |
+| CR-SAN-001 | Foundation: venv + `sandesh-mcp` wrapper in `install.sh` (D2), `FastMCP` app, `_ctx` with `project_id`/`$SANDESH_PROJECT` fallback (D3/D4), `ToolError` mapping (D5), stdio entrypoint, T1 in-process harness, proven with `sandesh_setup` | — |
+| CR-SAN-002 | Read/query tools: `sandesh_addressbook`, `sandesh_inbox`, `sandesh_fetch`, `sandesh_thread` + T1 parity tests | CR-SAN-001 |
 | CR-SAN-003 | Mutating tools: `sandesh_register`, `sandesh_unregister`, `sandesh_send`, `sandesh_reply`, `sandesh_actioned` + auth/validation error-mapping tests | CR-SAN-001 |
+| CR-SAN-004 | E2E: T2 in-memory client↔server tests + T3 real-subprocess stdio smoke test over the installed `sandesh-mcp` wrapper; document `mcp dev` + `claude mcp add` registration (§7a) | CR-SAN-001, 002, 003 |
