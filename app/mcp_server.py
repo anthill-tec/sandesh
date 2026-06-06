@@ -58,6 +58,82 @@ def sandesh_setup(project_id: str | None = None) -> str:
         raise ToolError(str(e)) from e
 
 
+@mcp.tool()
+def sandesh_addressbook(project_id: str | None = None) -> list[dict]:
+    """List the project's addressbook entries. Returns list[dict].
+
+    project_id falls back to $SANDESH_PROJECT if omitted.
+    """
+    con = None
+    try:
+        _project, _store, con = _ctx(project_id)
+        return sandesh_db.addressbook(con)
+    except (ValueError, PermissionError) as e:
+        raise ToolError(str(e)) from e
+    finally:
+        if con is not None:
+            con.close()
+
+
+@mcp.tool()
+def sandesh_inbox(
+    project_id: str | None = None,
+    recipient: str = "",
+    unread_only: bool = True,
+) -> list[dict]:
+    """List a recipient's inbox messages. Returns list[dict].
+
+    project_id falls back to $SANDESH_PROJECT if omitted.
+    """
+    con = None
+    try:
+        _project, _store, con = _ctx(project_id)
+        return [dict(r) for r in sandesh_db.inbox(con, recipient, unread_only)]
+    except (ValueError, PermissionError) as e:
+        raise ToolError(str(e)) from e
+    finally:
+        if con is not None:
+            con.close()
+
+
+@mcp.tool()
+def sandesh_fetch(
+    project_id: str | None = None,
+    recipient: str = "",
+    mark: bool = True,
+) -> list[dict]:
+    """Fetch a recipient's messages (with bodies). Returns list[dict].
+
+    project_id falls back to $SANDESH_PROJECT if omitted.
+    """
+    con = None
+    try:
+        _project, store, con = _ctx(project_id)
+        return sandesh_db.fetch(con, store, recipient, mark)
+    except (ValueError, PermissionError) as e:
+        raise ToolError(str(e)) from e
+    finally:
+        if con is not None:
+            con.close()
+
+
+@mcp.tool()
+def sandesh_thread(project_id: str | None = None, msg_id: int = 0) -> list[dict]:
+    """Walk a message's reply thread (root to leaf). Returns list[dict].
+
+    project_id falls back to $SANDESH_PROJECT if omitted.
+    """
+    con = None
+    try:
+        _project, _store, con = _ctx(project_id)
+        return [dict(r) for r in sandesh_db.thread(con, msg_id)]
+    except (ValueError, PermissionError) as e:
+        raise ToolError(str(e)) from e
+    finally:
+        if con is not None:
+            con.close()
+
+
 def main():
     """Run the MCP server over stdio."""
     mcp.run(transport="stdio")
