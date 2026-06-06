@@ -1,0 +1,76 @@
+# CR-SAN-003 — MCP mutating tools & error mapping
+
+**Status:** PENDING
+**Priority:** High
+**Depends on:** CR-SAN-001
+**Labels:** phase-2, mcp, write-tools
+**Phase:** Phase 2
+**Design reference:** docs/research/PRD-mcp-server.md §5, §4 (D3/D4/D5)
+
+## Context
+
+Third CR of the Phase-2 MCP server (PRD §10). Adds the five **mutating** tools and
+exercises the CR-SAN-001 error mapping (D5) against the library's real validation and
+authorization errors (bad address format, duplicate registration, unauthorized
+unregister).
+
+## Scope
+
+### §S1 — Mutating tools
+Register via `@mcp.tool()`, each with a required `project_id`, each delegating per PRD §5:
+
+| tool | signature (beyond `project_id`) | delegates to | passes |
+|---|---|---|---|
+| `sandesh_register` | `addr: str, kind: str=None, display_name: str=None, by: str=None` | `register(con, addr, kind, display_name, by, project)` | `con` |
+| `sandesh_unregister` | `recipient: str, requester: str` | `unregister(con, recipient, requester, project)` | `con` |
+| `sandesh_send` | `from_addr: str, to=None, cc=None, subject: str="", kind=None, body_text=None` | `send(con, store, from_addr, to, cc, subject, kind, …)` | `con`, `store` |
+| `sandesh_reply` | `parent_id: int, from_addr: str, subject=None, body_text=None` | `reply(con, store, parent_id, from_addr, subject, body_text, …)` | `con`, `store` |
+| `sandesh_actioned` | `msg_id: int` | `set_status(con, msg_id, "actioned")` | `con` |
+
+- `sandesh_send`/`sandesh_reply` pass `store` (write bodies); `register`/`unregister`/
+  `actioned` pass only `con` (D3).
+- `sandesh_register`/`sandesh_send` pass `project=project_id` so the library can enforce
+  the address-format-matches-project rule.
+
+### §S2 — Error mapping verified (D5)
+Library validation/authorization errors surface as `ToolError` with the original message
+(the wrapper from CR-SAN-001), proven by tests against real failure cases.
+
+## Acceptance criteria
+
+### §S1
+- [ ] `await mcp.list_tools()` includes `sandesh_register`, `sandesh_unregister`,
+      `sandesh_send`, `sandesh_reply`, `sandesh_actioned`.
+- [ ] After CR-SAN-001..003, `await mcp.list_tools()` returns **exactly 10** tools (the
+      full PRD §5 set — no more, no fewer).
+- [ ] `sandesh_register(project_id, addr, …)` registers the address (visible in
+      `addressbook`); passes `project=project_id`.
+- [ ] `sandesh_send(project_id, from_addr, to, subject, …)` creates a message
+      (recipient sees it via `inbox`/`fetch`); passes `store` and `project=project_id`.
+- [ ] `sandesh_reply(project_id, parent_id, from_addr, …)` creates a reply linked via
+      `in_reply_to`; passes `store`.
+- [ ] `sandesh_unregister(project_id, recipient, requester)` returns the library's result
+      (e.g. `('tombstoned', pid)` for a live address, soft-delete otherwise).
+- [ ] `sandesh_actioned(project_id, msg_id)` sets the message status to `actioned`.
+
+### §S2
+- [ ] Registering a malformed address via `sandesh_register` raises `ToolError` (not an
+      unhandled exception) carrying the library's validation message.
+- [ ] An unauthorized `sandesh_unregister` (requester not `Mainline` and not self) raises
+      `ToolError` with the library's authorization message.
+
+### Tests
+- [ ] Parity/behavior tests for all five tools + the two error-mapping cases against a
+      temp store.
+- [ ] `python3 tests/test_sandesh.py` (existing 24) stays green.
+
+## Estimated size
+Small–medium: ~60–100 lines of adapters + one test module.
+
+## Risks / open questions
+- `send`/`reply` `to`/`cc` accept single string or list — keep the CLI's accepted shapes;
+  document the accepted parameter types in the tool docstring.
+
+## Non-goals
+- Read tools (CR-SAN-002); foundation (CR-SAN-001).
+- Any wake/`notify` tool (PRD §6).
