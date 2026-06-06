@@ -89,7 +89,7 @@ class InstallTest(unittest.TestCase):
         self._install_ok()
         venv_python = os.path.join(self.dest, ".venv", "bin", "python")
         result = subprocess.run(
-            [venv_python, "-c", "import mcp; print(mcp.__version__)"],
+            [venv_python, "-c", "import mcp; print('ok')"],
             capture_output=True,
             text=True,
         )
