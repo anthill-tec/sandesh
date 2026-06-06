@@ -27,11 +27,17 @@ on Linux/macOS/Windows.
 
 ## 2. What we ship (the decision)
 
+We ship **one artifact — a standard Python package** (`pyproject.toml` + console scripts +
+`[mcp]` extra). It is **installer-agnostic**: any of the tools below consume it. The package is
+primary; the installer is the user's choice. **`uv` is the recommended primary** (it's the
+MCP ecosystem's de-facto tool, fast, and manages its own Python so it sidesteps PEP 668).
+
 | Channel | Role | Mechanism |
 |---|---|---|
-| **pip package + `pipx`** | **PRIMARY** (cross-platform) | `pyproject.toml`; `pipx install sandesh` (CLI) / `pipx install 'sandesh[mcp]'` (CLI + MCP server) |
-| **PKGBUILD (AUR)** | **SECONDARY** (Arch convenience) | wraps the pip package / source tarball; `yay -S sandesh` |
-| **`install.sh`** | **FALLBACK** (no-network / dev / vendored) | kept, but no longer the recommended path |
+| **`uv` — `uvx` / `uv tool install`** | **PRIMARY (recommended)** | `uvx --from 'sandesh[mcp]' sandesh-mcp` (ephemeral, zero-install) **or** `uv tool install 'sandesh[mcp]'` (persistent; both console scripts on PATH) |
+| **`pipx` / `pipxu`** | **ALTERNATIVE** (equivalent isolation) | `pipx install 'sandesh[mcp]'` + `pipx ensurepath`; `pipxu` = pipx UX on a uv backend (Arch) |
+| **PKGBUILD (AUR)** | **SECONDARY** (Arch-native) | `yay -S sandesh`; pacman resolves prerequisites (no uv/pipx bootstrap needed) |
+| **`install.sh`** | **FALLBACK** (no uv/pipx, no network, dev) | builds its own venv with plain `python3`+`pip`; PEP-668-safe |
 
 ## 3. Decisions
 
@@ -40,24 +46,37 @@ rely on a `sys.path.insert` hack) into an importable **`sandesh/` package** (`sa
 `sandesh.sandesh_db`, `sandesh.notify`, `sandesh.mcp_server`). Build backend: setuptools or
 hatchling (CR decides). This is the prerequisite for every other channel.
 
-**D2 — `pipx` is the isolation + PATH mechanism (replaces the bespoke venv+wrapper).**
+**D2 — Installer-agnostic isolation + PATH; `uv` is the recommended primary.** The package's
 `[project.scripts]` entry points — `sandesh = "sandesh.cli:main"` and
-`sandesh-mcp = "sandesh.mcp_server:main"` — are emitted into pipx's bin dir (`~/.local/bin`);
-**`pipx ensurepath`** puts that dir on `$PATH` (a one-time, idempotent profile edit; needs a
-shell restart). `pipx` gives each tool its own isolated venv. Default is **user-space** (no
-root); `sudo pipx install --global` (pipx ≥ 1.5 → `/usr/local/bin`) is the all-users option.
-This **subsumes** PRD-mcp-server D2 (venv+wrapper) and **CR-SAN-007** (PATH hardening): the
-wrapper is gone, and the PATH edit becomes the single standard `pipx ensurepath` instead of
-bespoke per-shell logic.
+`sandesh-mcp = "sandesh.mcp_server:main"` — are what every installer drops on `$PATH`, each in
+its own isolated venv. This **subsumes** PRD-mcp-server D2 (venv+wrapper) and **CR-SAN-007**
+(PATH hardening): no bespoke wrapper, no per-shell PATH logic.
+- **`uv` (primary).** `uv tool install 'sandesh[mcp]'` → isolated, both scripts on PATH
+  (`uv tool update-shell` once for PATH); or **`uvx --from 'sandesh[mcp]' sandesh-mcp`** to run
+  the server **ephemerally** (no install; deps cached on first run). `uv run --with mcp …` is the
+  same pattern the MCP SDK's own `mcp install` emits. uv manages its own Python → **no PEP-668
+  issue**.
+- **`pipx`/`pipxu` (alternative, equivalent).** `pipx install 'sandesh[mcp]'` + `pipx ensurepath`
+  (one-time profile edit; shell restart). User-space by default; `sudo pipx install --global`
+  (pipx ≥ 1.5) for all users. `pipxu` = the same UX on a uv backend (Arch).
 
-**D2a — pipx is a prerequisite that may be absent; raw `pip` into system Python is blocked.**
-`pipx` is a separate tool, not guaranteed present. If missing, **bootstrap it**:
-`python -m pip install --user pipx && python -m pipx ensurepath`, or via the OS package
-(`sudo pacman -S python-pipx`, `apt install pipx`, `brew install pipx`). **Do NOT** fall back to
-a plain `pip install sandesh` into the system interpreter: on externally-managed Pythons
-(**PEP 668** — Arch, Debian, Fedora, recent macOS) that is **blocked** by design. So *something*
-must create a venv — either pipx, or the `install.sh` fallback (D6), or a hand-rolled venv. The
-docs must cover the "no pipx" case, not assume it.
+**Dual-channel caveat (wake vs verbs).** Sandesh needs BOTH `sandesh-mcp` (the server the client
+spawns) AND `sandesh` (the wake — the agent backgrounds `sandesh notify` *every cycle*). A
+**persistent** install (`uv tool install` / `pipx install`) puts *both* on PATH — best for the
+frequently-relaunched wake. Pure **ephemeral `uvx`** is ideal for the server/registration and
+try-before-install, but the wake would then also run via `uvx --from sandesh sandesh notify …`
+(a cold-ish resolve per relaunch). **Recommendation: persistent install for steady use; `uvx`
+for zero-install/trial and as the MCP-registration command.**
+
+**D2a — the installer (uv/pipx) may be absent; raw `pip` into system Python is blocked.**
+Neither `uv` nor `pipx` is guaranteed present. **Bootstrap one:** `uv` via `sudo pacman -S uv`
+/ the Astral install script / `pip install --user uv`; or `pipx` via `pip install --user pipx &&
+pipx ensurepath` / `sudo pacman -S python-pipx`. **Do NOT** fall back to a plain
+`pip install sandesh` into the system interpreter — on externally-managed Pythons (**PEP 668** —
+Arch, Debian, Fedora, recent macOS) that is **blocked** by design. So *something* must create a
+venv: `uv`, `pipx`, the `install.sh` fallback (D6), or a hand-rolled venv. (On Arch the PKGBUILD,
+D5, dodges this entirely — pacman installs the prerequisites.) Docs must cover the "no uv/pipx"
+case, not assume it.
 
 **D3 — `mcp` is an optional extra (`sandesh[mcp]`), preserving stdlib-only CLI.**
 `[project.optional-dependencies] mcp = ["mcp>=1.27,<2"]`. `pipx install sandesh` → the
@@ -98,7 +117,7 @@ it only if pipx becomes universally assumable — which D2a says it is not.)
 
 | CR | Scope | Depends on |
 |---|---|---|
-| **CR-SAN-008** | **Packaging:** restructure `app/` → `sandesh/` package, `pyproject.toml` with `[project.scripts]` (`sandesh`, `sandesh-mcp`) + `[mcp]` extra, pip/pipx-installable; fix tests for the new layout; demote `install.sh` to fallback; README install-via-pipx. | CR-SAN-001..004 |
+| **CR-SAN-008** | **Packaging:** restructure `app/` → `sandesh/` package, `pyproject.toml` with `[project.scripts]` (`sandesh`, `sandesh-mcp`) + `[mcp]` extra; installer-agnostic (uv/pipx/pip); fix tests for the new layout; demote `install.sh` to fallback; README install-via-**uv** (uvx / `uv tool install`) first, pipx alternative. | CR-SAN-001..004 |
 | **CR-SAN-009** | **PKGBUILD (AUR):** build from the package/source; resolve `mcp`; install both console scripts. | CR-SAN-008 |
 
 (CR-SAN-007 "install PATH hardening" is **SUPERSEDED** by CR-SAN-008 — pipx/entry points
