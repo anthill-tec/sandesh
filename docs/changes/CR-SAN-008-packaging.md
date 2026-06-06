@@ -50,6 +50,15 @@ Out of scope here: the AUR PKGBUILD (CR-SAN-009) and Windows **runtime** (DN-win
   venv, or the copy-based install updated to the new layout). README presents `pipx` first and
   `install.sh` as the no-network/from-source fallback.
 
+### §S6 — Friendly error when the `[mcp]` extra is absent
+Console-script entry points are unconditional, so a base (`no-[mcp]`) install still ships
+`sandesh-mcp`, and invoking it would raise a raw `ImportError` (`sandesh.mcp_server` imports
+`mcp` at module load). **Guard the import** so a missing `mcp` produces a clear, actionable
+message and a non-zero exit — e.g.:
+> `sandesh-mcp requires the MCP extra. Install it with:  pipx install 'sandesh[mcp]'  (or  pip install 'sandesh[mcp]')`
+
+— instead of a traceback. The `sandesh` CLI is unaffected (it never imports `mcp`).
+
 ## Acceptance criteria
 
 - [ ] **AC1** — a `sandesh/` package exists (`__init__.py` + `cli.py`, `sandesh_db.py`,
@@ -72,6 +81,10 @@ Out of scope here: the AUR PKGBUILD (CR-SAN-009) and Windows **runtime** (DN-win
 - [ ] **AC7** — README install section leads with `pipx install sandesh` /
       `pipx install 'sandesh[mcp]'`; `install.sh` documented as the offline/from-source
       fallback and still functional.
+- [ ] **AC8** — in a base install (no `[mcp]`), running `sandesh-mcp` prints a clear message
+      naming the fix (`pipx install 'sandesh[mcp]'`) and exits non-zero — **not** a raw
+      `ImportError`/traceback. (Test: invoke the entry point in an env without `mcp`; assert the
+      message + non-zero exit.) The `sandesh` CLI still works in that same env.
 
 ## Estimated size
 Medium–large: a structural refactor (module moves + import rewrites across code & tests) +
