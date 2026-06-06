@@ -1,6 +1,6 @@
 # CR-SAN-001 — MCP server foundation & dependency isolation
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-06 on feature/CR-SAN-001)
 **Priority:** High
 **Depends on:** —
 **Labels:** phase-2, mcp, foundation
@@ -60,33 +60,33 @@ stdlib-only), the `FastMCP` application, the per-call store/connection helper mi
 ## Acceptance criteria
 
 ### §S1
-- [ ] **AC1** — `install.sh` creates `<DEST>/.venv` and installs `mcp` pinned `>=1.27,<2` into it.
-- [ ] **AC2** — `install.sh` writes `bin/sandesh-mcp` that execs the venv python on
+- [x] **AC1** — `install.sh` creates `<DEST>/.venv` and installs `mcp` pinned `>=1.27,<2` into it.
+- [x] **AC2** — `install.sh` writes `bin/sandesh-mcp` that execs the venv python on
       `app/mcp_server.py`, and symlinks it onto PATH; running it starts the server.
-- [ ] **AC3** — `python3 -c "import cli"` (or running `bin/sandesh`) succeeds with **no**
+- [x] **AC3** — `python3 -c "import cli"` (or running `bin/sandesh`) succeeds with **no**
       third-party package available — only `mcp_server.py` imports `mcp`.
 
 ### §S2
-- [ ] **AC4** — `app/mcp_server.py` constructs `FastMCP("sandesh")`.
-- [ ] **AC5** — `_ctx` resolves the store via `sandesh_db.store_dir(<project>)` and connects via
+- [x] **AC4** — `app/mcp_server.py` constructs `FastMCP("sandesh")`.
+- [x] **AC5** — `_ctx` resolves the store via `sandesh_db.store_dir(<project>)` and connects via
       `sandesh_db.connect(store)`, where `<project>` is the passed `project_id` or, if
       omitted, `$SANDESH_PROJECT`; a clear error is raised when neither is set (D4).
-- [ ] **AC6** — a library `ValueError`/`PermissionError` raised inside a tool surfaces to the
+- [x] **AC6** — a library `ValueError`/`PermissionError` raised inside a tool surfaces to the
       client as `ToolError` with the original message (not an unhandled traceback).
-- [ ] **AC7** — `main()` calls `mcp.run(transport="stdio")`.
+- [x] **AC7** — `main()` calls `mcp.run(transport="stdio")`.
 
 ### §S3
-- [ ] **AC8** — `await mcp.list_tools()` includes a tool named `sandesh_setup`.
-- [ ] **AC9** — calling `sandesh_setup` with a `project_id` provisions the store (path exists)
+- [x] **AC8** — `await mcp.list_tools()` includes a tool named `sandesh_setup`.
+- [x] **AC9** — calling `sandesh_setup` with a `project_id` provisions the store (path exists)
       and returns the store path; the **unwrapped** tool result (per §S4 — `TextContent.text`)
       equals `sandesh_db.store_dir(project_id)`.
-- [ ] **AC10** — calling `sandesh_setup` with no `project_id` but `$SANDESH_PROJECT` set
+- [x] **AC10** — calling `sandesh_setup` with no `project_id` but `$SANDESH_PROJECT` set
       provisions that project's store (D4 fallback).
 
 ### §S4
-- [ ] **AC11** — a test calls `sandesh_setup` in-process via `mcp.call_tool` against a temp
+- [x] **AC11** — a test calls `sandesh_setup` in-process via `mcp.call_tool` against a temp
       store and asserts the store was created.
-- [ ] **AC12** — `python3 tests/test_sandesh.py` (existing 24) stays green.
+- [x] **AC12** — `python3 tests/test_sandesh.py` (existing 24) stays green.
 
 ## Estimated size
 Small: ~80–120 line module + installer edits + one test module.
@@ -100,3 +100,15 @@ Small: ~80–120 line module + installer edits + one test module.
 - The other 9 tools (CR-SAN-002 / CR-SAN-003); E2E/protocol tests (CR-SAN-004).
 - Any wake/`notify` tool (PRD §6) or HTTP transport (PRD §9).
 - Changes to `sandesh_db.py` semantics or the CLI surface.
+
+## Implementation Notes (2026-06-06)
+
+Delivered in two cycles on `feature/CR-SAN-001`, agent-dispatched (RED→GREEN), then VERIFY → FIX → pre-merge.
+
+- **C0** (`b3fd3f1`) — `app/mcp_server.py`: `FastMCP("sandesh")`, `_resolve_project` (project_id→`$SANDESH_PROJECT`), `_ctx` (DB-handle helper for CR-SAN-002/003 tools), `ToolError` mapping, `sandesh_setup`, stdio `main()`. Tests `tests/test_mcp_server.py` (9, async `IsolatedAsyncioTestCase`).
+- **C1** (`55d245d`) — `install.sh`: dedicated `<DEST>/.venv` + pinned `mcp>=1.27,<2`; self-locating `bin/sandesh-mcp` wrapper (`readlink -f` → `exec <venv>/bin/python <app>/mcp_server.py "$@"`) symlinked to PATH. Integration test `tests/test_install.py` (11) runs `install.sh` in a sandboxed temp HOME/XDG.
+- **Test-probe fix** (`0cbda4b`) — the `mcp` package exposes **no `mcp.__version__`**; the import probe asserts import-only, version covered by `importlib.metadata` in `test_ac1_mcp_version_in_range`.
+- **VERIFY** (`CR-SAN-001-VERIFY`): 44/44 green, all AC1–AC12 PASS, no blocking findings. **FIX** (`faf6663`): renamed test class (dropped cycle tag), documented `_ctx` intent (the two SHOULD-FIX items).
+- **Pre-merge gate**: 44/44 green; py_compile clean; coverage lines 44.4% / funcs 58.6% (overall — `mcp_server.py` well-covered; the figure is dragged by pre-existing untested `cli.py`/`notify.py`, out of scope here).
+- Exact install commands: `python3 -m venv "$DEST/.venv"` → `"$DEST/.venv/bin/python" -m pip install "mcp>=1.27,<2"`.
+- AC checkboxes below ticked per the `CR-SAN-001-VERIFY` verdict.
