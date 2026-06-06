@@ -134,6 +134,125 @@ def sandesh_thread(project_id: str | None = None, msg_id: int = 0) -> list[dict]
             con.close()
 
 
+@mcp.tool()
+def sandesh_register(
+    addr: str,
+    project_id: str | None = None,
+    kind: str | None = None,
+    display_name: str | None = None,
+    by: str | None = None,
+) -> str:
+    """Register an address in the project's addressbook. Returns the registered address.
+
+    project_id falls back to $SANDESH_PROJECT if omitted.
+    """
+    con = None
+    try:
+        project, _store, con = _ctx(project_id)
+        sandesh_db.register(con, addr, kind, display_name, by, project)
+        return addr
+    except (ValueError, PermissionError) as e:
+        raise ToolError(str(e)) from e
+    finally:
+        if con is not None:
+            con.close()
+
+
+@mcp.tool()
+def sandesh_unregister(
+    recipient: str,
+    requester: str,
+    project_id: str | None = None,
+) -> list[str | int | None]:
+    """Unregister an address (authorization: Mainline or self). Returns the library's
+    result tuple, e.g. ('unregistered', None) or ('tombstoned', pid).
+
+    project_id falls back to $SANDESH_PROJECT if omitted.
+    """
+    con = None
+    try:
+        project, _store, con = _ctx(project_id)
+        return list(sandesh_db.unregister(con, recipient, requester, project))
+    except (ValueError, PermissionError) as e:
+        raise ToolError(str(e)) from e
+    finally:
+        if con is not None:
+            con.close()
+
+
+@mcp.tool()
+def sandesh_send(
+    from_addr: str,
+    subject: str,
+    project_id: str | None = None,
+    to: list[str] | None = None,
+    cc: list[str] | None = None,
+    kind: str | None = None,
+    body_text: str | None = None,
+) -> int:
+    """Send a message. Returns the new message id.
+
+    project_id falls back to $SANDESH_PROJECT if omitted.
+    """
+    con = None
+    try:
+        project, store, con = _ctx(project_id)
+        if isinstance(to, str):
+            to = [to]
+        if isinstance(cc, str):
+            cc = [cc]
+        return sandesh_db.send(
+            con, store, from_addr, to, cc, subject, kind,
+            body_text=body_text, project=project)
+    except (ValueError, PermissionError) as e:
+        raise ToolError(str(e)) from e
+    finally:
+        if con is not None:
+            con.close()
+
+
+@mcp.tool()
+def sandesh_reply(
+    parent_id: int,
+    from_addr: str,
+    project_id: str | None = None,
+    subject: str | None = None,
+    body_text: str | None = None,
+) -> int:
+    """Reply to a message; links the thread via in_reply_to. Returns the new reply id.
+
+    project_id falls back to $SANDESH_PROJECT if omitted.
+    """
+    con = None
+    try:
+        project, store, con = _ctx(project_id)
+        return sandesh_db.reply(
+            con, store, parent_id, from_addr, subject, body_text, project=project)
+    except (ValueError, PermissionError) as e:
+        raise ToolError(str(e)) from e
+    finally:
+        if con is not None:
+            con.close()
+
+
+@mcp.tool()
+def sandesh_actioned(msg_id: int, project_id: str | None = None) -> int:
+    """Mark a message's status as 'actioned'. Returns the message id.
+
+    project_id falls back to $SANDESH_PROJECT if omitted.
+    """
+    con = None
+    try:
+        _project, _store, con = _ctx(project_id)
+        sandesh_db.set_status(con, msg_id, "actioned")
+        return msg_id
+    except (ValueError, PermissionError) as e:
+        raise ToolError(str(e)) from e
+    finally:
+        if con is not None:
+            con.close()
+
+
 def main():
     """Run the MCP server over stdio."""
     mcp.run(transport="stdio")
