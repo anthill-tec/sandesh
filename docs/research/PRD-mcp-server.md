@@ -61,8 +61,10 @@ memory. These are design inputs; a CR re-confirms the pin at implementation time
 (mirrors the Model-B "one process per session" shape; no port management, no auth). HTTP
 transports are out of scope; revisit only if a shared multi-client server is ever needed.
 
-**D2 — Dependency isolation via a dedicated venv + wrapper (DECIDED).** `mcp` is the first
-non-stdlib dependency. It is imported **only** by `mcp_server.py`. The CLI path
+**D2 — Dependency isolation (DECIDED).** *Install mechanism superseded by
+`PRD-distribution.md` (D2/D3): `pipx` + a `[mcp]` extra replaces the hand-built venv+wrapper;
+the **intent below — CLI stays import-clean of `mcp`, `mcp` only in `mcp_server.py`** — is
+unchanged.* `mcp` is the first non-stdlib dependency. It is imported **only** by `mcp_server.py`. The CLI path
 (`bin/sandesh` → `cli.py` → `sandesh_db.py` / `notify.py`) must remain importable with
 **zero** third-party packages. Mechanism:
 - `install.sh` creates a **dedicated venv** at `<install>/.venv` and installs the pinned
@@ -286,5 +288,6 @@ tier catching what the cheaper one cannot.
 | CR-SAN-003 | Mutating tools: `sandesh_register`, `sandesh_unregister`, `sandesh_send`, `sandesh_reply`, `sandesh_actioned` + auth/validation error-mapping tests | CR-SAN-001 |
 | CR-SAN-004 | E2E: T2 in-memory client↔server tests + T3 real-subprocess stdio smoke test over the installed `sandesh-mcp` wrapper; document `mcp dev` + `claude mcp add` registration (§7a) | CR-SAN-001, 002, 003 |
 | CR-SAN-005 | **Retire the `status`/disposition model (D7):** remove `sandesh_actioned` (→ 9 tools) and stop using `message.status`; confirm `sandesh_reply` exposes no `resolves`/`reply_all`. Behavior + tests. | CR-SAN-001..004 |
-| CR-SAN-007 | **Install: launchers on `$PATH`** — `install.sh` ensures `~/.local/bin` is on `$PATH` (idempotent shell-profile update for bash/zsh/fish), so `sandesh` and `sandesh-mcp` are callable by bare name (today it only warns). Behavior + a test. | CR-SAN-001 |
+| CR-SAN-007 | ~~Install: launchers on `$PATH` (shell-profile hardening)~~ — **SUPERSEDED by CR-SAN-008**: pipx + console-script entry points put `sandesh`/`sandesh-mcp` on `$PATH`, no shell-profile edits. | — |
+| CR-SAN-008 / 009 | **Distribution** (pip package; AUR PKGBUILD) — separately sequenced; see `PRD-distribution.md` §5. | (per PRD-distribution) |
 | CR-SAN-006 | **Docstring & usability enrichment** from `docs/usage-scenarios.md`: per-tool docstrings (what/who/when/gotchas), param descriptions (address format, `parent_id` = the original message's id, To-wakes/Cc-silent), required params, optional read/destructive annotations. **Server `instructions`** (FastMCP `instructions=` → returned in `initialize`, §6): Model-B context + the out-of-band **wake** (`run_in_background` + `sandesh notify`, *not* a tool) + the read=acting/reply=done lifecycle — so an agent learns the CLI/wake step it can't get from `list_tools`. **Optional `sandesh://usage` resource** (`@mcp.resource`) serving `docs/usage-scenarios.md` on demand. Docs/quality. | CR-SAN-005 |
