@@ -34,6 +34,9 @@ Register via `@mcp.tool()`, each with a required `project_id`, each delegating p
 - **Connection hygiene:** the server is long-lived and `_ctx` opens a fresh connection per
   call (the library never closes it) — each tool MUST close its connection after use
   (e.g. `try/finally con.close()`), so connections don't leak across calls.
+- **Error mapping (consistency with CR-SAN-001 AC6):** each tool reuses the
+  `ValueError`/`PermissionError` → `ToolError` mapping so a no-project call (`_ctx` raises
+  `ValueError`) returns a clean `ToolError` to the client, not a raw traceback.
 
 ## Acceptance criteria
 
