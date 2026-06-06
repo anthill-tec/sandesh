@@ -93,8 +93,32 @@ format, unauthorized unregister, duplicate registration) are caught and re-raise
 `ToolError` with the library's message, so the client gets a clean structured error
 rather than a stack trace.
 
-**D6 — Tool set = the existing verbs, no more.** Exactly the 10 verbs below. No verb is
-invented for MCP; none is dropped.
+**D6 — Tool set = the existing message/addressbook verbs.** The server exposes the library's
+verbs, no invented ones. CR-SAN-001..004 shipped **10** tools; **CR-SAN-005 retires
+`sandesh_actioned`** (see D7) → a **9-tool** surface. (A future sender-side read-status query
+may be added — §9.)
+
+**D7 — Message lifecycle: read = being-acted-on, reply = done; NO `status`/disposition field
+(corrected 2026-06-07; source: `docs/usage-scenarios.md`).** The earlier `status`
+(`open`/`actioned`/`closed`) disposition machine was over-engineered. The real lifecycle:
+
+> a message lands **unread** → the recipient `fetch`es it (**read** = received and now being
+> acted on; `fetch` only ever returns unread, so it's consumed once) → when the work is done
+> the recipient **replies** (often subject-only — the subject states what was done) and the
+> sender's `notify` watcher wakes on that reply.
+
+So the per-recipient **read flag + the reply** carry the whole lifecycle. Consequences for the
+tool surface:
+- **`sandesh_reply` exposes no `resolves`/`reply_all`** — a reply is just a reply (the
+  completion signal); it flips no status.
+- **`sandesh_actioned` (and the `message.status` field) is vestigial** — shipped in CR-SAN-003,
+  **retired in CR-SAN-005**.
+- The sender can *observe* a sent message's read state ("being acted on"); exposing that as a
+  tool is an open item (§9), not yet designed.
+- **Atomic send (notifier-race safety):** `send` writes the body file *before* it commits the
+  DB rows, and the notifier (a separate connection) only sees committed rows — so a woken
+  recipient never `fetch`es a message whose body file isn't on disk yet; an error aborts with
+  no partial/hanging state.
 
 ## 5. Tool surface (the WHAT)
 
@@ -107,12 +131,16 @@ the verb's own parameters, and delegates:
 | `sandesh_register` | `register(con, addr, kind, display_name, by, project)` | `con` |
 | `sandesh_unregister` | `unregister(con, recipient, requester, project)` | `con` |
 | `sandesh_addressbook` | `addressbook(con)` | `con` |
-| `sandesh_send` | `send(con, store, from_addr, to, cc, subject, kind, …)` | `con`, `store` |
-| `sandesh_reply` | `reply(con, store, parent_id, from_addr, subject, body_text, …)` | `con`, `store` |
+| `sandesh_send` | `send(con, store, from_addr, to, cc, subject, kind, body_text, project)` (`to`/`cc` = `list[str]`) | `con`, `store` |
+| `sandesh_reply` | `reply(con, store, parent_id, from_addr, subject, body_text, project)` — **no `resolves`/`reply_all`** (D7) | `con`, `store` |
 | `sandesh_inbox` | `inbox(con, recipient, unread_only)` | `con` |
 | `sandesh_fetch` | `fetch(con, store, recipient, mark)` | `con`, `store` |
 | `sandesh_thread` | `thread(con, msg_id)` | `con` |
-| `sandesh_actioned` | `set_status(con, msg_id, "actioned")` | `con` |
+| ~~`sandesh_actioned`~~ | shipped CR-SAN-003; **RETIRED in CR-SAN-005** — no `status`/disposition field (D7) | — |
+
+`sandesh_inbox`/`sandesh_thread` normalize `sqlite3.Row` → `dict` (the rest already return
+dicts). Completion is signalled by `sandesh_reply`, not a status flip — see D7 and
+`docs/usage-scenarios.md` for the who/when/why behind each tool.
 
 ## 6. The wake constraint (non-negotiable)
 
@@ -166,8 +194,9 @@ Desktop is a doc note, not extra code.)
 
 ## 8. Success criteria
 
-1. An MCP client can call all 10 tools over stdio and get results equal to the
-   corresponding `sandesh_db.*` / CLI outcome.
+1. An MCP client can call every exposed tool over stdio and get results equal to the
+   corresponding `sandesh_db.*` / CLI outcome (10 tools in CR-SAN-001..004; **9 after
+   CR-SAN-005** retires `sandesh_actioned`, per D7).
 2. The CLI still runs with no third-party package installed.
 3. `notify` is untouched and remains the wake path.
 4. Adapter tests prove per-tool parity with the library; the existing 24 unit tests stay
@@ -200,6 +229,10 @@ tier catching what the cheaper one cannot.
 - Any wake-over-MCP scheme.
 - New message verbs or schema changes.
 - Packaging to PyPI.
+- **Sender-side read-status query** (a tool letting a sender see whether/when a recipient has
+  read a message it sent — "is it being acted on?"). The data exists (`read_at` per recipient)
+  but no tool exposes it today; the model relies on the **completion reply** as the primary
+  signal (D7). A small read-status tool is a candidate future addition, not yet designed.
 
 ## 10. CR breakdown
 
@@ -209,3 +242,5 @@ tier catching what the cheaper one cannot.
 | CR-SAN-002 | Read/query tools: `sandesh_addressbook`, `sandesh_inbox`, `sandesh_fetch`, `sandesh_thread` + T1 parity tests | CR-SAN-001 |
 | CR-SAN-003 | Mutating tools: `sandesh_register`, `sandesh_unregister`, `sandesh_send`, `sandesh_reply`, `sandesh_actioned` + auth/validation error-mapping tests | CR-SAN-001 |
 | CR-SAN-004 | E2E: T2 in-memory client↔server tests + T3 real-subprocess stdio smoke test over the installed `sandesh-mcp` wrapper; document `mcp dev` + `claude mcp add` registration (§7a) | CR-SAN-001, 002, 003 |
+| CR-SAN-005 | **Retire the `status`/disposition model (D7):** remove `sandesh_actioned` (→ 9 tools) and stop using `message.status`; confirm `sandesh_reply` exposes no `resolves`/`reply_all`. Behavior + tests. | CR-SAN-001..004 |
+| CR-SAN-006 | **Docstring & usability enrichment** from `docs/usage-scenarios.md`: per-tool descriptions (what/who/when/gotchas), param descriptions (address format, `parent_id` = the original message's id, To-wakes/Cc-silent), required params, optional read/destructive annotations, server-level description (Model-B context + `notify` is not a tool). Docs/quality. | CR-SAN-005 |
