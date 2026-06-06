@@ -1,6 +1,6 @@
 # CR-SAN-003 — MCP mutating tools & error mapping
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-06 on feature/CR-SAN-003)
 **Priority:** High
 **Depends on:** CR-SAN-001
 **Labels:** phase-2, mcp, write-tools
@@ -51,32 +51,32 @@ Library validation/authorization errors surface as `ToolError` with the original
 ## Acceptance criteria
 
 ### §S1
-- [ ] **AC1** — `await mcp.list_tools()` includes `sandesh_register`, `sandesh_unregister`,
+- [x] **AC1** — `await mcp.list_tools()` includes `sandesh_register`, `sandesh_unregister`,
       `sandesh_send`, `sandesh_reply`, `sandesh_actioned`.
-- [ ] **AC2** — after CR-SAN-001..003, `await mcp.list_tools()` returns **exactly 10** tools
+- [x] **AC2** — after CR-SAN-001..003, `await mcp.list_tools()` returns **exactly 10** tools
       (the full PRD §5 set — no more, no fewer).
-- [ ] **AC3** — `sandesh_register(project_id, addr, …)` registers the address (visible in
+- [x] **AC3** — `sandesh_register(project_id, addr, …)` registers the address (visible in
       `addressbook`); passes `project=project_id`.
-- [ ] **AC4** — `sandesh_send(project_id, from_addr, to, subject, …)` creates a message
+- [x] **AC4** — `sandesh_send(project_id, from_addr, to, subject, …)` creates a message
       (recipient sees it via `inbox`/`fetch`); passes `store` and `project=project_id`.
-- [ ] **AC5** — `sandesh_reply(project_id, parent_id, from_addr, …)` creates a reply linked via
+- [x] **AC5** — `sandesh_reply(project_id, parent_id, from_addr, …)` creates a reply linked via
       `in_reply_to`; passes `store` and `project=project_id`.
-- [ ] **AC6** — `sandesh_unregister(project_id, recipient, requester)` returns the library's
+- [x] **AC6** — `sandesh_unregister(project_id, recipient, requester)` returns the library's
       result (e.g. `('tombstoned', pid)` for a live address, soft-delete otherwise).
-- [ ] **AC7** — `sandesh_actioned(project_id, msg_id)` sets the message status to `actioned`.
+- [x] **AC7** — `sandesh_actioned(project_id, msg_id)` sets the message status to `actioned`.
 
 ### §S2
-- [ ] **AC8** — registering a malformed address via `sandesh_register` raises `ToolError` (not
+- [x] **AC8** — registering a malformed address via `sandesh_register` raises `ToolError` (not
       an unhandled exception) carrying the library's validation message.
-- [ ] **AC9** — an unauthorized `sandesh_unregister` (requester not `Mainline` and not self)
+- [x] **AC9** — an unauthorized `sandesh_unregister` (requester not `Mainline` and not self)
       raises `ToolError` with the library's authorization message.
 
 ### Tests
-- [ ] **AC10** — parity/behavior tests for all five tools + the two error-mapping cases against
+- [x] **AC10** — parity/behavior tests for all five tools + the two error-mapping cases against
       a temp store. **Unwrap `call_tool`'s converted return** (per CR-SAN-001 §S4) before
       comparing; assert error cases raise `ToolError` (the SDK wraps tool exceptions —
       catch `ToolError`, not the raw `ValueError`/`PermissionError`).
-- [ ] **AC11** — `python3 tests/test_sandesh.py` (existing 24) stays green.
+- [x] **AC11** — `python3 tests/test_sandesh.py` (existing 24) stays green.
 
 ## Estimated size
 Small–medium: ~60–100 lines of adapters + one test module.
@@ -88,3 +88,15 @@ Small–medium: ~60–100 lines of adapters + one test module.
 ## Non-goals
 - Read tools (CR-SAN-002); foundation (CR-SAN-001).
 - Any wake/`notify` tool (PRD §6).
+
+## Implementation Notes (2026-06-06)
+
+One cycle (C0), agent-dispatched, then VERIFY → pre-merge. Completes the 10-tool PRD §5 surface.
+
+- **C0** (`a09e25b`) — added `sandesh_register`, `sandesh_unregister`, `sandesh_send`, `sandesh_reply`, `sandesh_actioned` to `app/mcp_server.py` (each: `_ctx`, `try/finally con.close()`, **no redundant commit** — lib commits internally, `ValueError`/`PermissionError`→`ToolError`). `register`/`send`/`reply`/`unregister` pass `project=project_id` for `validate_address`. `to`/`cc` typed `list[str] | None` with lone-str coercion. Tests `tests/test_mcp_mutating_tools.py` (26).
+- **RED touch-up** (`becab2b`) — activated the AC8/AC9 message-content assertions (`"expected '<Orchestrator> - <Project>'"`, `"only Mainline may remove another participant"`) so they're real RED, not commented-out for GREEN.
+- **Required params:** `addr`/`recipient`/`requester`/`from_addr`/`subject`/`parent_id`/`msg_id` have no defaults; declared before `project_id` (Python ordering) — tests call by keyword so call sites are unaffected.
+- **Serialization detail:** `sandesh_unregister` returns `list[str | int | None]` (lib tuple → list) so FastMCP emits structured output without dropping the `None` element.
+- **VERIFY** (`CR-SAN-003-VERIFY`): 54/54 green, all AC1–AC11 PASS, all gap-analysis items confirmed clear, **0 findings**.
+- **Pre-merge gate**: 89/89 green; py_compile clean; coverage 52.0% lines / 64.2% funcs.
+- Tool count after this CR: **10** (full PRD §5 surface). CR-SAN-004 (E2E/protocol smoke) now unblocked.
