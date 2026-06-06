@@ -26,6 +26,14 @@ Register via `@mcp.tool()`, each with a required `project_id`, each delegating p
 | `sandesh_thread` | `msg_id: int` | `thread(con, msg_id)` | `con` |
 
 - `sandesh_fetch` passes `store` (reads bodies); the other three pass only `con` (D3).
+- **Serialization (gap-analysis 2026-06-06):** `addressbook` and `fetch` already return
+  `list[dict]`; **`inbox` and `thread` return `list[sqlite3.Row]`**, which is NOT
+  JSON-serializable by FastMCP structured output — so `sandesh_inbox` and `sandesh_thread`
+  MUST normalize each `Row` → plain `dict` (`dict(row)`) before returning. "Same value"
+  in AC3/AC5 means the same data as dicts.
+- **Connection hygiene:** the server is long-lived and `_ctx` opens a fresh connection per
+  call (the library never closes it) — each tool MUST close its connection after use
+  (e.g. `try/finally con.close()`), so connections don't leak across calls.
 
 ## Acceptance criteria
 
@@ -33,11 +41,13 @@ Register via `@mcp.tool()`, each with a required `project_id`, each delegating p
 - [ ] **AC1** — `await mcp.list_tools()` includes `sandesh_addressbook`, `sandesh_inbox`,
       `sandesh_fetch`, `sandesh_thread`.
 - [ ] **AC2** — `sandesh_addressbook(project_id)` returns the same value as `addressbook(con)`.
-- [ ] **AC3** — `sandesh_inbox(project_id, recipient, unread_only)` returns the same value as
-      `inbox(con, recipient, unread_only)`; `unread_only` defaults to `True`.
+- [ ] **AC3** — `sandesh_inbox(project_id, recipient, unread_only)` returns `inbox(con,
+      recipient, unread_only)` **normalized to `list[dict]`** (`Row`→`dict`); `unread_only`
+      defaults to `True`.
 - [ ] **AC4** — `sandesh_fetch(project_id, recipient, mark)` returns the same value as
       `fetch(con, store, recipient, mark)`, passes `store`, and `mark` defaults to `True`.
-- [ ] **AC5** — `sandesh_thread(project_id, msg_id)` returns the same value as `thread(con, msg_id)`.
+- [ ] **AC5** — `sandesh_thread(project_id, msg_id)` returns `thread(con, msg_id)`
+      **normalized to `list[dict]`** (`Row`→`dict`).
 
 ### Tests
 - [ ] **AC6** — parity tests for all four tools against a temp store (seed via the library, call
