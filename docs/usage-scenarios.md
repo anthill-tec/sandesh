@@ -45,7 +45,7 @@ it arrives. Everything is local, SQLite-backed, multi-project (every call carrie
   (e.g. `Mainline - Nai`, `Track 2 - Nai`). Registered once; persists across sessions.
 - **Message** — an envelope: `from`, `subject` (always present), optional `body` (an md file;
   omit it and the **subject IS the content** — a "subject-only" message), `kind`
-  (`request` / `directive` / `fyi` / `reply`), `status` (`open` → `actioned` → `closed`),
+  (`request` / `directive` / `fyi` / `reply`), a per-recipient **read flag** (`unread` → `read`),
   and an optional `in_reply_to` thread link.
 - **Recipients** — each message has one or more recipients, each with a **role**:
   - **To** — a primary recipient. **A `to` recipient's `notify` watcher WAKES** on the message.
@@ -58,10 +58,16 @@ it arrives. Everything is local, SQLite-backed, multi-project (every call carrie
 - **notify (the wake)** — a blocking watcher a session runs in the background; it exits (waking
   the agent) when the address has unread **`to`** mail. **This is NOT an MCP tool** (see §6).
 - **fetch (the read)** — pulls all of an address's unread messages (to + cc) into one
-  consolidated view and marks them read.
-- **Disposition vs read** — `read_at` (per recipient) = "seen"; `status` (per message) =
-  "what became of it". A *request* can be **read** by Mainline yet still **open** until it's
-  resolved, then `actioned`. A `reply --resolves` actions the parent in one step.
+  consolidated view and **marks them read**. Fetch only ever returns unread, so each message is
+  consumed once.
+- **Read = being acted on.** There is **no separate status/disposition field** — the per-recipient
+  **read flag** is the whole state. A message read by its recipient means "received and now being
+  acted on." The sender can observe this read state while it waits.
+- **Completion = a reply.** When the recipient finishes the requested work it **replies** to the
+  original message — often **subject-only**, the subject stating what was done. The sender's own
+  `notify` watcher wakes on that reply; the reply *is* the completion signal. (No status to flip.)
+- **Per-participant notifiers.** Every registered address — sender and recipient alike — runs its
+  own `notify` loop, so a message arriving for an address intimates it automatically.
 - **Thread** — `in_reply_to` links a reply to its parent; the full chain is a conversation.
 
 ---
@@ -110,13 +116,15 @@ sandesh send --from "Track 1 - Nai" --to "Mainline - Nai" --kind request \
    --subject "CR-310 spec stale — needs re-audit before I start" --body-file gap-analysis.md
 ```
 → Mainline's `notify` wakes → `fetch --to "Mainline - Nai"` (reads the gap-analysis body) →
-Mainline acts (re-audits, edits the spec, adjusts the queue) → **replies, resolving the thread**:
+Mainline acts (re-audits, edits the spec, adjusts the queue) → **replies** when done (the
+subject/body state the outcome):
 ```
-sandesh reply --to-msg <id> --from "Mainline - Nai" --resolves \
+sandesh reply --to-msg <id> --from "Mainline - Nai" \
    --subject "CR-310 re-spec done — cleared to start" --body-file directive.md
 ```
 → Track 1's `notify` wakes → `fetch` (sees the reply threaded under its own request) → starts.
-The `--resolves` marks the original request **actioned** in the same call — no loose ends.
+The **reply is the completion signal** — Mainline reading the request (it was fetched) already
+marked it "being acted on"; the reply closes the loop. No separate status step.
 *Tools: `send`, `notify`(wake), `fetch`, `reply`.*
 
 ### S2 — Mainline directs a Track (assignment / go-signal)
@@ -159,24 +167,24 @@ No file is written; `fetch` renders it as a header + subject with no body block.
 *Tools: `send` (subject-only).*
 
 ### S6 — A threaded back-and-forth
-A request needs a clarification before it can be resolved:
+A request needs a clarification before it can be answered:
 ```
 Track 2  → request   #41  "CR-308 batch — which serialization?"
 Mainline → reply     #42  (in_reply_to #41) "need the file-overlap map first — send it?"
 Track 2  → reply     #43  (in_reply_to #42) "<overlap map>"
-Mainline → reply     #44  (in_reply_to #43, --resolves) "per-crate chains; #41 actioned"
+Mainline → reply     #44  (in_reply_to #43) "per-crate chains — go"
 ```
+Each reply wakes the other party's notifier; the final reply concludes the exchange.
 `thread --id 44` prints the whole chain top-to-bottom so any party can reconstruct context.
 *Tools: `reply`, `thread`.*
 
-### S7 — Disposition: read ≠ done
-Mainline `fetch`es a request (it's now **read**), but resolving it takes real work spread over
-time. The request stays **open** until Mainline finishes, then closes it:
-```
-sandesh actioned --id 41 --status actioned     # or 'closed'
-```
-(Usually done implicitly via `reply --resolves`, but `actioned` is the explicit lever — e.g. a
-request that's superseded or won't be done gets `--status closed`.) *Tools: `fetch`, `actioned`.*
+### S7 — Read ≠ done (completion is signalled by a reply)
+Mainline `fetch`es a request — it's now **read**, which tells the waiting sender "received, being
+acted on." Resolving it may take real work spread over time. When Mainline finishes, it **replies**
+to the original (often subject-only — the subject states the outcome); Track 1's notifier wakes on
+that reply. So **read = "being worked on"** and the **reply = "done"** — there is no separate status
+to set. (A request that's superseded or won't be done is simply answered with a reply saying so.)
+*Tools: `fetch`, `reply`.*
 
 ### S8 — Checking your mailbox without consuming it
 A session wants to see what's pending without marking anything read (e.g. a triage glance):
@@ -222,12 +230,11 @@ must equal `project_id`.
 | **`sandesh_register`** | Add an address to the addressbook (self-register). Rejects an active duplicate; reactivates a previously-removed one. | a joining orchestrator | `project_id`, `address`, `kind?` (`mainline`/`track`), `name?` | confirmation |
 | **`sandesh_unregister`** | Remove an address. **Mainline may remove anyone; any address may remove itself.** If its watcher is live, tombstones it first (returns "tombstoned"; re-run once offline). | Mainline (or self) | `project_id`, `address`, `as` (requester) | `unregistered` or `tombstoned`+pid |
 | **`sandesh_addressbook`** | List all participants with active/inactive status and **who is currently listening** (live notifier). | anyone | `project_id` | rows (address, kind, active, listening) |
-| **`sandesh_send`** | Send a message. `subject` is mandatory; omit a body ⇒ subject-only. `to`/`cc` are comma-separated; `to: all-tracks` broadcasts (minus sender). **To wakes the recipient; Cc is silent.** | Mainline or a Track | `project_id`, `from`, `to?`, `cc?`, `subject`, `kind?` (`request`/`directive`/`fyi`), `body?`/`body_file?` | new message id |
-| **`sandesh_reply`** | Reply to a message; threads via `in_reply_to`. Defaults the recipient to the parent's sender and the subject to `"Re: …"`. `reply_all` cc's the parent's recipients; `resolves` marks the parent **actioned**. | the recipient of a message | `project_id`, `to_msg` (parent id), `from`, `subject?`, `body?`, `all?`, `resolves?` | new message id |
-| **`sandesh_inbox`** | List an address's messages (unread by default; `all` includes read). A quick triage view — does **not** mark anything read. | any address (its own) | `project_id`, `to` (the address), `all?` | message rows |
-| **`sandesh_fetch`** | The real read: consolidate an address's unread messages (to + cc) into one view — bodies read from file, subject-only entries shown as just the subject — and **mark them read** (`peek` renders without marking). This is what a session calls after `notify` wakes it. | any address (its own) | `project_id`, `to` (the address), `peek?` | consolidated messages (+ thread refs) |
-| **`sandesh_thread`** | Print a message's full reply chain (root → leaf) so any party can reconstruct a conversation's context. | anyone | `project_id`, `id` (any message in the thread) | the chain |
-| **`sandesh_actioned`** | Set a message's **disposition** (`open` / `actioned` / `closed`) — the explicit lever for closing a request that isn't resolved via `reply --resolves` (e.g. superseded → `closed`). | Mainline (the resolver) | `project_id`, `id`, `status?` (default `actioned`) | confirmation |
+| **`sandesh_send`** | Send a message. `subject` is mandatory; omit a body ⇒ subject-only. `to`/`cc` are **lists of addresses**; `to: ["all-tracks"]` broadcasts (minus sender). **To wakes the recipient; Cc is silent.** | Mainline or a Track | `project_id`, `from`, `to?`, `cc?`, `subject`, `kind?` (`request`/`directive`/`fyi`), `body?` | new message id |
+| **`sandesh_reply`** | Reply to a message; threads via `in_reply_to`. Defaults the recipient to the parent's sender and the subject to `"Re: …"`. A recipient uses this to signal **completion** (often subject-only — the subject states what was done). | the recipient of a message | `project_id`, `parent_id` (the original message's id), `from`, `subject?`, `body?` | new message id |
+| **`sandesh_inbox`** | List an address's messages (unread by default; `unread_only=False` includes read). A quick triage view — does **not** mark anything read. | any address (its own) | `project_id`, `recipient` (the address), `unread_only?` | message rows |
+| **`sandesh_fetch`** | The real read: consolidate an address's unread messages (to + cc) into one view — bodies read from file, subject-only entries shown as just the subject — and **mark them read** (`mark=False` renders without marking). This is what a session calls after `notify` wakes it. | any address (its own) | `project_id`, `recipient` (the address), `mark?` | consolidated messages (+ thread refs) |
+| **`sandesh_thread`** | Print a message's full reply chain (root → leaf) so any party can reconstruct a conversation's context. | anyone | `project_id`, `msg_id` (any message in the thread) | the chain |
 
 **Not exposed as a tool — `notify` (the wake watcher).** `notify` is a *blocking background
 process*, not a request/response verb. Re-invoking a sleeping agent is the host's
@@ -251,8 +258,12 @@ else. Document this boundary in the server's top-level description so callers do
 - **Env defaults** (for the CLI / a baked-in MCP env) — `$SANDESH_PROJECT` (default
   `project_id`), `$SANDESH_ADDRESS` (the caller's own address for `from`/`to`),
   `$SANDESH_POLL_SECONDS` (the `notify` cadence; default 10).
-- **History is kept** — nothing is deleted; `read_at` and `status` are state transitions, so
-  the full request→resolution record is queryable after the fact.
+- **History is kept** — nothing is deleted; `read_at` (per recipient) is the state transition and
+  the reply chain records the resolution, so the full request→reply record is queryable later.
+- **Atomic send** — a message and its body file land together: `send` writes the body file
+  *before* it commits the DB rows, and the per-recipient rows (what notifiers poll) become visible
+  only at commit. So a woken recipient never fetches a message whose body file isn't there yet; any
+  error aborts cleanly with no partial or hanging state for the sender.
 
 ---
 
@@ -264,8 +275,8 @@ A good MCP docstring for each tool should convey, in the caller's terms:
    hits a decision only Mainline can make"*; *"a session calls `sandesh_fetch` right after its
    `notify` watcher wakes it"*.
 3. **The semantic gotchas** that change behaviour — **To wakes / Cc is silent**, `all-tracks`
-   excludes the sender, subject-only when no body, `reply --resolves` closes the parent,
-   `unregister` of a live address tombstones first.
+   excludes the sender, subject-only when no body, **read = being acted on** and a **reply = done**
+   (no status field), `unregister` of a live address tombstones first.
 4. **That `notify` (the wake) is deliberately not a tool** — so callers understand the verbs
    here are on-demand and the wake is a separate background process.
 
