@@ -20,8 +20,11 @@ stdlib-only), the `FastMCP` application, the per-call store/connection helper mi
 
 ### §S1 — Dependency isolation + install wiring (D2)
 - `mcp` (PyPI), pinned `>=1.27,<2`, installed into an environment isolated from the CLI
-  (venv under the install dir, or documented `pip --user`); `install.sh` provisions it and
-  copies `app/mcp_server.py`.
+  (venv under the install dir, or documented `pip --user`); `install.sh` provisions it.
+  - Note: `install.sh` already copies every `app/*.py` via its `cp "$SRC/app/"*.py` glob,
+    so `mcp_server.py` is copied automatically — the only **new** installer work is
+    provisioning the isolated `mcp` dependency (and, if a venv is chosen, an entrypoint
+    that uses that venv's interpreter while `bin/sandesh` keeps using system `python3`).
 - The CLI path (`bin/sandesh` → `cli.py` → `sandesh_db.py`/`notify.py`) imports **no**
   third-party package. `mcp` is imported only by `mcp_server.py`.
 
@@ -41,7 +44,14 @@ stdlib-only), the `FastMCP` application, the per-call store/connection helper mi
 ### §S4 — In-process test harness
 - A test module driving the server in-process via `await mcp.call_tool(...)` /
   `await mcp.list_tools()` (async wrapped with `asyncio.run` from a `unittest` test),
-  against a temp store (override data home as the existing tests do).
+  against a temp store (override `XDG_DATA_HOME` to a temp dir as the existing tests do).
+- **`call_tool` return shape (applies to all parity ACs, this CR and §S2/§S3 of
+  CR-SAN-002/003):** `FastMCP.call_tool(...)` returns *converted* output
+  (`Sequence[ContentBlock] | dict`, `convert_result=True`), **not** the raw return value —
+  a `str` return arrives as a `TextContent` block (read `.text`); a dict/list return
+  arrives as `structuredContent`. "Result equals `sandesh_db.X(...)`" ACs mean the
+  **unwrapped** content equals the library value (unwrap the block / read
+  `structuredContent`, or assert against the registered tool function directly).
 
 ## Acceptance criteria
 
@@ -62,7 +72,8 @@ stdlib-only), the `FastMCP` application, the per-call store/connection helper mi
 ### §S3
 - [ ] `await mcp.list_tools()` includes a tool named `sandesh_setup`.
 - [ ] Calling `sandesh_setup` with a `project_id` provisions the store (path exists) and
-      returns the store path; result equals `sandesh_db.store_dir(project_id)`.
+      returns the store path; the **unwrapped** tool result (per §S4 — `TextContent.text`)
+      equals `sandesh_db.store_dir(project_id)`.
 
 ### §S4
 - [ ] A test calls `sandesh_setup` in-process via `mcp.call_tool` against a temp store and

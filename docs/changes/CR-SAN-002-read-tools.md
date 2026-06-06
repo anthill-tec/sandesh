@@ -42,6 +42,9 @@ Register via `@mcp.tool()`, each with a required `project_id`, each delegating p
 ### Tests
 - [ ] Parity tests for all four tools against a temp store (seed via the library, call the
       tool, assert equality with the direct `sandesh_db.*` result).
+      **Unwrap `call_tool`'s converted return** (per CR-SAN-001 §S4: `TextContent.text`
+      for scalars, `structuredContent` for dict/list) before comparing — it does not
+      return the raw library value. Normalize sqlite `Row` → plain dict on both sides.
 - [ ] `python3 tests/test_sandesh.py` (existing 24) stays green.
 
 ## Estimated size

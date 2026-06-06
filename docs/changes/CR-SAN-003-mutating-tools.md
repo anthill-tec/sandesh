@@ -61,7 +61,9 @@ Library validation/authorization errors surface as `ToolError` with the original
 
 ### Tests
 - [ ] Parity/behavior tests for all five tools + the two error-mapping cases against a
-      temp store.
+      temp store. **Unwrap `call_tool`'s converted return** (per CR-SAN-001 §S4) before
+      comparing; assert error cases raise `ToolError` (the SDK wraps tool exceptions —
+      catch `ToolError`, not the raw `ValueError`/`PermissionError`).
 - [ ] `python3 tests/test_sandesh.py` (existing 24) stays green.
 
 ## Estimated size
