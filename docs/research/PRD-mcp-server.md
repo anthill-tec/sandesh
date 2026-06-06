@@ -142,14 +142,46 @@ the verb's own parameters, and delegates:
 dicts). Completion is signalled by `sandesh_reply`, not a status flip — see D7 and
 `docs/usage-scenarios.md` for the who/when/why behind each tool.
 
-## 6. The wake constraint (non-negotiable)
+## 6. The wake constraint (non-negotiable) — two channels: MCP = verbs, `run_in_background`+`notify` = wake
 
-An MCP server **cannot re-invoke a sleeping agent turn** — only the host's background-task
-mechanism can (Claude Code `run_in_background`, or Cron). Therefore the wake stays the
-standalone `notify` watcher, launched by the agent as a background process; MCP replaces
-the **verbs**, never the wake. `mcp_server.py` exposes **no** `notify`/watch tool and does
-not import `notify.py`. This is why the liveness table is crash-safe rather than relying on
-a shutdown hook (see `CLAUDE.md` "The wake mechanism").
+Sandesh in the MCP era runs over **two cooperating channels on the same SQLite store**, and the
+split is fundamental — **MCP carries the verbs; it never carries the wake**:
+
+| Channel | Carries | Mechanism | When it runs |
+|---|---|---|---|
+| **Verbs** | `sandesh_send` / `fetch` / `register` / … | the **MCP server** (request/response) | *within* an active agent turn (the agent calls a tool, gets a result) |
+| **Wake** | `notify` (the doorbell) | the **host's background-task tool** (`run_in_background`) launching the **standalone `sandesh notify` process** | *between* turns — the backgrounded process exits when `to` mail lands, which re-invokes the agent |
+
+**Why the wake CANNOT be an MCP tool** (three independent reasons):
+1. **A tool call can't "sleep then wake."** A blocking `wait_for_mail` tool would freeze the
+   agent's *current* turn while polling — it can do nothing else and burns a live turn. The
+   opposite of "go idle, be re-invoked later."
+2. **An MCP server cannot push a turn into an idle session.** Re-invoking a *sleeping* agent is
+   exclusive to the host's background-task mechanism (`run_in_background`, or Cron). The server
+   only acts when *called*; it has no channel to resurrect an idle agent.
+3. **Server→client notifications don't resurrect an idle agent.** MCP notifications/sampling
+   fire only while the client is actively driving a turn — they don't start a new turn on a
+   sleeping Claude Code session.
+
+**Therefore** the wake stays the standalone `notify` watcher, launched by the agent via
+`run_in_background`. `mcp_server.py` exposes **no** `notify`/watch tool and does not import
+`notify.py`. The session loop is:
+
+```
+start:  sandesh_register(...)                         # MCP verb
+        run_in_background: sandesh notify --to "<self>" --project P   # host tool, NOT MCP
+loop:   ── idle; backgrounded `notify` blocks polling the DB ──
+        mail → notify exits 0 → run_in_background completion re-invokes the turn  # the wake
+        → sandesh_fetch("<self>")  → act / sandesh_reply  → relaunch notify (run_in_background)
+```
+
+**Consequences:**
+- The wake path is **stdlib-only and independent of the MCP server/venv** — `sandesh notify` is
+  the plain CLI launcher (it never imports `mcp`). An agent therefore needs **both**: the MCP
+  server registered (verbs) **and** the `sandesh` CLI on PATH (the `notify` it backgrounds).
+- `notify`'s exit-code contract is unchanged (`0` mail / `2` timeout / `3` tombstoned / …).
+- This is also why the liveness table is **crash-safe** rather than relying on a shutdown hook
+  (see `CLAUDE.md` "The wake mechanism").
 
 ## 7. Coexistence & migration
 
