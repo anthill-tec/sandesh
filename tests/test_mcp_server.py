@@ -1,9 +1,9 @@
-"""test_mcp_server.py — CR-SAN-001 C0: MCP server foundation + sandesh_setup.
+"""test_mcp_server.py — MCP server foundation + sandesh_setup.
 
 Tests are guided by the CR acceptance criteria (AC4–AC11). Async tools are driven
 in-process via FastMCP.call_tool / list_tools (unittest.IsolatedAsyncioTestCase).
 
-  python-crucible.py test --tests tests.test_mcp_server --agent CR-SAN-001-C0-RED
+  python-crucible.py test --tests tests.test_mcp_server --agent CR-SAN-001-FIX
 """
 
 import os
@@ -35,7 +35,7 @@ def _text(result):
     return getattr(result, "text", result)
 
 
-class McpServerC0Test(unittest.IsolatedAsyncioTestCase):
+class McpServerTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="sandesh-mcp-test-")
         self._prev_xdg = os.environ.get("XDG_DATA_HOME")

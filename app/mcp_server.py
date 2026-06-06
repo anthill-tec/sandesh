@@ -35,6 +35,8 @@ def _resolve_project(project_id=None):
     return project
 
 
+# Used by CR-SAN-002/003 tools that need a DB connection; sandesh_setup needs only
+# the project (via _resolve_project), so it has no production caller in this CR.
 def _ctx(project_id=None):
     """(project, store, con) for tools that need a DB connection — mirrors
     `cli.py::_ctx`. `project_id` falls back to `$SANDESH_PROJECT` (D4)."""
