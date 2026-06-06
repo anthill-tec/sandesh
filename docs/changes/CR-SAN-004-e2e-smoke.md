@@ -32,11 +32,23 @@ Plus documentation of the manual smoke path (`mcp dev`) and client registration 
   comes back as an error result (not an exception).
 
 ### §S2 — T3 real-subprocess stdio smoke test
-- Use `StdioServerParameters(command="sandesh-mcp")` (the installed wrapper; skip the test
-  with a clear message if the wrapper/venv is absent) + `stdio_client` + `ClientSession`.
-- Against a temp `XDG_DATA_HOME`, run a full round trip over real stdio:
-  `sandesh_setup` → `sandesh_register` (sender+recipient) → `sandesh_send` →
-  `sandesh_fetch`, and assert the sent message is returned through the protocol boundary.
+- Spawn the server as a **real subprocess over stdio** and drive it with a `ClientSession`.
+  **Command resolution (gap-analysis DRIFT-1 — must be CI-runnable):** prefer the **repo venv
+  python on `app/mcp_server.py`** —
+  `StdioServerParameters(command="<repo>/.venv/bin/python", args=["<repo>/app/mcp_server.py"], env={…XDG_DATA_HOME…})`
+  — so T3 actually runs without a global install. (The installed `sandesh-mcp` wrapper's
+  exec-correctness is already covered by `test_install` in CR-SAN-001; if `sandesh-mcp` is on
+  PATH it MAY be used as an alternative.) **Skip with a clear reason only if the venv/`mcp`
+  is genuinely absent.**
+- Against a temp `XDG_DATA_HOME` (passed via the subprocess `env`), run a full round trip
+  over real stdio: `sandesh_setup` → `sandesh_register` (sender+recipient) → `sandesh_send`
+  → `sandesh_fetch`, and assert the sent message is returned through the protocol boundary.
+
+> **Structural note (gap-analysis):** this CR adds **no new production behavior** — T2/T3 are
+> E2E/characterization tests of the existing 10 tools, plus docs (§S4). They are EXPECTED to
+> pass against the current implementation; a failure indicates a real protocol/serialization
+> or transport bug → fix in `app/mcp_server.py` (GREEN). The classic RED→GREEN gate applies
+> only in that bug case.
 
 ### §S3 — Test gating (D2 integrity)
 - T2/T3 import the `mcp` client, so they run **only** when the venv is available; they are
@@ -59,10 +71,12 @@ Plus documentation of the manual smoke path (`mcp dev`) and client registration 
       the client receives an error result carrying the library message.
 
 ### §S2
-- [ ] **AC4** — a T3 test spawns `sandesh-mcp` via `StdioServerParameters`+`stdio_client`, runs
-      `setup → register → send → fetch` over stdio, and asserts the fetched message body/
-      subject matches what was sent.
-- [ ] **AC5** — the T3 test skips with a clear reason when `sandesh-mcp`/the venv is not installed.
+- [ ] **AC4** — a T3 test spawns the server as a real subprocess over stdio (via the repo
+      venv python on `app/mcp_server.py`, or the installed `sandesh-mcp` if present) with
+      `StdioServerParameters`+`stdio_client`+`ClientSession`, runs `setup → register → send →
+      fetch` over stdio, and asserts the fetched message body/subject matches what was sent.
+- [ ] **AC5** — the T3 test skips with a clear reason only when the venv/`mcp` is genuinely
+      absent (it does NOT require a global `sandesh-mcp` install to run).
 
 ### §S3
 - [ ] **AC6** — `grep -L "import mcp" tests/test_sandesh.py` confirms the stdlib test file
