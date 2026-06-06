@@ -73,13 +73,45 @@ sandesh --project Nai addressbook
 `$SANDESH_PROJECT` and `$SANDESH_ADDRESS` default `--project` and the caller's own
 address. `$SANDESH_POLL_SECONDS` sets the watcher cadence (default 10, floor 3).
 
+## MCP server
+
+The verbs are also exposed as an **MCP server** (stdio) so an agent can call them as tools
+instead of shelling out. `mcp` is the only third-party dependency and is isolated in a
+dedicated venv — the CLI above stays pure-stdlib. `./install.sh` creates the venv and a
+`sandesh-mcp` launcher.
+
+**Register with Claude Code** (stdio; bake a default project via env so tools can omit
+`project_id`):
+
+```bash
+claude mcp add sandesh --scope user --env SANDESH_PROJECT=<id> -- sandesh-mcp
+```
+
+That writes an `mcpServers` entry (`~/.claude.json` for user scope, or a committed
+`.mcp.json` for `--scope project`). Manage with `claude mcp list` / `claude mcp get sandesh`
+/ `claude mcp remove sandesh`; the in-session `/mcp` panel shows status + tools.
+
+**Ten tools**, each taking `project_id` (falls back to `$SANDESH_PROJECT`): `sandesh_setup`,
+`sandesh_register`, `sandesh_unregister`, `sandesh_addressbook`, `sandesh_send`,
+`sandesh_reply`, `sandesh_inbox`, `sandesh_fetch`, `sandesh_thread`, `sandesh_actioned`.
+
+**Manual smoke** — the MCP Inspector (browser UI):
+
+```bash
+mcp dev app/mcp_server.py     # needs the venv's mcp; explore tools by hand
+```
+
+The **wake path stays the `notify` watcher** — MCP exposes the *verbs*, not the wake (an MCP
+server can't re-invoke a sleeping agent). No `notify`/watch tool is exposed over MCP.
+
 ## Test
 
 ```bash
-python3 -m unittest -v          # from the repo root
+python3 -m unittest -v          # from the repo root (stdlib-only: CLI + library)
+.venv/bin/python -m unittest -v # includes the MCP server + E2E tests (needs the venv)
 ```
 
 ## Roadmap
 
-- **MCP server** — expose the verbs as MCP tools (each taking `project_id`); the
-  `notify` watcher stays the wake path (an MCP server can't re-invoke a sleeping agent).
+- **MCP server — DONE** (Phase 2): 10 tools over stdio, dedicated-venv isolation,
+  in-memory + real-subprocess E2E tests. The `notify` watcher remains the wake path.
