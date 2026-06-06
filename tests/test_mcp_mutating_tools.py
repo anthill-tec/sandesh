@@ -12,9 +12,9 @@ Return-shape reference (mcp 1.27.2):
 At RED phase: the five mutating tools do NOT exist yet.
   - AC1/AC2 list_tools tests: FAIL (tools missing from registry)
   - AC3–AC7 behaviour tests: FAIL (Unknown tool ToolError raised — not the expected outcome)
-  - AC8/AC9 error-mapping tests: VACUOUSLY PASS at RED (any call_tool for an unknown
-    tool raises ToolError — these become meaningful at GREEN when the tools exist and the
-    error must come from library validation, not "Unknown tool").
+  - AC8/AC9 error-mapping tests: FAIL at RED (the message-content assertions are active;
+    the current ToolError says "Unknown tool: …" which does not contain the library's
+    validation/authorization substring — assertIn fails, confirming real RED).
 
   python-crucible.py test --tests tests.test_mcp_mutating_tools --agent CR-SAN-003-C0-RED
 """
@@ -677,13 +677,11 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
                 {"project_id": PROJ, "addr": "bad@address"},
             )
         err_msg = str(ctx.exception)
-        # At GREEN: the library raises
+        # The library raises:
         # "bad address 'bad@address': expected '<Orchestrator> - <Project>', ..."
-        # We document the expected fragment here; GREEN must satisfy this.
-        # At RED: this assertion is vacuous (err_msg says "Unknown tool").
-        # Uncomment at GREEN:
-        # self.assertIn("expected '<Orchestrator> - <Project>'", err_msg)
-        self.assertIsNotNone(err_msg)
+        # At RED: ToolError says "Unknown tool: sandesh_register" — this assertion FAILS.
+        # At GREEN: the tool exists and maps the library's ValueError to ToolError.
+        self.assertIn("expected '<Orchestrator> - <Project>'", err_msg)
 
     # ------------------------------------------------------------------
     # AC9 — unauthorized unregister raises ToolError
@@ -734,11 +732,11 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
                 },
             )
         err_msg = str(ctx.exception)
-        # At GREEN: must contain "Mainline" from the library's PermissionError message.
-        # At RED: vacuous (err_msg says "Unknown tool").
-        # Uncomment at GREEN:
-        # self.assertIn("Mainline", err_msg)
-        self.assertIsNotNone(err_msg)
+        # The library raises:
+        # PermissionError("only Mainline may remove another participant")
+        # At RED: ToolError says "Unknown tool: sandesh_unregister" — this assertion FAILS.
+        # At GREEN: the tool exists and maps the library's PermissionError to ToolError.
+        self.assertIn("only Mainline may remove another participant", err_msg)
 
 
 if __name__ == "__main__":
