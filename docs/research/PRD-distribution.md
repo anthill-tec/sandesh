@@ -50,6 +50,15 @@ This **subsumes** PRD-mcp-server D2 (venv+wrapper) and **CR-SAN-007** (PATH hard
 wrapper is gone, and the PATH edit becomes the single standard `pipx ensurepath` instead of
 bespoke per-shell logic.
 
+**D2a — pipx is a prerequisite that may be absent; raw `pip` into system Python is blocked.**
+`pipx` is a separate tool, not guaranteed present. If missing, **bootstrap it**:
+`python -m pip install --user pipx && python -m pipx ensurepath`, or via the OS package
+(`sudo pacman -S python-pipx`, `apt install pipx`, `brew install pipx`). **Do NOT** fall back to
+a plain `pip install sandesh` into the system interpreter: on externally-managed Pythons
+(**PEP 668** — Arch, Debian, Fedora, recent macOS) that is **blocked** by design. So *something*
+must create a venv — either pipx, or the `install.sh` fallback (D6), or a hand-rolled venv. The
+docs must cover the "no pipx" case, not assume it.
+
 **D3 — `mcp` is an optional extra (`sandesh[mcp]`), preserving stdlib-only CLI.**
 `[project.optional-dependencies] mcp = ["mcp>=1.27,<2"]`. `pipx install sandesh` → the
 stdlib-only CLI + `notify` (no `mcp`); `pipx install 'sandesh[mcp]'` → adds the MCP server to
@@ -61,14 +70,21 @@ CLI path stays import-clean either way (the D2-from-the-MCP-PRD *intent* is pres
 The agent calls `sandesh` (e.g. backgrounded `sandesh notify`, the wake) and the MCP client
 spawns `sandesh-mcp` — both by bare name, both on `$PATH` via the entry points.
 
-**D5 — PKGBUILD is secondary and derives from the package.** An AUR `PKGBUILD` builds from the
-`pyproject.toml` / source tarball. It must resolve `mcp` — depend on `python-mcp` if present in
-the Arch repos/AUR, else vendor via pip in the build or depend on `python-pipx`. Add it only
-after the pip package exists. (Arch-only → not the cross-platform answer.)
+**D5 — PKGBUILD is secondary, derives from the package, and resolves prerequisites natively.**
+An AUR `PKGBUILD` builds from the `pyproject.toml` / source tarball. Its advantage over the pip
+path on Arch: **pacman/AUR resolves declared `depends` automatically**, so the prerequisite
+problem from D2a disappears — the PKGBUILD declares its deps (`python`, and `python-mcp` for the
+server if it's in the repos/AUR; else vendor `mcp` at build time) and a `yay -S sandesh` pulls
+them in. No manual pipx bootstrap, no PEP-668 dance — pacman owns the install. (Still Arch-only,
+so not *the* cross-platform answer, but it's the smoothest path **for Arch users**.) Add it after
+the pip package exists.
 
-**D6 — `install.sh` is kept as a fallback, demoted in docs.** Useful for no-network / vendored
-/ dev installs from a checkout. README points to `pipx` first; `install.sh` becomes the
-"from source, offline" path. (Revisit removing it once pipx is proven.)
+**D6 — `install.sh` is the no-pipx, PEP-668-safe fallback (kept, demoted in docs).** It builds
+its **own venv** (`python -m venv`) and pip-installs into it, so it needs only `python3` (with
+`venv`) + `pip` — **no pipx**, and it's PEP-668-safe because the venv is not the system
+environment. This makes it the answer for "only pip is available" / no-network / from-checkout
+/ dev. README points to `pipx` first; `install.sh` is the documented fallback. (Revisit removing
+it only if pipx becomes universally assumable — which D2a says it is not.)
 
 ## 4. Cross-platform scope
 

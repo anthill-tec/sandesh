@@ -46,6 +46,12 @@ Out of scope here: the AUR PKGBUILD (CR-SAN-009) and Windows **runtime** (DN-win
   (pipx ≥ 1.5 → `/usr/local/bin`) as the all-users option.
 - README documents `pipx install sandesh` / `pipx install 'sandesh[mcp]'` **followed by
   `pipx ensurepath`** as the primary path.
+- **No-pipx handling (don't assume pipx).** README must cover pipx being absent: bootstrap it
+  (`python -m pip install --user pipx && python -m pipx ensurepath`, or `sudo pacman -S
+  python-pipx` / `apt install pipx` / `brew install pipx`), **or** use the `install.sh` fallback
+  (§S5 — builds its own venv; needs only `python3`+`pip`). Warn that a plain `pip install sandesh`
+  into the system Python is blocked on externally-managed distros (**PEP 668**) — use a venv or
+  pipx. On Arch, the AUR PKGBUILD (CR-SAN-009) sidesteps this entirely (pacman resolves deps).
 
 ### §S4 — Tests adapt to the package layout
 - Update test imports to the package (drop `sys.path` hacks); the whole suite stays green.
@@ -93,6 +99,9 @@ message and a non-zero exit — e.g.:
       naming the fix (`pipx install 'sandesh[mcp]'`) and exits non-zero — **not** a raw
       `ImportError`/traceback. (Test: invoke the entry point in an env without `mcp`; assert the
       message + non-zero exit.) The `sandesh` CLI still works in that same env.
+- [ ] **AC9** — README handles **pipx absent**: a bootstrap line (`pip install --user pipx` or
+      OS package) **and** the `install.sh` fallback, plus a PEP-668 warning that plain
+      `pip install` into system Python is blocked (use a venv/pipx).
 
 ## Estimated size
 Medium–large: a structural refactor (module moves + import rewrites across code & tests) +
