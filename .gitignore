@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+# runtime data lives under $XDG_DATA_HOME/sandesh/, never in the repo
+*.db

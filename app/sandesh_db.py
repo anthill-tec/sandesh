@@ -1,0 +1,454 @@
+"""sandesh_db.py — Sandesh: a standalone inter-orchestrator messaging store.
+
+'Sandesh' (संदेश, Sanskrit/Hindi: *message / dispatch*) is a SQLite-backed maildir
+for cooperating agent/orchestrator sessions. It is **standalone** (pure Python
+stdlib — no third-party deps) and **multi-project**: every call carries a
+`project_id` that routes to that project's own store under the XDG data dir.
+
+  <data_home>/sandesh/projects/<project_id>/sandesh.db          (data_home = $XDG_DATA_HOME or ~/.local/share)
+  <data_home>/sandesh/projects/<project_id>/messages/msg-<id>.md
+
+`body_path` is stored as a FULL absolute path.
+
+Model — four tables:
+  address            the addressbook (durable identity; '<Orchestrator> - <Project>')
+  message            the envelope (subject REQUIRED; body_path NULL = subject-only)
+  message_recipient  per-message addressees (role 'to'/'cc' + per-recipient read_at)
+  notifier           per-session poller liveness (pid/token/heartbeat/tombstone)
+
+Semantics:
+  - To wakes / Cc silent     notify fires only on role='to'; fetch pulls to+cc.
+  - all-tracks broadcast      expands to active addresses minus the sender.
+  - per-recipient read         read_at lives on message_recipient, not the message.
+  - keep history + actioned    nothing deleted; message.status open|actioned|closed.
+  - subject-only               body_path NULL → the subject IS the content.
+  - reply threading            message.in_reply_to links a reply to its parent.
+  - crash-safe liveness        notifier reaped via dead-pid / stale-heartbeat.
+  - cooperative eviction       tombstone flag → the poller self-terminates.
+  - validated addresses        '<Orchestrator> - <Project>'; project must match project_id.
+"""
+
+import os
+import re
+
+DB_FILE = "sandesh.db"
+MESSAGES_DIR = "messages"
+HEARTBEAT_STALE_SECS = 60             # a notifier silent longer than this is presumed dead
+BROADCAST = "all-tracks"              # reserved recipient keyword (not a real address)
+
+ADDRESS_RE = re.compile(r"^(?P<orch>Mainline|Track \d+) - (?P<proj>[A-Za-z][A-Za-z0-9_]*)$")
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS address (
+    address       TEXT PRIMARY KEY,                 -- '<Orchestrator> - <Project>'  (unique → rejects dupes)
+    kind          TEXT,                             -- 'mainline' | 'track'
+    display_name  TEXT,
+    active        BOOLEAN NOT NULL DEFAULT TRUE,    -- soft-delete (history-safe)
+    registered_at TEXT NOT NULL DEFAULT (datetime('now')),
+    registered_by TEXT
+);
+CREATE TABLE IF NOT EXISTS message (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_addr   TEXT NOT NULL,
+    subject     TEXT NOT NULL,                      -- always present (the minimal content)
+    kind        TEXT,                               -- request | directive | fyi | reply
+    status      TEXT NOT NULL DEFAULT 'open',       -- open | actioned | closed
+    in_reply_to INTEGER REFERENCES message(id),     -- thread link (NULL = top-level)
+    body_path   TEXT,                               -- NULL = subject-only; else FULL path to messages/msg-<id>.md
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS message_recipient (
+    message_id INTEGER NOT NULL REFERENCES message(id),
+    recipient  TEXT NOT NULL,
+    role       TEXT NOT NULL DEFAULT 'to',          -- 'to' (wakes) | 'cc' (silent)
+    read_at    TEXT,                                -- NULL = unread (per recipient!)
+    PRIMARY KEY (message_id, recipient)
+);
+CREATE TABLE IF NOT EXISTS notifier (
+    recipient    TEXT PRIMARY KEY,                  -- one live poller per address (dedup key)
+    pid          INTEGER,
+    token        TEXT,                              -- uuid per launch (guards PID reuse)
+    host         TEXT,
+    started_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    heartbeat_at TEXT NOT NULL DEFAULT (datetime('now')),
+    tombstone    BOOLEAN NOT NULL DEFAULT FALSE     -- 1 = shutdown requested (cooperative eviction)
+);
+"""
+
+
+# --------------------------------------------------------------------------- #
+# store location + connection + provisioning
+
+def data_home():
+    """XDG data home — $XDG_DATA_HOME or ~/.local/share."""
+    return os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+
+
+def root_dir():
+    """The Sandesh root — <data_home>/sandesh (holds app/, bin/, projects/)."""
+    return os.path.join(data_home(), "sandesh")
+
+
+def store_dir(project_id):
+    """A project's data store dir — <data_home>/sandesh/projects/<project_id>/."""
+    if not project_id:
+        raise ValueError("project_id is required")
+    return os.path.join(root_dir(), "projects", project_id)
+
+
+def connect(store):
+    """Open (creating tables if absent) the Sandesh DB at <store>/sandesh.db."""
+    import sqlite3
+    os.makedirs(store, exist_ok=True)
+    con = sqlite3.connect(os.path.join(store, DB_FILE))
+    con.row_factory = sqlite3.Row
+    con.executescript(_SCHEMA)
+    con.commit()
+    return con
+
+
+def setup(project_id):
+    """Provision a project: create its store dir + messages/ and initialise the DB
+    tables. Idempotent — safe to re-run. Returns the store dir."""
+    store = store_dir(project_id)
+    os.makedirs(os.path.join(store, MESSAGES_DIR), exist_ok=True)
+    connect(store).close()
+    return store
+
+
+def list_projects():
+    """project_ids that have been set up (a projects/<id>/sandesh.db exists)."""
+    base = os.path.join(root_dir(), "projects")
+    if not os.path.isdir(base):
+        return []
+    return sorted(p for p in os.listdir(base)
+                  if os.path.isfile(os.path.join(base, p, DB_FILE)))
+
+
+# --------------------------------------------------------------------------- #
+# address book
+
+def validate_address(addr, project=None):
+    """Enforce '<Orchestrator> - <Project>'. Returns (orchestrator, project) or raises."""
+    m = ADDRESS_RE.match(addr or "")
+    if not m:
+        raise ValueError(
+            f"bad address {addr!r}: expected '<Orchestrator> - <Project>', "
+            f"e.g. 'Track 2 - Nai' or 'Mainline - Nai' "
+            f"(Orchestrator = 'Mainline' or 'Track <N>')")
+    if project and m.group("proj") != project:
+        raise ValueError(
+            f"address project {m.group('proj')!r} != project_id {project!r}")
+    return m.group("orch"), m.group("proj")
+
+
+def register(con, addr, kind=None, display_name=None, by=None, project=None):
+    """Self-register an address. Rejects an already-active duplicate; reactivates a
+    previously-unregistered one; otherwise inserts."""
+    validate_address(addr, project)
+    row = con.execute("SELECT active FROM address WHERE address=?", (addr,)).fetchone()
+    if row is not None:
+        if row["active"]:
+            raise ValueError(f"address already registered: {addr}")
+        con.execute(
+            "UPDATE address SET active=TRUE, kind=COALESCE(?,kind), "
+            "display_name=COALESCE(?,display_name), registered_at=datetime('now'), "
+            "registered_by=? WHERE address=?",
+            (kind, display_name, by or addr, addr))
+    else:
+        con.execute(
+            "INSERT INTO address (address, kind, display_name, registered_by) VALUES (?,?,?,?)",
+            (addr, kind, display_name, by or addr))
+    con.commit()
+
+
+def deactivate(con, addr):
+    """Soft-delete (active=FALSE). History retained; excluded from sends + all-tracks."""
+    con.execute("UPDATE address SET active=FALSE WHERE address=?", (addr,))
+    con.commit()
+
+
+def is_active(con, addr):
+    r = con.execute("SELECT active FROM address WHERE address=?", (addr,)).fetchone()
+    return bool(r and r["active"])
+
+
+def addressbook(con):
+    """All addresses (active first), each annotated with live-notifier status."""
+    rows = con.execute("SELECT * FROM address ORDER BY active DESC, address").fetchall()
+    return [{
+        "address": r["address"], "kind": r["kind"],
+        "active": bool(r["active"]), "registered_at": r["registered_at"],
+        "listening": notifier_live(con, r["address"]) is not None,
+    } for r in rows]
+
+
+def active_addresses(con):
+    return [r["address"] for r in
+            con.execute("SELECT address FROM address WHERE active=TRUE ORDER BY address").fetchall()]
+
+
+# --------------------------------------------------------------------------- #
+# sending
+
+def _expand_recipients(con, to_list, cc_list, sender):
+    """(recipient, role) pairs: expand `all-tracks`, drop the sender, dedup with To
+    winning over Cc, preserving To-then-Cc order."""
+    def expand(lst):
+        out = []
+        for a in (lst or []):
+            out.extend(active_addresses(con) if a == BROADCAST else [a])
+        return out
+
+    tos = [a for a in expand(to_list) if a != sender]
+    ccs = [a for a in expand(cc_list) if a != sender]
+    role = {}
+    for a in ccs:
+        role.setdefault(a, "cc")
+    for a in tos:
+        role[a] = "to"                      # To always wins over Cc
+    seen, ordered = set(), []
+    for a in tos + ccs:
+        if a not in seen:
+            seen.add(a)
+            ordered.append((a, role[a]))
+    return ordered
+
+
+def send(con, store, from_addr, to=None, cc=None, subject="", kind=None,
+         body_text=None, in_reply_to=None, project=None, validate=True):
+    """Insert a message. `subject` is mandatory; `body_text` None/'' ⇒ subject-only
+    (no file). Returns the new message id."""
+    if not subject:
+        raise ValueError("subject is required (it is the minimal message content)")
+    to, cc = (to or []), (cc or [])
+    if validate:
+        validate_address(from_addr, project)
+        for a in to + cc:
+            if a == BROADCAST:
+                continue
+            if not is_active(con, a):
+                raise ValueError(f"unknown or inactive recipient: {a!r}")
+    recips = _expand_recipients(con, to, cc, from_addr)
+    if not recips:
+        raise ValueError("no recipients (after excluding the sender)")
+
+    cur = con.execute(
+        "INSERT INTO message (from_addr, subject, kind, in_reply_to) VALUES (?,?,?,?)",
+        (from_addr, subject, kind, in_reply_to))
+    mid = cur.lastrowid
+
+    if body_text:
+        msg_dir = os.path.abspath(os.path.join(store, MESSAGES_DIR))
+        os.makedirs(msg_dir, exist_ok=True)
+        full = os.path.join(msg_dir, f"msg-{mid}.md")          # FULL absolute body path
+        with open(full, "w", encoding="utf-8") as fh:
+            fh.write(body_text)
+        con.execute("UPDATE message SET body_path=? WHERE id=?", (full, mid))
+
+    con.executemany(
+        "INSERT INTO message_recipient (message_id, recipient, role) VALUES (?,?,?)",
+        [(mid, r, role) for r, role in recips])
+    con.commit()
+    return mid
+
+
+def reply(con, store, parent_id, from_addr, subject=None, body_text=None,
+          reply_all=False, resolves=False, kind="reply", project=None):
+    """Reply to message <parent_id>: `to` defaults to the parent's sender, subject to
+    'Re: …', in_reply_to links the thread. `reply_all` cc's the parent's other
+    recipients; `resolves` marks the parent actioned."""
+    parent = con.execute("SELECT * FROM message WHERE id=?", (parent_id,)).fetchone()
+    if parent is None:
+        raise ValueError(f"no such message #{parent_id}")
+    to = [parent["from_addr"]]
+    cc = []
+    if reply_all:
+        cc = [r["recipient"] for r in con.execute(
+            "SELECT recipient FROM message_recipient WHERE message_id=?", (parent_id,)).fetchall()
+            if r["recipient"] not in (from_addr, parent["from_addr"])]
+    if not subject:
+        s = parent["subject"]
+        subject = s if s.lower().startswith("re:") else f"Re: {s}"
+    mid = send(con, store, from_addr, to, cc, subject, kind, body_text,
+               in_reply_to=parent_id, project=project)
+    if resolves:
+        set_status(con, parent_id, "actioned")
+    return mid
+
+
+def set_status(con, msg_id, status):
+    if status not in ("open", "actioned", "closed"):
+        raise ValueError(f"bad status {status!r}")
+    con.execute("UPDATE message SET status=? WHERE id=?", (status, msg_id))
+    con.commit()
+
+
+# --------------------------------------------------------------------------- #
+# receiving
+
+def inbox(con, recipient, unread_only=True):
+    q = ("SELECT m.id, m.from_addr, m.subject, m.kind, m.status, m.in_reply_to, "
+         "m.body_path, m.created_at, r.role, r.read_at "
+         "FROM message m JOIN message_recipient r ON r.message_id = m.id "
+         "WHERE r.recipient = ? ")
+    if unread_only:
+        q += "AND r.read_at IS NULL "
+    q += "ORDER BY m.created_at, m.id"
+    return con.execute(q, (recipient,)).fetchall()
+
+
+def unread_to(con, recipient):
+    """Ids of unread messages where `recipient` is a 'to' — the NOTIFY/wake filter
+    (Cc is deliberately excluded: cc never wakes, it's swept up by fetch)."""
+    return [r["id"] for r in con.execute(
+        "SELECT m.id FROM message m JOIN message_recipient r ON r.message_id = m.id "
+        "WHERE r.recipient = ? AND r.role = 'to' AND r.read_at IS NULL ORDER BY m.id",
+        (recipient,)).fetchall()]
+
+
+def mark_read(con, recipient, ids):
+    con.executemany(
+        "UPDATE message_recipient SET read_at = datetime('now') "
+        "WHERE message_id = ? AND recipient = ? AND read_at IS NULL",
+        [(i, recipient) for i in ids])
+    con.commit()
+
+
+def fetch(con, store, recipient, mark=True):
+    """Consolidate this recipient's unread messages (to + cc) — bodies read from their
+    FULL path, subject-only entries carry no body — and (default) mark them read."""
+    rows = inbox(con, recipient, unread_only=True)
+    items = []
+    for r in rows:
+        body = None
+        if r["body_path"]:
+            path = r["body_path"]
+            if not os.path.isabs(path):                    # legacy relative → resolve under store
+                path = os.path.join(store, path)
+            try:
+                with open(path, encoding="utf-8") as fh:   # compiled from the full path
+                    body = fh.read()
+            except FileNotFoundError:
+                body = f"(body file missing: {path})"
+        parent = None
+        if r["in_reply_to"]:
+            p = con.execute("SELECT subject FROM message WHERE id=?", (r["in_reply_to"],)).fetchone()
+            parent = (r["in_reply_to"], p["subject"] if p else "?")
+        items.append({
+            "id": r["id"], "from": r["from_addr"], "subject": r["subject"],
+            "role": r["role"], "kind": r["kind"], "created_at": r["created_at"],
+            "in_reply_to": parent, "body": body,
+        })
+    if mark and items:
+        mark_read(con, recipient, [it["id"] for it in items])
+    return items
+
+
+def thread(con, msg_id):
+    """The reply chain from the root down to msg_id (ascending by id)."""
+    chain, cur = [], con.execute("SELECT * FROM message WHERE id=?", (msg_id,)).fetchone()
+    while cur is not None:
+        chain.append(cur)
+        cur = (con.execute("SELECT * FROM message WHERE id=?", (cur["in_reply_to"],)).fetchone()
+               if cur["in_reply_to"] else None)
+    chain.reverse()
+    return chain
+
+
+# --------------------------------------------------------------------------- #
+# notifier liveness (per-session poller registry)
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except (ProcessLookupError, TypeError, ValueError):
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def notifier_live(con, recipient):
+    """The notifier row IF a poller is genuinely alive (fresh heartbeat + live pid),
+    else None. Self-healing check that compensates for SIGKILL / crash."""
+    r = con.execute("SELECT * FROM notifier WHERE recipient=?", (recipient,)).fetchone()
+    if r is None:
+        return None
+    age = con.execute("SELECT (julianday('now') - julianday(?)) * 86400.0",
+                      (r["heartbeat_at"],)).fetchone()[0]
+    if age is not None and age > HEARTBEAT_STALE_SECS:
+        return None
+    if not _pid_alive(r["pid"]):
+        return None
+    return r
+
+
+def notifier_acquire(con, recipient, pid, token, host):
+    """(False, reason) if a notifier is already live for `recipient` (dedup);
+    (True, 'acquired') after taking/refreshing the row otherwise."""
+    live = notifier_live(con, recipient)
+    if live is not None:
+        return (False, f"another notifier already live for {recipient!r} (pid {live['pid']})")
+    con.execute(
+        "INSERT INTO notifier (recipient,pid,token,host,started_at,heartbeat_at,tombstone) "
+        "VALUES (?,?,?,?,datetime('now'),datetime('now'),FALSE) "
+        "ON CONFLICT(recipient) DO UPDATE SET pid=excluded.pid, token=excluded.token, "
+        "host=excluded.host, started_at=datetime('now'), heartbeat_at=datetime('now'), "
+        "tombstone=FALSE",
+        (recipient, pid, token, host))
+    con.commit()
+    return (True, "acquired")
+
+
+def notifier_heartbeat(con, recipient, token):
+    con.execute("UPDATE notifier SET heartbeat_at=datetime('now') WHERE recipient=? AND token=?",
+                (recipient, token))
+    con.commit()
+
+
+def notifier_check(con, recipient, token):
+    """Per-iteration state for the poller: 'ok' | 'tombstoned' | 'evicted'."""
+    r = con.execute("SELECT token, tombstone FROM notifier WHERE recipient=?", (recipient,)).fetchone()
+    if r is None or r["token"] != token:
+        return "evicted"
+    if r["tombstone"]:
+        return "tombstoned"
+    return "ok"
+
+
+def notifier_release(con, recipient, token):
+    """Remove my row on clean exit — only if it is still mine (never clobber a successor)."""
+    con.execute("DELETE FROM notifier WHERE recipient=? AND token=?", (recipient, token))
+    con.commit()
+
+
+def notifier_tombstone(con, recipient):
+    """Request a cooperative shutdown of `recipient`'s live notifier."""
+    con.execute("UPDATE notifier SET tombstone=TRUE WHERE recipient=?", (recipient,))
+    con.commit()
+
+
+def notifier_reap_if_stale(con, recipient):
+    """Force-remove a dead/stale notifier row (fallback when a tombstone is ignored)."""
+    if notifier_live(con, recipient) is None:
+        con.execute("DELETE FROM notifier WHERE recipient=?", (recipient,))
+        con.commit()
+        return True
+    return False
+
+
+def unregister(con, recipient, requester, project=None):
+    """Remove a participant. Auth: Mainline may remove anyone; anyone may remove self.
+    Live notifier → tombstone it, return ('tombstoned', pid); else reap stale, soft-delete,
+    return ('unregistered', None)."""
+    orch_req, _ = validate_address(requester, project)
+    if recipient != requester and orch_req != "Mainline":
+        raise PermissionError("only Mainline may remove another participant")
+    live = notifier_live(con, recipient)
+    if live is not None:
+        notifier_tombstone(con, recipient)
+        return ("tombstoned", live["pid"])
+    notifier_reap_if_stale(con, recipient)
+    deactivate(con, recipient)
+    return ("unregistered", None)

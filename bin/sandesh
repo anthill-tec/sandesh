@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Sandesh launcher — runs the CLI from the install (or repo) location.
+# Resolves its own real path so it works whether invoked directly or via a symlink
+# (e.g. ~/.local/bin/sandesh → ~/.local/share/sandesh/bin/sandesh).
+set -euo pipefail
+self="$(readlink -f "${BASH_SOURCE[0]}")"
+here="$(dirname "$self")"
+exec python3 "$here/../app/cli.py" "$@"
