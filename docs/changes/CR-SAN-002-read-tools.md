@@ -30,22 +30,22 @@ Register via `@mcp.tool()`, each with a required `project_id`, each delegating p
 ## Acceptance criteria
 
 ### §S1
-- [ ] `await mcp.list_tools()` includes `sandesh_addressbook`, `sandesh_inbox`,
+- [ ] **AC1** — `await mcp.list_tools()` includes `sandesh_addressbook`, `sandesh_inbox`,
       `sandesh_fetch`, `sandesh_thread`.
-- [ ] `sandesh_addressbook(project_id)` returns the same value as `addressbook(con)`.
-- [ ] `sandesh_inbox(project_id, recipient, unread_only)` returns the same value as
+- [ ] **AC2** — `sandesh_addressbook(project_id)` returns the same value as `addressbook(con)`.
+- [ ] **AC3** — `sandesh_inbox(project_id, recipient, unread_only)` returns the same value as
       `inbox(con, recipient, unread_only)`; `unread_only` defaults to `True`.
-- [ ] `sandesh_fetch(project_id, recipient, mark)` returns the same value as
+- [ ] **AC4** — `sandesh_fetch(project_id, recipient, mark)` returns the same value as
       `fetch(con, store, recipient, mark)`, passes `store`, and `mark` defaults to `True`.
-- [ ] `sandesh_thread(project_id, msg_id)` returns the same value as `thread(con, msg_id)`.
+- [ ] **AC5** — `sandesh_thread(project_id, msg_id)` returns the same value as `thread(con, msg_id)`.
 
 ### Tests
-- [ ] Parity tests for all four tools against a temp store (seed via the library, call the
-      tool, assert equality with the direct `sandesh_db.*` result).
+- [ ] **AC6** — parity tests for all four tools against a temp store (seed via the library, call
+      the tool, assert equality with the direct `sandesh_db.*` result).
       **Unwrap `call_tool`'s converted return** (per CR-SAN-001 §S4: `TextContent.text`
       for scalars, `structuredContent` for dict/list) before comparing — it does not
       return the raw library value. Normalize sqlite `Row` → plain dict on both sides.
-- [ ] `python3 tests/test_sandesh.py` (existing 24) stays green.
+- [ ] **AC7** — `python3 tests/test_sandesh.py` (existing 24) stays green.
 
 ## Estimated size
 Small: ~40–70 lines of adapters + one test module.

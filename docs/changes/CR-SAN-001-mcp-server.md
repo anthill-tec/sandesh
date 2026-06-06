@@ -60,33 +60,33 @@ stdlib-only), the `FastMCP` application, the per-call store/connection helper mi
 ## Acceptance criteria
 
 ### §S1
-- [ ] `install.sh` creates `<DEST>/.venv` and installs `mcp` pinned `>=1.27,<2` into it.
-- [ ] `install.sh` writes `bin/sandesh-mcp` that execs the venv python on
+- [ ] **AC1** — `install.sh` creates `<DEST>/.venv` and installs `mcp` pinned `>=1.27,<2` into it.
+- [ ] **AC2** — `install.sh` writes `bin/sandesh-mcp` that execs the venv python on
       `app/mcp_server.py`, and symlinks it onto PATH; running it starts the server.
-- [ ] `python3 -c "import cli"` (or running `bin/sandesh`) succeeds with **no** third-party
-      package available — only `mcp_server.py` imports `mcp`.
+- [ ] **AC3** — `python3 -c "import cli"` (or running `bin/sandesh`) succeeds with **no**
+      third-party package available — only `mcp_server.py` imports `mcp`.
 
 ### §S2
-- [ ] `app/mcp_server.py` constructs `FastMCP("sandesh")`.
-- [ ] `_ctx` resolves the store via `sandesh_db.store_dir(<project>)` and connects via
+- [ ] **AC4** — `app/mcp_server.py` constructs `FastMCP("sandesh")`.
+- [ ] **AC5** — `_ctx` resolves the store via `sandesh_db.store_dir(<project>)` and connects via
       `sandesh_db.connect(store)`, where `<project>` is the passed `project_id` or, if
       omitted, `$SANDESH_PROJECT`; a clear error is raised when neither is set (D4).
-- [ ] A library `ValueError`/`PermissionError` raised inside a tool surfaces to the client
-      as `ToolError` with the original message (not an unhandled traceback).
-- [ ] `main()` calls `mcp.run(transport="stdio")`.
+- [ ] **AC6** — a library `ValueError`/`PermissionError` raised inside a tool surfaces to the
+      client as `ToolError` with the original message (not an unhandled traceback).
+- [ ] **AC7** — `main()` calls `mcp.run(transport="stdio")`.
 
 ### §S3
-- [ ] `await mcp.list_tools()` includes a tool named `sandesh_setup`.
-- [ ] Calling `sandesh_setup` with a `project_id` provisions the store (path exists) and
-      returns the store path; the **unwrapped** tool result (per §S4 — `TextContent.text`)
+- [ ] **AC8** — `await mcp.list_tools()` includes a tool named `sandesh_setup`.
+- [ ] **AC9** — calling `sandesh_setup` with a `project_id` provisions the store (path exists)
+      and returns the store path; the **unwrapped** tool result (per §S4 — `TextContent.text`)
       equals `sandesh_db.store_dir(project_id)`.
-- [ ] Calling `sandesh_setup` with no `project_id` but `$SANDESH_PROJECT` set provisions
-      that project's store (D4 fallback).
+- [ ] **AC10** — calling `sandesh_setup` with no `project_id` but `$SANDESH_PROJECT` set
+      provisions that project's store (D4 fallback).
 
 ### §S4
-- [ ] A test calls `sandesh_setup` in-process via `mcp.call_tool` against a temp store and
-      asserts the store was created.
-- [ ] `python3 tests/test_sandesh.py` (existing 24) stays green.
+- [ ] **AC11** — a test calls `sandesh_setup` in-process via `mcp.call_tool` against a temp
+      store and asserts the store was created.
+- [ ] **AC12** — `python3 tests/test_sandesh.py` (existing 24) stays green.
 
 ## Estimated size
 Small: ~80–120 line module + installer edits + one test module.

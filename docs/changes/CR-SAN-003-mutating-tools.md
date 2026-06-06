@@ -39,32 +39,32 @@ Library validation/authorization errors surface as `ToolError` with the original
 ## Acceptance criteria
 
 ### §S1
-- [ ] `await mcp.list_tools()` includes `sandesh_register`, `sandesh_unregister`,
+- [ ] **AC1** — `await mcp.list_tools()` includes `sandesh_register`, `sandesh_unregister`,
       `sandesh_send`, `sandesh_reply`, `sandesh_actioned`.
-- [ ] After CR-SAN-001..003, `await mcp.list_tools()` returns **exactly 10** tools (the
-      full PRD §5 set — no more, no fewer).
-- [ ] `sandesh_register(project_id, addr, …)` registers the address (visible in
+- [ ] **AC2** — after CR-SAN-001..003, `await mcp.list_tools()` returns **exactly 10** tools
+      (the full PRD §5 set — no more, no fewer).
+- [ ] **AC3** — `sandesh_register(project_id, addr, …)` registers the address (visible in
       `addressbook`); passes `project=project_id`.
-- [ ] `sandesh_send(project_id, from_addr, to, subject, …)` creates a message
+- [ ] **AC4** — `sandesh_send(project_id, from_addr, to, subject, …)` creates a message
       (recipient sees it via `inbox`/`fetch`); passes `store` and `project=project_id`.
-- [ ] `sandesh_reply(project_id, parent_id, from_addr, …)` creates a reply linked via
+- [ ] **AC5** — `sandesh_reply(project_id, parent_id, from_addr, …)` creates a reply linked via
       `in_reply_to`; passes `store`.
-- [ ] `sandesh_unregister(project_id, recipient, requester)` returns the library's result
-      (e.g. `('tombstoned', pid)` for a live address, soft-delete otherwise).
-- [ ] `sandesh_actioned(project_id, msg_id)` sets the message status to `actioned`.
+- [ ] **AC6** — `sandesh_unregister(project_id, recipient, requester)` returns the library's
+      result (e.g. `('tombstoned', pid)` for a live address, soft-delete otherwise).
+- [ ] **AC7** — `sandesh_actioned(project_id, msg_id)` sets the message status to `actioned`.
 
 ### §S2
-- [ ] Registering a malformed address via `sandesh_register` raises `ToolError` (not an
-      unhandled exception) carrying the library's validation message.
-- [ ] An unauthorized `sandesh_unregister` (requester not `Mainline` and not self) raises
-      `ToolError` with the library's authorization message.
+- [ ] **AC8** — registering a malformed address via `sandesh_register` raises `ToolError` (not
+      an unhandled exception) carrying the library's validation message.
+- [ ] **AC9** — an unauthorized `sandesh_unregister` (requester not `Mainline` and not self)
+      raises `ToolError` with the library's authorization message.
 
 ### Tests
-- [ ] Parity/behavior tests for all five tools + the two error-mapping cases against a
-      temp store. **Unwrap `call_tool`'s converted return** (per CR-SAN-001 §S4) before
+- [ ] **AC10** — parity/behavior tests for all five tools + the two error-mapping cases against
+      a temp store. **Unwrap `call_tool`'s converted return** (per CR-SAN-001 §S4) before
       comparing; assert error cases raise `ToolError` (the SDK wraps tool exceptions —
       catch `ToolError`, not the raw `ValueError`/`PermissionError`).
-- [ ] `python3 tests/test_sandesh.py` (existing 24) stays green.
+- [ ] **AC11** — `python3 tests/test_sandesh.py` (existing 24) stays green.
 
 ## Estimated size
 Small–medium: ~60–100 lines of adapters + one test module.

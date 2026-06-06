@@ -50,27 +50,28 @@ Plus documentation of the manual smoke path (`mcp dev`) and client registration 
 ## Acceptance criteria
 
 ### §S1
-- [ ] A T2 test connects a `ClientSession` via `create_connected_server_and_client_session`,
-      calls `initialize()` then `list_tools()`, and sees **exactly 10** tools (PRD §5).
-- [ ] A T2 test calls one read and one mutating tool through the client and asserts the
-      result matches the seeded library state.
-- [ ] A T2 test triggers a validation failure (e.g. malformed address) and asserts the
-      client receives an error result carrying the library message.
+- [ ] **AC1** — a T2 test connects a `ClientSession` via
+      `create_connected_server_and_client_session`, calls `initialize()` then `list_tools()`,
+      and sees **exactly 10** tools (PRD §5).
+- [ ] **AC2** — a T2 test calls one read and one mutating tool through the client and asserts
+      the result matches the seeded library state.
+- [ ] **AC3** — a T2 test triggers a validation failure (e.g. malformed address) and asserts
+      the client receives an error result carrying the library message.
 
 ### §S2
-- [ ] A T3 test spawns `sandesh-mcp` via `StdioServerParameters`+`stdio_client`, runs
+- [ ] **AC4** — a T3 test spawns `sandesh-mcp` via `StdioServerParameters`+`stdio_client`, runs
       `setup → register → send → fetch` over stdio, and asserts the fetched message body/
       subject matches what was sent.
-- [ ] The T3 test skips with a clear reason when `sandesh-mcp`/the venv is not installed.
+- [ ] **AC5** — the T3 test skips with a clear reason when `sandesh-mcp`/the venv is not installed.
 
 ### §S3
-- [ ] `grep -L "import mcp" tests/test_sandesh.py` confirms the stdlib test file imports no
-      `mcp`; running it needs no third-party package.
-- [ ] T2/T3 tests are skipped (not errored) when the venv is absent.
+- [ ] **AC6** — `grep -L "import mcp" tests/test_sandesh.py` confirms the stdlib test file
+      imports no `mcp`; running it needs no third-party package.
+- [ ] **AC7** — T2/T3 tests are skipped (not errored) when the venv is absent.
 
 ### §S4
-- [ ] README documents `mcp dev` manual smoke and the `claude mcp add` registration with
-      user-vs-project scope guidance.
+- [ ] **AC8** — README documents `mcp dev` manual smoke and the `claude mcp add` registration
+      with user-vs-project scope guidance.
 
 ## Estimated size
 Medium: two test modules (in-memory + subprocess) + doc edits.
