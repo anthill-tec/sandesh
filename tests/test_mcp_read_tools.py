@@ -26,6 +26,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 PROJ = "TestRead"
 MAINLINE = "Mainline - TestRead"
 TRACK1 = "Track 1 - TestRead"
+TRACK2 = "Track 2 - TestRead"  # third address used as sender to avoid sender-drop on cc
 
 
 def _data(result):
@@ -73,17 +74,22 @@ class McpReadToolsTest(unittest.IsolatedAsyncioTestCase):
         self.store = sdb.store_dir(PROJ)
         self.con = sdb.connect(self.store)
 
-        # Register two addresses.
+        # Register three addresses.
         sdb.register(self.con, MAINLINE, kind="mainline")
         sdb.register(self.con, TRACK1, kind="track")
+        sdb.register(self.con, TRACK2, kind="track")
 
         # Send a subject-only message and a message with a body.
         self.mid_subj = sdb.send(
             self.con, self.store, TRACK1,
             to=[MAINLINE], subject="ping", project=PROJ,
         )
+        # mid_body is sent FROM TRACK2 so that TRACK1 can appear as cc without being
+        # dropped by _expand_recipients (which removes the sender from all recipient lists).
+        # This preserves AC3 / locked semantic: TRACK1's cc row is independent of MAINLINE's
+        # to row, so TRACK1 stays unread after MAINLINE fetches.
         self.mid_body = sdb.send(
-            self.con, self.store, TRACK1,
+            self.con, self.store, TRACK2,
             to=[MAINLINE], cc=[TRACK1], subject="detailed report",
             body_text="This is the message body.\n", project=PROJ,
         )
@@ -130,15 +136,16 @@ class McpReadToolsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(actual), len(expected))
         self.assertEqual(actual, expected)
 
-    async def test_addressbook_returns_both_addresses(self):
-        """AC2 behavioural: both registered addresses appear in the result."""
+    async def test_addressbook_returns_all_registered_addresses(self):
+        """AC2 behavioural: all three registered addresses appear in the result."""
         result = await mcp_server.mcp.call_tool("sandesh_addressbook", {"project_id": PROJ})
         actual = _data(result)
         addresses = [row["address"] for row in actual]
         self.assertIn(MAINLINE, addresses)
         self.assertIn(TRACK1, addresses)
-        # Exactly 2 addresses, not 1 or 3
-        self.assertEqual(len(addresses), 2)
+        self.assertIn(TRACK2, addresses)
+        # Exactly 3 addresses (MAINLINE + TRACK1 + TRACK2)
+        self.assertEqual(len(addresses), 3)
 
     async def test_addressbook_shows_active_flag(self):
         """AC2 behavioural: active addresses have active=True."""
