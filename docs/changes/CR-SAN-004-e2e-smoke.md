@@ -1,6 +1,6 @@
 # CR-SAN-004 — MCP E2E: protocol + real-subprocess smoke tests
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-06 on feature/CR-SAN-004)
 **Priority:** Medium
 **Depends on:** CR-SAN-001, CR-SAN-002, CR-SAN-003
 **Labels:** phase-2, mcp, e2e, testing
@@ -62,29 +62,29 @@ Plus documentation of the manual smoke path (`mcp dev`) and client registration 
 ## Acceptance criteria
 
 ### §S1
-- [ ] **AC1** — a T2 test connects a `ClientSession` via
+- [x] **AC1** — a T2 test connects a `ClientSession` via
       `create_connected_server_and_client_session`, calls `initialize()` then `list_tools()`,
       and sees **exactly 10** tools (PRD §5).
-- [ ] **AC2** — a T2 test calls one read and one mutating tool through the client and asserts
+- [x] **AC2** — a T2 test calls one read and one mutating tool through the client and asserts
       the result matches the seeded library state.
-- [ ] **AC3** — a T2 test triggers a validation failure (e.g. malformed address) and asserts
+- [x] **AC3** — a T2 test triggers a validation failure (e.g. malformed address) and asserts
       the client receives an error result carrying the library message.
 
 ### §S2
-- [ ] **AC4** — a T3 test spawns the server as a real subprocess over stdio (via the repo
+- [x] **AC4** — a T3 test spawns the server as a real subprocess over stdio (via the repo
       venv python on `app/mcp_server.py`, or the installed `sandesh-mcp` if present) with
       `StdioServerParameters`+`stdio_client`+`ClientSession`, runs `setup → register → send →
       fetch` over stdio, and asserts the fetched message body/subject matches what was sent.
-- [ ] **AC5** — the T3 test skips with a clear reason only when the venv/`mcp` is genuinely
+- [x] **AC5** — the T3 test skips with a clear reason only when the venv/`mcp` is genuinely
       absent (it does NOT require a global `sandesh-mcp` install to run).
 
 ### §S3
-- [ ] **AC6** — `grep -L "import mcp" tests/test_sandesh.py` confirms the stdlib test file
+- [x] **AC6** — `grep -L "import mcp" tests/test_sandesh.py` confirms the stdlib test file
       imports no `mcp`; running it needs no third-party package.
-- [ ] **AC7** — T2/T3 tests are skipped (not errored) when the venv is absent.
+- [x] **AC7** — T2/T3 tests are skipped (not errored) when the venv is absent.
 
 ### §S4
-- [ ] **AC8** — README documents `mcp dev` manual smoke and the `claude mcp add` registration
+- [x] **AC8** — README documents `mcp dev` manual smoke and the `claude mcp add` registration
       with user-vs-project scope guidance.
 
 ## Estimated size
@@ -99,3 +99,13 @@ Medium: two test modules (in-memory + subprocess) + doc edits.
 ## Non-goals
 - HTTP/SSE transport E2E (PRD §9 — out of scope).
 - Any new tool or library change.
+
+## Implementation Notes (2026-06-06)
+
+One cycle (C0, E2E tests) + an orchestrator docs step. **Final Phase-2 CR.** No production code changed (`app/` diff empty) — pure test-coverage + docs.
+
+- **C0** (`637ef96`) — `tests/test_mcp_e2e.py` (8 tests). **T2** (5): real `ClientSession` over `create_connected_server_and_client_session` (in-memory) — `list_tools`=10, read+mutating round-trips, validation→`isError` result. **T3** (3): real subprocess over stdio via `.venv/bin/python app/mcp_server.py` + `stdio_client`+`ClientSession` — `setup→register→send→fetch` round-trip + list_tools + error path. Gated `@skipUnless(HAS_MCP and venv present)` so it skips (not errors) without the venv. Confirmed the real-client result shape: `CallToolResult.structuredContent = {"result": <value>}`, errors via `isError`.
+- **§S4 docs** (`dc8fde5`) — README MCP server section: `claude mcp add` registration (user/project scope), the 10 tools, `mcp dev` manual smoke; Roadmap → MCP DONE.
+- **VERIFY** (`CR-SAN-004-VERIFY`): 8/8 green, T3 confirmed RAN (3 real subprocess spawns, not skipped), `app/` diff empty, stdlib path mcp-free, all AC1–AC8 PASS, 0 blocking.
+- **Pre-merge gate**: 97/97 green; py_compile clean; coverage 52.0% lines / 64.2% funcs.
+- **Phase 2 COMPLETE** — all 4 CRs (SAN-001..004) shipped: 10-tool MCP stdio server, venv isolation, T1 in-process + T2 in-memory + T3 subprocess E2E, docs.
