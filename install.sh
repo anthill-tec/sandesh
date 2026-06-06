@@ -21,8 +21,33 @@ chmod +x "$DEST/bin/sandesh"
 mkdir -p "$BINDIR"
 ln -sf "$DEST/bin/sandesh" "$BINDIR/sandesh"
 
+# --- MCP server: dedicated venv (the CLI stays stdlib-only; only the MCP
+#     server needs the third-party `mcp` SDK). -------------------------------
+echo "creating MCP venv:   $DEST/.venv"
+python3 -m venv "$DEST/.venv"
+"$DEST/.venv/bin/python" -m pip install --quiet --upgrade pip
+"$DEST/.venv/bin/python" -m pip install --quiet "mcp>=1.27,<2"
+
+# Self-locating MCP wrapper — resolves its own real path (like bin/sandesh) so
+# it works through the ~/.local/bin/sandesh-mcp symlink. Execs the venv python
+# on app/mcp_server.py.
+cat > "$DEST/bin/sandesh-mcp" <<'EOF'
+#!/usr/bin/env bash
+# Sandesh MCP server launcher — runs the MCP server from the install (or repo)
+# location using the dedicated venv python. Resolves its own real path so it
+# works whether invoked directly or via a symlink.
+set -euo pipefail
+self="$(readlink -f "${BASH_SOURCE[0]}")"
+here="$(dirname "$self")"
+exec "$here/../.venv/bin/python" "$here/../app/mcp_server.py" "$@"
+EOF
+chmod +x "$DEST/bin/sandesh-mcp"
+ln -sf "$DEST/bin/sandesh-mcp" "$BINDIR/sandesh-mcp"
+
 echo "✓ installed → $DEST"
 echo "✓ launcher  → $BINDIR/sandesh"
+echo "✓ MCP venv  → $DEST/.venv"
+echo "✓ MCP wrap  → $BINDIR/sandesh-mcp"
 case ":$PATH:" in
   *":$BINDIR:"*) : ;;
   *) echo "  NOTE: $BINDIR is not on \$PATH — add it to use 'sandesh' directly." ;;
