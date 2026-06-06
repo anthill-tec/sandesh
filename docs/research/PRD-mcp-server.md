@@ -198,7 +198,18 @@ a runnable command (`command` + `args` + `env`). For Sandesh that command is the
 `bin/sandesh-mcp` wrapper from D2.
 
 **Install →** `./install.sh` (creates the venv + `sandesh-mcp` wrapper, symlinks it onto
-PATH alongside `sandesh`). **Register with Claude Code:**
+PATH alongside `sandesh`).
+
+**On `$PATH`, callable without a prefix (REQUIRED).** Both `sandesh` and `sandesh-mcp` must be
+invocable by **bare name** after install — the agent backgrounds `sandesh notify` (the wake,
+§6) and the client spawns `sandesh-mcp` (the registration below) with no path prefix.
+`install.sh` therefore symlinks both into `~/.local/bin` **and ensures that dir is on `$PATH`**:
+if it isn't already, add it idempotently to the user's shell profile (bash `~/.bashrc`/
+`~/.profile`, zsh `~/.zshrc`, fish via `fish_add_path` / `~/.config/fish/config.fish`). Today
+`install.sh` only *warns* when `~/.local/bin` is off `$PATH` — the requirement is to make it
+on-PATH so no prefix is ever needed. (CR-SAN-007.)
+
+**Register with Claude Code:**
 ```bash
 # user scope (all your projects); bake a default project via env so tools can omit project_id
 claude mcp add sandesh --scope user --env SANDESH_PROJECT=<id> -- sandesh-mcp
@@ -275,4 +286,5 @@ tier catching what the cheaper one cannot.
 | CR-SAN-003 | Mutating tools: `sandesh_register`, `sandesh_unregister`, `sandesh_send`, `sandesh_reply`, `sandesh_actioned` + auth/validation error-mapping tests | CR-SAN-001 |
 | CR-SAN-004 | E2E: T2 in-memory client↔server tests + T3 real-subprocess stdio smoke test over the installed `sandesh-mcp` wrapper; document `mcp dev` + `claude mcp add` registration (§7a) | CR-SAN-001, 002, 003 |
 | CR-SAN-005 | **Retire the `status`/disposition model (D7):** remove `sandesh_actioned` (→ 9 tools) and stop using `message.status`; confirm `sandesh_reply` exposes no `resolves`/`reply_all`. Behavior + tests. | CR-SAN-001..004 |
+| CR-SAN-007 | **Install: launchers on `$PATH`** — `install.sh` ensures `~/.local/bin` is on `$PATH` (idempotent shell-profile update for bash/zsh/fish), so `sandesh` and `sandesh-mcp` are callable by bare name (today it only warns). Behavior + a test. | CR-SAN-001 |
 | CR-SAN-006 | **Docstring & usability enrichment** from `docs/usage-scenarios.md`: per-tool docstrings (what/who/when/gotchas), param descriptions (address format, `parent_id` = the original message's id, To-wakes/Cc-silent), required params, optional read/destructive annotations. **Server `instructions`** (FastMCP `instructions=` → returned in `initialize`, §6): Model-B context + the out-of-band **wake** (`run_in_background` + `sandesh notify`, *not* a tool) + the read=acting/reply=done lifecycle — so an agent learns the CLI/wake step it can't get from `list_tools`. **Optional `sandesh://usage` resource** (`@mcp.resource`) serving `docs/usage-scenarios.md` on demand. Docs/quality. | CR-SAN-005 |
