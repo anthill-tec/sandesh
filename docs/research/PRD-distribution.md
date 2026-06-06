@@ -41,11 +41,14 @@ rely on a `sys.path.insert` hack) into an importable **`sandesh/` package** (`sa
 hatchling (CR decides). This is the prerequisite for every other channel.
 
 **D2 — `pipx` is the isolation + PATH mechanism (replaces the bespoke venv+wrapper).**
-`[project.scripts]` entry points —
-`sandesh = "sandesh.cli:main"` and `sandesh-mcp = "sandesh.mcp_server:main"` — are placed on
-`$PATH` automatically by pip/pipx (no shell-profile editing). `pipx` gives each tool its own
-isolated venv. This **subsumes** PRD-mcp-server D2 (venv+wrapper) and **CR-SAN-007** (PATH
-hardening): the wrapper and the manual PATH edit are no longer needed.
+`[project.scripts]` entry points — `sandesh = "sandesh.cli:main"` and
+`sandesh-mcp = "sandesh.mcp_server:main"` — are emitted into pipx's bin dir (`~/.local/bin`);
+**`pipx ensurepath`** puts that dir on `$PATH` (a one-time, idempotent profile edit; needs a
+shell restart). `pipx` gives each tool its own isolated venv. Default is **user-space** (no
+root); `sudo pipx install --global` (pipx ≥ 1.5 → `/usr/local/bin`) is the all-users option.
+This **subsumes** PRD-mcp-server D2 (venv+wrapper) and **CR-SAN-007** (PATH hardening): the
+wrapper is gone, and the PATH edit becomes the single standard `pipx ensurepath` instead of
+bespoke per-shell logic.
 
 **D3 — `mcp` is an optional extra (`sandesh[mcp]`), preserving stdlib-only CLI.**
 `[project.optional-dependencies] mcp = ["mcp>=1.27,<2"]`. `pipx install sandesh` → the

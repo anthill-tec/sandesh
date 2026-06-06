@@ -38,7 +38,14 @@ Out of scope here: the AUR PKGBUILD (CR-SAN-009) and Windows **runtime** (DN-win
   third-party package present.
 - `pip install '.[mcp]'` → `mcp` importable; `sandesh-mcp` starts the server. `mcp` imported
   ONLY by `sandesh.mcp_server`.
-- README documents `pipx install sandesh` / `pipx install 'sandesh[mcp]'` as the primary path.
+- **pipx (primary, user-space) + `pipx ensurepath`.** `pipx install 'sandesh[mcp]'` puts the
+  console scripts in pipx's bin dir (`~/.local/bin`); **`pipx ensurepath`** adds that dir to
+  `$PATH` (idempotent shell-profile edit; needs a shell restart to take effect). This is how
+  `sandesh`/`sandesh-mcp` become callable by bare name — it replaces CR-SAN-007's manual
+  PATH edit. User-space is the default (no root); note `sudo pipx install --global …`
+  (pipx ≥ 1.5 → `/usr/local/bin`) as the all-users option.
+- README documents `pipx install sandesh` / `pipx install 'sandesh[mcp]'` **followed by
+  `pipx ensurepath`** as the primary path.
 
 ### §S4 — Tests adapt to the package layout
 - Update test imports to the package (drop `sys.path` hacks); the whole suite stays green.
@@ -79,8 +86,9 @@ message and a non-zero exit — e.g.:
       (`sandesh_db`/CLI) run with system `python3` and **no** `mcp`; the MCP + e2e tests run
       under the `[mcp]` env; T3 spawns via the entry point / `python -m sandesh.mcp_server`.
 - [ ] **AC7** — README install section leads with `pipx install sandesh` /
-      `pipx install 'sandesh[mcp]'`; `install.sh` documented as the offline/from-source
-      fallback and still functional.
+      `pipx install 'sandesh[mcp]'` **then `pipx ensurepath`** (with the shell-restart note),
+      states user-space is the default and `sudo pipx install --global` is the all-users option,
+      and documents `install.sh` as the offline/from-source fallback (still functional).
 - [ ] **AC8** — in a base install (no `[mcp]`), running `sandesh-mcp` prints a clear message
       naming the fix (`pipx install 'sandesh[mcp]'`) and exits non-zero — **not** a raw
       `ImportError`/traceback. (Test: invoke the entry point in an env without `mcp`; assert the
