@@ -1,6 +1,6 @@
 """test_mcp_mutating_tools.py — MCP mutating tool parity tests (CR-SAN-003 §S1, AC1–AC11).
 
-Tests drive the five mutating tools via FastMCP.call_tool and verify side-effects by
+Tests drive the four mutating tools via FastMCP.call_tool and verify side-effects by
 reading back from sandesh_db directly (fresh connections).
 
 Return-shape reference (mcp 1.27.2):
@@ -9,14 +9,11 @@ Return-shape reference (mcp 1.27.2):
   _scalar() extracts structured["result"] for int/str-returning tools.
   _data()   extracted from test_mcp_read_tools.py for list-returning tools.
 
-At RED phase: the five mutating tools do NOT exist yet.
-  - AC1/AC2 list_tools tests: FAIL (tools missing from registry)
-  - AC3–AC7 behaviour tests: FAIL (Unknown tool ToolError raised — not the expected outcome)
-  - AC8/AC9 error-mapping tests: FAIL at RED (the message-content assertions are active;
-    the current ToolError says "Unknown tool: …" which does not contain the library's
-    validation/authorization substring — assertIn fails, confirming real RED).
+CR-SAN-005 contract: sandesh_actioned has been removed (10 → 9 tools).
+  - AC1/AC2 list_tools tests assert exactly 9 tools; sandesh_actioned must NOT be present.
+  - sandesh_reply has no resolves/reply_all parameters (invariant lock, AC3).
 
-  python-crucible.py test --tests tests.test_mcp_mutating_tools --agent CR-SAN-003-C0-RED
+  python-crucible.py test --tests tests.test_mcp_mutating_tools --agent CR-SAN-005-C0-RED
 """
 
 import json
@@ -83,8 +80,10 @@ def _data(result):
 
 
 class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
-    """Parity + behaviour tests for the five mutating tools:
-    sandesh_register, sandesh_unregister, sandesh_send, sandesh_reply, sandesh_actioned.
+    """Parity + behaviour tests for the four mutating tools:
+    sandesh_register, sandesh_unregister, sandesh_send, sandesh_reply.
+
+    CR-SAN-005: sandesh_actioned removed; tool count is now 9.
     """
 
     def setUp(self):
@@ -111,29 +110,31 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
         return sdb.connect(self.store)
 
     # ------------------------------------------------------------------
-    # AC1 — list_tools includes all five mutating tools
+    # AC1 — list_tools includes all four mutating tools; sandesh_actioned is gone
 
-    async def test_list_tools_includes_all_five_mutating_tools(self):
-        """AC1: list_tools() must include sandesh_register, sandesh_unregister,
-        sandesh_send, sandesh_reply, sandesh_actioned."""
+    async def test_list_tools_includes_all_four_mutating_tools(self):
+        """AC1 (CR-SAN-005): list_tools() must include sandesh_register, sandesh_unregister,
+        sandesh_send, sandesh_reply — and must NOT include sandesh_actioned."""
         names = [t.name for t in await mcp_server.mcp.list_tools()]
         self.assertIn("sandesh_register", names)
         self.assertIn("sandesh_unregister", names)
         self.assertIn("sandesh_send", names)
         self.assertIn("sandesh_reply", names)
-        self.assertIn("sandesh_actioned", names)
+        # CR-SAN-005 RED driver: sandesh_actioned IS still present → this will FAIL
+        self.assertNotIn("sandesh_actioned", names)
 
     # ------------------------------------------------------------------
-    # AC2 — exactly 10 tools total
+    # AC2 — exactly 9 tools total (CR-SAN-005: sandesh_actioned removed)
 
-    async def test_list_tools_returns_exactly_ten_tools(self):
-        """AC2: after CR-SAN-001..003, list_tools() returns exactly 10 tools total
-        (sandesh_setup + 4 read tools + 5 mutating tools = 10)."""
+    async def test_list_tools_returns_exactly_nine_tools(self):
+        """AC2 (CR-SAN-005): list_tools() returns exactly 9 tools total
+        (sandesh_setup + 4 read tools + 4 mutating tools = 9).
+        RED driver: currently 10 — assertEqual(9) will FAIL."""
         tools = await mcp_server.mcp.list_tools()
         names = [t.name for t in tools]
         self.assertEqual(
-            len(names), 10,
-            f"expected exactly 10 tools but got {len(names)}: {sorted(names)}",
+            len(names), 9,
+            f"expected exactly 9 tools but got {len(names)}: {sorted(names)}",
         )
 
     # ------------------------------------------------------------------
@@ -592,60 +593,30 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
             con.close()
 
     # ------------------------------------------------------------------
-    # AC7 — sandesh_actioned sets message status to 'actioned'
+    # AC3 (CR-SAN-005) — sandesh_reply has no resolves or reply_all parameters
 
-    async def test_actioned_sets_message_status_to_actioned(self):
-        """AC7: sandesh_actioned(project_id, msg_id) sets message.status = 'actioned'."""
-        con = self._fresh_con()
-        sdb.register(con, MAINLINE, kind="mainline", project=PROJ)
-        sdb.register(con, TRACK1, kind="track", project=PROJ)
-        mid = sdb.send(
-            con, self.store, TRACK1, to=[MAINLINE], subject="request", project=PROJ
-        )
-        # Verify initial status is 'open'
-        row = con.execute("SELECT status FROM message WHERE id=?", (mid,)).fetchone()
-        self.assertEqual(row["status"], "open")
-        con.close()
-
-        await mcp_server.mcp.call_tool(
-            "sandesh_actioned",
-            {"project_id": PROJ, "msg_id": mid},
+    async def test_reply_has_no_resolves_parameter(self):
+        """AC3 (CR-SAN-005): sandesh_reply exposes no 'resolves' parameter.
+        The status-disposition model was removed; reply = done, no separate flag needed.
+        This is a lock invariant — must hold now and after GREEN."""
+        import inspect
+        sig = inspect.signature(mcp_server.sandesh_reply)
+        self.assertNotIn(
+            "resolves",
+            sig.parameters,
+            "sandesh_reply must not expose a 'resolves' parameter (CR-SAN-005 AC3)",
         )
 
-        con = self._fresh_con()
-        try:
-            row = con.execute("SELECT status FROM message WHERE id=?", (mid,)).fetchone()
-            self.assertEqual(row["status"], "actioned")
-        finally:
-            con.close()
-
-    async def test_actioned_does_not_affect_other_messages(self):
-        """AC7 negative bound: actioning one message leaves other messages untouched."""
-        con = self._fresh_con()
-        sdb.register(con, MAINLINE, kind="mainline", project=PROJ)
-        sdb.register(con, TRACK1, kind="track", project=PROJ)
-        sdb.register(con, TRACK2, kind="track", project=PROJ)
-        mid1 = sdb.send(
-            con, self.store, TRACK1, to=[MAINLINE], subject="req 1", project=PROJ
+    async def test_reply_has_no_reply_all_parameter(self):
+        """AC3 (CR-SAN-005): sandesh_reply exposes no 'reply_all' parameter.
+        Lock invariant — must hold now and after GREEN."""
+        import inspect
+        sig = inspect.signature(mcp_server.sandesh_reply)
+        self.assertNotIn(
+            "reply_all",
+            sig.parameters,
+            "sandesh_reply must not expose a 'reply_all' parameter (CR-SAN-005 AC3)",
         )
-        mid2 = sdb.send(
-            con, self.store, TRACK2, to=[MAINLINE], subject="req 2", project=PROJ
-        )
-        con.close()
-
-        await mcp_server.mcp.call_tool(
-            "sandesh_actioned",
-            {"project_id": PROJ, "msg_id": mid1},
-        )
-
-        con = self._fresh_con()
-        try:
-            row1 = con.execute("SELECT status FROM message WHERE id=?", (mid1,)).fetchone()
-            row2 = con.execute("SELECT status FROM message WHERE id=?", (mid2,)).fetchone()
-            self.assertEqual(row1["status"], "actioned")
-            self.assertEqual(row2["status"], "open")
-        finally:
-            con.close()
 
     # ------------------------------------------------------------------
     # AC8 — malformed address via sandesh_register raises ToolError
