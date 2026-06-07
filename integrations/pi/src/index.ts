@@ -5,8 +5,10 @@
  * Pi tools. Each tool delegates to the installed `sandesh` CLI via `pi.exec(...)`.
  * Sandesh-core stays pure Python — this shim never imports messaging logic.
  *
- * C0 scope: the registration surface only (9 tools, TypeBox parameter schemas).
- * The CLI argv construction + AgentToolResult mapping land in C1.
+ * C0 scope: the registration surface (9 tools, TypeBox parameter schemas).
+ * C1 scope: each tool's execute() builds the `sandesh` CLI argv per the mapping
+ * table, shells out via pi.exec, and maps the result to an AgentToolResult
+ * (zero code → stdout text; non-zero → an error result surfacing stderr).
  */
 
 import { Type } from "typebox";
@@ -28,15 +30,105 @@ const projectIdParam = Type.Optional(
   }),
 );
 
+// ---------------------------------------------------------------------------
+// execute() helpers — argv construction + result mapping
+// ---------------------------------------------------------------------------
+
 /**
- * C0 stub: minimal AgentToolResult satisfying the type. C1 replaces each body
- * with the real `pi.exec("sandesh", argv, { signal })` invocation + output
- * mapping (zero code → stdout text; non-zero → stderr error result).
+ * Resolve the `["--project", P]` prefix: explicit `project_id` wins, else the
+ * `$SANDESH_PROJECT` env (read at call time), else no prefix (the CLI/its own
+ * env handles it).
  */
-const stubExecute = async (): Promise<AgentToolResult<undefined>> => ({
-  content: [{ type: "text", text: "" }],
-  details: undefined,
-});
+function projectPrefix(projectId?: string): string[] {
+  const project = projectId ?? process.env.SANDESH_PROJECT;
+  return project ? ["--project", project] : [];
+}
+
+/**
+ * Shell out to the `sandesh` CLI and map the result to an AgentToolResult:
+ *   - exit 0   → success result carrying stdout,
+ *   - non-zero → error result surfacing the verb, exit code, and stderr.
+ */
+async function runSandesh(
+  pi: ExtensionAPI,
+  verb: string,
+  args: string[],
+  signal?: AbortSignal,
+): Promise<AgentToolResult<undefined>> {
+  const r = await pi.exec("sandesh", args, { signal });
+  if (r.code === 0) {
+    return { content: [{ type: "text", text: r.stdout }], details: undefined };
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: `sandesh ${verb} failed (exit ${r.code}): ${r.stderr}`,
+      },
+    ],
+    details: undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Per-tool parameter shapes (Static<> of the TypeBox schemas)
+// ---------------------------------------------------------------------------
+
+interface SetupParams {
+  project_id?: string;
+}
+
+interface RegisterParams {
+  address: string;
+  kind?: string;
+  name?: string;
+  project_id?: string;
+}
+
+interface UnregisterParams {
+  address: string;
+  requester?: string;
+  project_id?: string;
+}
+
+interface AddressbookParams {
+  project_id?: string;
+}
+
+interface SendParams {
+  from: string;
+  to: string[];
+  cc?: string[];
+  subject: string;
+  kind?: string;
+  body?: string;
+  project_id?: string;
+}
+
+interface ReplyParams {
+  parent_id: number;
+  from?: string;
+  subject?: string;
+  body?: string;
+  project_id?: string;
+}
+
+interface InboxParams {
+  recipient: string;
+  unread_only?: boolean;
+  project_id?: string;
+}
+
+interface FetchParams {
+  recipient: string;
+  mark?: boolean;
+  project_id?: string;
+}
+
+interface ThreadParams {
+  msg_id: number;
+  project_id?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Extension entry — register the 9 Sandesh verb tools
@@ -52,7 +144,10 @@ export default function registerExtension(pi: ExtensionAPI): void {
     parameters: Type.Object({
       project_id: projectIdParam,
     }),
-    execute: stubExecute,
+    execute: async (_callId, params: SetupParams, signal) => {
+      const args = [...projectPrefix(params.project_id), "setup"];
+      return runSandesh(pi, "setup", args, signal);
+    },
   });
 
   // sandesh_register — add a durable identity to the addressbook.
@@ -75,7 +170,12 @@ export default function registerExtension(pi: ExtensionAPI): void {
       ),
       project_id: projectIdParam,
     }),
-    execute: stubExecute,
+    execute: async (_callId, params: RegisterParams, signal) => {
+      const args = [...projectPrefix(params.project_id), "register", "--address", params.address];
+      if (params.kind !== undefined) args.push("--kind", params.kind);
+      if (params.name !== undefined) args.push("--name", params.name);
+      return runSandesh(pi, "register", args, signal);
+    },
   });
 
   // sandesh_unregister — soft-delete an address (cooperative).
@@ -93,7 +193,11 @@ export default function registerExtension(pi: ExtensionAPI): void {
       ),
       project_id: projectIdParam,
     }),
-    execute: stubExecute,
+    execute: async (_callId, params: UnregisterParams, signal) => {
+      const args = [...projectPrefix(params.project_id), "unregister", "--address", params.address];
+      if (params.requester !== undefined) args.push("--as", params.requester);
+      return runSandesh(pi, "unregister", args, signal);
+    },
   });
 
   // sandesh_addressbook — list registered addresses.
@@ -104,7 +208,10 @@ export default function registerExtension(pi: ExtensionAPI): void {
     parameters: Type.Object({
       project_id: projectIdParam,
     }),
-    execute: stubExecute,
+    execute: async (_callId, params: AddressbookParams, signal) => {
+      const args = [...projectPrefix(params.project_id), "addressbook"];
+      return runSandesh(pi, "addressbook", args, signal);
+    },
   });
 
   // sandesh_send — send a message to one or more recipients.
@@ -136,7 +243,15 @@ export default function registerExtension(pi: ExtensionAPI): void {
       ),
       project_id: projectIdParam,
     }),
-    execute: stubExecute,
+    execute: async (_callId, params: SendParams, signal) => {
+      const args = [...projectPrefix(params.project_id), "send", "--from", params.from];
+      args.push("--to", params.to.join(","));
+      if (params.cc !== undefined) args.push("--cc", params.cc.join(","));
+      args.push("--subject", params.subject);
+      if (params.kind !== undefined) args.push("--kind", params.kind);
+      if (params.body !== undefined) args.push("--body", params.body);
+      return runSandesh(pi, "send", args, signal);
+    },
   });
 
   // sandesh_reply — reply to a message, threading on its id.
@@ -156,7 +271,13 @@ export default function registerExtension(pi: ExtensionAPI): void {
       body: Type.Optional(Type.String({ description: "Optional reply body." })),
       project_id: projectIdParam,
     }),
-    execute: stubExecute,
+    execute: async (_callId, params: ReplyParams, signal) => {
+      const args = [...projectPrefix(params.project_id), "reply", "--to-msg", String(params.parent_id)];
+      if (params.from !== undefined) args.push("--from", params.from);
+      if (params.subject !== undefined) args.push("--subject", params.subject);
+      if (params.body !== undefined) args.push("--body", params.body);
+      return runSandesh(pi, "reply", args, signal);
+    },
   });
 
   // sandesh_inbox — list messages for a recipient.
@@ -174,7 +295,11 @@ export default function registerExtension(pi: ExtensionAPI): void {
       ),
       project_id: projectIdParam,
     }),
-    execute: stubExecute,
+    execute: async (_callId, params: InboxParams, signal) => {
+      const args = [...projectPrefix(params.project_id), "inbox", "--to", params.recipient];
+      if (params.unread_only === false) args.push("--all");
+      return runSandesh(pi, "inbox", args, signal);
+    },
   });
 
   // sandesh_fetch — fetch (and mark read) a recipient's messages.
@@ -192,7 +317,11 @@ export default function registerExtension(pi: ExtensionAPI): void {
       ),
       project_id: projectIdParam,
     }),
-    execute: stubExecute,
+    execute: async (_callId, params: FetchParams, signal) => {
+      const args = [...projectPrefix(params.project_id), "fetch", "--to", params.recipient];
+      if (params.mark === false) args.push("--peek");
+      return runSandesh(pi, "fetch", args, signal);
+    },
   });
 
   // sandesh_thread — walk a message's reply chain.
@@ -204,6 +333,9 @@ export default function registerExtension(pi: ExtensionAPI): void {
       msg_id: Type.Number({ description: "Id of a message in the thread to walk." }),
       project_id: projectIdParam,
     }),
-    execute: stubExecute,
+    execute: async (_callId, params: ThreadParams, signal) => {
+      const args = [...projectPrefix(params.project_id), "thread", "--id", String(params.msg_id)];
+      return runSandesh(pi, "thread", args, signal);
+    },
   });
 }
