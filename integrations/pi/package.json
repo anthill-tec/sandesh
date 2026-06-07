@@ -3,6 +3,17 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Sandesh verbs as Pi extension tools",
+  "keywords": ["pi-package", "sandesh", "mcp", "messaging", "pi"],
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anthill-tec/sandesh",
+    "directory": "integrations/pi"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": ["src/index.ts", "README.md", "LICENSE"],
   "pi": {
     "extensions": ["./src/index.ts"]
   },
