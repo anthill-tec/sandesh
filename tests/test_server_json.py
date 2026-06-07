@@ -322,7 +322,7 @@ class ReadmeMcpOwnershipMarkerTest(unittest.TestCase):
             )
         # Extract the value after 'mcp-name:' in the README (strip whitespace + comment chars)
         import re
-        match = re.search(r"mcp-name:\s*([^\s\-\->]+)", self.readme_text)
+        match = re.search(r"mcp-name:\s*([\w./-]+)", self.readme_text)
         self.assertIsNotNone(
             match,
             f"Could not parse mcp-name value from README.md; text excerpt: "

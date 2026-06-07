@@ -1,0 +1,34 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.anthill-tec/sandesh",
+  "title": "Sandesh",
+  "description": "SQLite-backed agent messaging relay; notify wake is a background process, not an MCP tool.",
+  "repository": {
+    "url": "https://github.com/anthill-tec/sandesh",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "sandesh-relay",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--from",
+          "value": "sandesh-relay[mcp]"
+        },
+        {
+          "type": "positional",
+          "value": "sandesh-mcp"
+        }
+      ]
+    }
+  ]
+}

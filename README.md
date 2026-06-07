@@ -1,5 +1,7 @@
 # Sandesh
 
+<!-- mcp-name: io.github.anthill-tec/sandesh -->
+
 **संदेश** (Sanskrit/Hindi: *message · dispatch*) — a tiny, standalone, multi-project
 **messaging system for cooperating agent/orchestrator sessions**. A SQLite-backed
 maildir + a mailbox watcher, pure Python stdlib (no third-party deps).
