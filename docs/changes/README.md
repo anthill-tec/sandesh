@@ -17,7 +17,7 @@ Single source of truth for change requests. Pick the next `PENDING` CR by phase 
 | [CR-SAN-011](CR-SAN-011-mcp-registry.md) | Official MCP Registry listing (`server.json`, `io.github.anthill-tec/sandesh`) — discoverable by MCP clients/directories | Phase 3 | COMPLETED | CR-SAN-010 | 2026-06-07 |
 | [CR-SAN-013](CR-SAN-013-pi-verbs-extension.md) | Pi extension: scaffold + verb tools (`integrations/pi/`, TS, `registerTool` over the `sandesh` CLI) | Phase 4 | COMPLETED | CR-SAN-008 | 2026-06-07 |
 | [CR-SAN-014](CR-SAN-014-pi-native-wake.md) | Pi native wake (background watcher → `sendUserMessage`; design W1 from DN-pi-wake) | Phase 4 | COMPLETED | CR-SAN-013 | 2026-06-07 |
-| CR-SAN-015 | Pi extension packaging/listing (`pi.dev/packages`, npm:/git:) | Phase 4 | PENDING | CR-SAN-013, CR-SAN-014 | — |
+| [CR-SAN-015](CR-SAN-015-pi-package-listing.md) | Pi extension packaging/listing — **npm** publish (`npm:@anthill-tec/sandesh-pi`) + pi.dev/packages gallery (git: can't target a subdir) | Phase 4 | PENDING | CR-SAN-013, CR-SAN-014 | — |
 
 Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distribution](../research/PRD-distribution.md) · [PRD-pi-extension](../research/PRD-pi-extension.md)
 Design notes: [DN-windows-notifier](../research/DN-windows-notifier.md) · [DN-pi-wake](../research/DN-pi-wake.md) (Pi wake spike — RESOLVED: native injection)
