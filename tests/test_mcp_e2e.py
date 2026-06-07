@@ -1,11 +1,11 @@
 """test_mcp_e2e.py — E2E characterization tests for the Sandesh MCP server.
 
 CR-SAN-004 §S1 (T2) + §S2 (T3) + §S3 (AC6/AC7 gating).
+CR-SAN-005: sandesh_actioned removed; tool count updated 10 → 9.
 
-These tests exercise the already-working 10 MCP tools through the real MCP
-protocol (in-memory client and real subprocess over stdio). They are EXPECTED
-to pass — a genuine failure indicates a real protocol/serialization/transport
-bug and must be reported as an ESCALATION rather than fixed by faking red.
+These tests exercise the 9 MCP tools through the real MCP protocol (in-memory
+client and real subprocess over stdio). The tool-count assertions are RED
+drivers until GREEN removes sandesh_actioned from the server.
 
 Result-shape reference (confirmed via /tmp probes, mcp 1.27.x):
   - session.list_tools()    → ListToolsResult with .tools (list of Tool; each has .name)
@@ -15,7 +15,7 @@ Result-shape reference (confirmed via /tmp probes, mcp 1.27.x):
       .structuredContent dict{"result": <value>} on success, None on error
   - error path: isError=True, structuredContent=None, message in content[0].text
 
-  python-crucible.py test --tests tests.test_mcp_e2e --agent CR-SAN-004-C0-RED
+  python-crucible.py test --tests tests.test_mcp_e2e --agent CR-SAN-005-C0-RED
 """
 
 import os
@@ -65,7 +65,10 @@ def _sc(result):
 
 @unittest.skipUnless(HAS_MCP, "mcp package not available")
 class T2InMemoryClientServerTest(unittest.IsolatedAsyncioTestCase):
-    """Drive the 10 tools through a real ClientSession backed by in-memory streams."""
+    """Drive the 9 tools through a real ClientSession backed by in-memory streams.
+
+    CR-SAN-005: sandesh_actioned removed; tool count is now 9.
+    """
 
     PROJ = "E2EMemory"
     MAINLINE = "Mainline - E2EMemory"
@@ -89,10 +92,11 @@ class T2InMemoryClientServerTest(unittest.IsolatedAsyncioTestCase):
                 os.environ[k] = v
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    # -- AC1: list_tools returns exactly 10 tools ----------------------------
+    # -- AC1: list_tools returns exactly 9 tools (CR-SAN-005: sandesh_actioned removed) ----
 
-    async def test_ac1_list_tools_returns_exactly_10(self):
-        """AC1 — session.list_tools() returns exactly 10 tools by name."""
+    async def test_ac1_list_tools_returns_exactly_9(self):
+        """AC1 (CR-SAN-005) — session.list_tools() returns exactly 9 tools by name.
+        RED driver: currently 10 (sandesh_actioned still present) — both assertions will FAIL."""
         # Import here so collection still works when HAS_MCP is False at module level
         import mcp_server  # noqa: F401 — project-local module
 
@@ -100,8 +104,8 @@ class T2InMemoryClientServerTest(unittest.IsolatedAsyncioTestCase):
             list_result = await session.list_tools()
             names = [t.name for t in list_result.tools]
             self.assertEqual(
-                len(names), 10,
-                f"Expected 10 tools, got {len(names)}: {names}",
+                len(names), 9,
+                f"Expected 9 tools, got {len(names)}: {names}",
             )
             expected_names = {
                 "sandesh_setup",
@@ -113,7 +117,6 @@ class T2InMemoryClientServerTest(unittest.IsolatedAsyncioTestCase):
                 "sandesh_unregister",
                 "sandesh_send",
                 "sandesh_reply",
-                "sandesh_actioned",
             }
             self.assertEqual(
                 set(names), expected_names,
@@ -404,10 +407,11 @@ class T3SubprocessStdioTest(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(msg["from"], sender)
 
-    # -- AC5: list_tools over stdio returns 10 tools -------------------------
+    # -- AC5: list_tools over stdio returns 9 tools (CR-SAN-005) ------------
 
-    async def test_ac5_list_tools_over_stdio_returns_10(self):
-        """AC5 — list_tools over subprocess stdio yields the same 10 tool names."""
+    async def test_ac5_list_tools_over_stdio_returns_9(self):
+        """AC5 (CR-SAN-005) — list_tools over subprocess stdio yields 9 tool names.
+        RED driver: currently 10 — both assertions will FAIL."""
         params = StdioServerParameters(
             command=_VENV_PYTHON,
             args=[_MCP_SERVER_PY],
@@ -418,7 +422,7 @@ class T3SubprocessStdioTest(unittest.IsolatedAsyncioTestCase):
                 await session.initialize()
                 list_result = await session.list_tools()
                 names = {t.name for t in list_result.tools}
-                self.assertEqual(len(list_result.tools), 10, f"Expected 10 tools, got {names}")
+                self.assertEqual(len(list_result.tools), 9, f"Expected 9 tools, got {names}")
                 expected = {
                     "sandesh_setup",
                     "sandesh_addressbook",
@@ -429,7 +433,6 @@ class T3SubprocessStdioTest(unittest.IsolatedAsyncioTestCase):
                     "sandesh_unregister",
                     "sandesh_send",
                     "sandesh_reply",
-                    "sandesh_actioned",
                 }
                 self.assertEqual(names, expected)
 

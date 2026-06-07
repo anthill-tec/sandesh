@@ -1,6 +1,6 @@
 # CR-SAN-005 — Retire the `status`/disposition tool surface (`sandesh_actioned`)
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-005)
 **Priority:** High
 **Depends on:** CR-SAN-001, CR-SAN-002, CR-SAN-003, CR-SAN-004
 **Labels:** phase-2, mcp, cleanup
@@ -59,19 +59,19 @@ deferred follow-up.
 
 ## Acceptance criteria
 
-- [ ] **AC1** — `await mcp.list_tools()` returns **exactly 9** tools and does **not** include
+- [x] **AC1** — `await mcp.list_tools()` returns **exactly 9** tools and does **not** include
       `sandesh_actioned`.
-- [ ] **AC2** — `grep -n "sandesh_actioned" app/mcp_server.py` returns nothing (tool removed).
-- [ ] **AC3** — `sandesh_reply`'s signature has **no** `resolves`/`reply_all` parameter
+- [x] **AC2** — `grep -n "sandesh_actioned" app/mcp_server.py` returns nothing (tool removed).
+- [x] **AC3** — `sandesh_reply`'s signature has **no** `resolves`/`reply_all` parameter
       (asserted by a test inspecting the tool's input schema / signature).
-- [ ] **AC4** — the tool-count/`sandesh_actioned` assertions are updated in **both** test files
+- [x] **AC4** — the tool-count/`sandesh_actioned` assertions are updated in **both** test files
       (gap-analysis DRIFT-1): `tests/test_mcp_mutating_tools.py` (remove the `assertIn("sandesh_actioned")`,
       flip `test_list_tools_returns_exactly_ten_tools` 10→9, remove the `sandesh_actioned` behavior
       test ~lines 595–637, fix docstrings) **and** `tests/test_mcp_e2e.py` (the `len(names)==10`
       at ~line 103 → 9); both files stay green.
-- [ ] **AC5** — full regression green: the MCP suites + `python3 tests/test_sandesh.py`
+- [x] **AC5** — full regression green: the MCP suites + `python3 tests/test_sandesh.py`
       (existing 24) all pass; tool count is 9.
-- [ ] **AC6** — `### S3 Findings` records the core-status-retirement blast radius + the
+- [x] **AC6** — `### S3 Findings` records the core-status-retirement blast radius + the
       deferred follow-up CR reference (or a justified in-scope decision).
 
 ## Estimated size
@@ -86,3 +86,13 @@ Small: delete one tool + update its tests + the count assertion + a reply-signat
 - Removing `message.status` / `set_status` / CLI `actioned` / `reply(resolves)` from the core
   library (deferred — §S3).
 - Any change to the other 9 tools or messaging semantics beyond removing the disposition tool.
+
+## Implementation Notes (2026-06-07)
+
+One cycle (C0), agent-dispatched, then VERIFY → pre-merge.
+
+- **C0** — RED (`9129ab0`): flipped both test files to the 9-tool contract (`tests/test_mcp_mutating_tools.py` + `tests/test_mcp_e2e.py` — count 10→9, `assertNotIn sandesh_actioned`, removed the actioned behavior tests) + added `sandesh_reply`-has-no-`resolves`/`reply_all` lock tests. GREEN (`9797a65`): deleted the `@mcp.tool sandesh_actioned` block from `app/mcp_server.py`. **Tool count 10 → 9.**
+- **Core status machine untouched** (deferred per §S3 → candidate **CR-SAN-012**): `sandesh_db.set_status` / `message.status` / CLI `actioned` / `reply(resolves)` remain (dormant from the MCP surface; still exercised by the 24 stdlib baseline). `git diff develop -- app/sandesh_db.py app/cli.py app/notify.py` is empty.
+- **VERIFY** (`CR-SAN-005-VERIFY`): 67/67 green, all AC1–AC6 PASS, 0 findings, boundaries clean.
+- **Pre-merge gate**: 97/97 green; py_compile clean; coverage 51.5% lines / 63.6% funcs.
+- MCP surface now matches D7 (read=acting, reply=done; no disposition tool).
