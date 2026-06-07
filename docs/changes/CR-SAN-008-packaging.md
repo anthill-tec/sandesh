@@ -30,9 +30,17 @@ Out of scope here: the AUR PKGBUILD (CR-SAN-009) and Windows **runtime** (DN-win
 - `[project]`: **`name = "sandesh-relay"`** — the PyPI *distribution* name (`sandesh` is already
   taken on PyPI). NOTE: distribution name ≠ import name — the **import package stays `sandesh`**
   and the **console scripts stay `sandesh` / `sandesh-mcp`**; only the `pip install` name is
-  `sandesh-relay`. Plus a version, `requires-python = ">=3.10"` (matches the `mcp` extra),
+  `sandesh-relay`. Plus `requires-python = ">=3.10"` (matches the `mcp` extra),
   description, readme, **`license = "GPL-3.0-only"`** (SPDX; matches the repo `LICENSE` — or
   `GPL-3.0-or-later` if the "or later" upgrade clause is wanted) + the GPLv3 trove classifier.
+- **Version = git-tag-driven via `hatch-vcs`** (gap-analysis decision). `[project]` declares
+  `dynamic = ["version"]` (NOT a static `version =`); `[tool.hatch.version] source = "vcs"`; and the
+  build backend requires `["hatchling", "hatch-vcs"]`. Single source of truth = the **git tag**:
+  semver `major.minor.patch`, tags formatted **`vX.Y.Z`** (e.g. `v0.1.0`); hatch-vcs strips the `v`
+  so the PEP 440 / PyPI version is `0.1.0`. Between tags, builds version as `0.1.1.devN+g<sha>`.
+  The first release tag (`v0.1.0`) is cut on the eventual git-flow release to `main` (CR-SAN-010
+  publishes the exact tagged version); on `develop` the dev-suffixed version is expected/fine.
+  Expose `sandesh.__version__` (and a `sandesh --version`) via `importlib.metadata.version`.
 - `[project.scripts]`: `sandesh = "sandesh.cli:main"`, `sandesh-mcp = "sandesh.mcp_server:main"`.
 - `[project.optional-dependencies]`: `mcp = ["mcp>=1.27,<2"]`.
 - **Build backend: `hatchling`** (gap-analysis decision). `[build-system] requires = ["hatchling"]`,
@@ -118,6 +126,11 @@ resource silently degrades to its stub. CR-SAN-006 deferred bundling to this CR;
 - [ ] **AC2** — `pyproject.toml` declares `[project.scripts]` `sandesh = "sandesh.cli:main"`
       and `sandesh-mcp = "sandesh.mcp_server:main"`, `[project.optional-dependencies]
       mcp = ["mcp>=1.27,<2"]`, and `requires-python >= 3.10`.
+- [ ] **AC2b** — versioning is git-tag-driven: `[build-system].requires` includes `hatch-vcs`,
+      `[project].dynamic` includes `"version"` (no static `version =`), and
+      `[tool.hatch.version].source == "vcs"`. A build from a `vX.Y.Z`-tagged checkout produces the
+      `X.Y.Z` PEP 440 version (asserted by config presence; build-from-tag check optional), and
+      `sandesh.__version__` / `sandesh --version` resolves via `importlib.metadata`.
 - [ ] **AC3** — in a clean venv, `pip install .` then `sandesh --help` exits 0 with **no**
       `mcp` installed (stdlib-only CLI), and `which sandesh` / `which sandesh-mcp` resolve on
       `$PATH` (the venv's scripts dir).
@@ -166,9 +179,11 @@ into scope above:
   §S1/§S5 dismantle. Resolution: enumerate all 7 in §S4, rewrite `test_install.py` for the package
   install, AC11.
 - **DRIFT-3 (Dim 1, minor):** Depends-on updated to include CR-SAN-005/006.
-- **Decisions (gap-analysis):** build backend = **hatchling**; usage doc = **bundle + importlib.resources**;
-  `test_install.py` = **rewrite for package install**; T3 = **`python -m sandesh.mcp_server`**;
-  `install.sh` = **kept as the PEP-668-safe own-venv fallback** (PRD D6), rewritten to the new layout.
+- **Decisions (gap-analysis):** build backend = **hatchling**; **versioning = git-tag-driven via
+  `hatch-vcs`** (`dynamic=["version"]`, `source="vcs"`; semver `vX.Y.Z` tags → PEP 440 `X.Y.Z`);
+  usage doc = **bundle + importlib.resources**; `test_install.py` = **rewrite for package install**;
+  T3 = **`python -m sandesh.mcp_server`**; `install.sh` = **kept as the PEP-668-safe own-venv
+  fallback** (PRD D6), rewritten to the new layout.
 - **No blocking code drift** — the move is structural; `mcp` stays isolated to `sandesh/mcp_server.py`.
 
 ## Estimated size
