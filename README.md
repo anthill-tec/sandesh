@@ -115,3 +115,9 @@ python3 -m unittest -v          # from the repo root (stdlib-only: CLI + library
 
 - **MCP server — DONE** (Phase 2): 10 tools over stdio, dedicated-venv isolation,
   in-memory + real-subprocess E2E tests. The `notify` watcher remains the wake path.
+
+## License
+
+Copyright © 2026 anthill-tec. Licensed under the **GNU General Public License v3.0** — see
+[`LICENSE`](LICENSE). You may use, study, modify, and redistribute Sandesh under the GPLv3;
+distributed derivatives must remain GPL-licensed with source available.
