@@ -5,7 +5,9 @@
  *   AC4: each tool's execute() builds the exact `sandesh` CLI argv per the
  *        mapping table (mocked pi.exec, inspect call args).
  *   AC5: zero pi.exec code → AgentToolResult with stdout in content[0].text;
- *        non-zero code → error result surfacing stderr.
+ *        non-zero code → execute THROWS (rejects); thrown Error.message contains
+ *        verb + exit code + stderr (Pi sets isError:true on throw, not on returned result).
+ *   AC3: pi.exec rejection (spawn throws) propagates out of execute (not swallowed).
  *   AC6: sandesh_send description mentions To-wakes/Cc-silent;
  *        sandesh_reply description conveys parent_id = original message id.
  *
@@ -617,63 +619,147 @@ describe("AC5 — result mapping: zero code → success AgentToolResult", () => 
   });
 });
 
-describe("AC5 — result mapping: non-zero code → error result surfacing stderr", () => {
-  test("sandesh_send: non-zero code → result surfaces stderr text", async () => {
+// AC5 / AC1 — non-zero exit must THROW (not return an error result).
+// Pi docs: "To mark a tool execution as failed (sets isError: true and reports
+// it to the LLM), throw an error from execute. Returning a value never sets the
+// error flag." Returning an error-text result looks like success to the agent.
+describe("AC5 — result mapping: non-zero code → execute throws (not returns error result)", () => {
+  test("sandesh_send: non-zero code → execute rejects with message containing verb + exit code + stderr", async () => {
     const { getTool } = setup({ stdout: "", stderr: "boom: address not registered", code: 1, killed: false });
     const tool = getTool("sandesh_send");
 
-    const result = await callExecute(tool, {
-      from: "Track 1 - X",
-      to: ["Mainline - X"],
-      subject: "x",
-      project_id: "X",
-    });
-
-    expect(result.content.length).toBeGreaterThan(0);
-    const text = (result.content[0] as { type: "text"; text: string }).text;
-    expect(text).toContain("boom");
+    await expect(
+      callExecute(tool, {
+        from: "Track 1 - X",
+        to: ["Mainline - X"],
+        subject: "x",
+        project_id: "X",
+      }),
+    ).rejects.toThrow(/sandesh send failed \(exit 1\)/);
   });
 
-  test("sandesh_reply: non-zero code → result surfaces stderr text", async () => {
+  test("sandesh_send: thrown error message contains stderr text", async () => {
+    const { getTool } = setup({ stdout: "", stderr: "boom: address not registered", code: 1, killed: false });
+    const tool = getTool("sandesh_send");
+
+    let thrown: unknown;
+    try {
+      await callExecute(tool, {
+        from: "Track 1 - X",
+        to: ["Mainline - X"],
+        subject: "x",
+        project_id: "X",
+      });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("boom: address not registered");
+  });
+
+  test("sandesh_reply: non-zero code → execute rejects with verb + exit code + stderr", async () => {
     const { getTool } = setup({ stdout: "", stderr: "error: parent message not found", code: 1, killed: false });
     const tool = getTool("sandesh_reply");
 
-    const result = await callExecute(tool, {
-      parent_id: 999,
-      project_id: "X",
-    });
-
-    const text = (result.content[0] as { type: "text"; text: string }).text;
-    expect(text).toContain("error");
-    expect(text).toContain("parent message not found");
+    let thrown: unknown;
+    try {
+      await callExecute(tool, {
+        parent_id: 999,
+        project_id: "X",
+      });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/sandesh reply failed \(exit 1\)/);
+    expect((thrown as Error).message).toContain("parent message not found");
   });
 
-  test("sandesh_fetch: non-zero code → result surfaces stderr text", async () => {
+  test("sandesh_fetch: non-zero code → execute rejects with verb + exit code + stderr", async () => {
     const { getTool } = setup({ stdout: "", stderr: "no such recipient", code: 2, killed: false });
     const tool = getTool("sandesh_fetch");
 
-    const result = await callExecute(tool, {
-      recipient: "Ghost - X",
-      project_id: "X",
-    });
-
-    const text = (result.content[0] as { type: "text"; text: string }).text;
-    expect(text).toContain("no such recipient");
+    await expect(
+      callExecute(tool, {
+        recipient: "Ghost - X",
+        project_id: "X",
+      }),
+    ).rejects.toThrow(/sandesh fetch failed \(exit 2\)/);
   });
 
-  test("non-zero code result is distinct from success (stub returns empty → no stderr)", async () => {
-    // The stub returns empty text — the real impl must return the error content.
-    // This test distinguishes: stub returns {content:[{type:"text",text:""}]}
-    // whereas spec requires the error surface. We assert text is non-empty on error.
+  test("sandesh_fetch: thrown error message contains stderr text", async () => {
+    const { getTool } = setup({ stdout: "", stderr: "no such recipient", code: 2, killed: false });
+    const tool = getTool("sandesh_fetch");
+
+    let thrown: unknown;
+    try {
+      await callExecute(tool, {
+        recipient: "Ghost - X",
+        project_id: "X",
+      });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("no such recipient");
+  });
+
+  test("sandesh_setup: non-zero code → execute rejects (not a returned result)", async () => {
     const { getTool } = setup({ stdout: "", stderr: "fatal error", code: 1, killed: false });
     const tool = getTool("sandesh_setup");
 
-    const result = await callExecute(tool, { project_id: "X" });
+    await expect(
+      callExecute(tool, { project_id: "X" }),
+    ).rejects.toThrow(/sandesh setup failed \(exit 1\)/);
+  });
+});
 
-    const text = (result.content[0] as { type: "text"; text: string }).text;
-    // Stub returns "" — real impl must include the error text.
-    expect(text.length).toBeGreaterThan(0);
-    expect(text).toContain("fatal error");
+// AC3 — pi.exec rejection (spawn failure) must propagate, not be swallowed.
+describe("AC3 — pi.exec rejection propagates out of execute (not swallowed)", () => {
+  test("sandesh_send: pi.exec throws → execute rejects with the spawn error", async () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    // Override exec to reject (simulates sandesh not on PATH)
+    (fakePi as any).exec = mock(async () => {
+      throw new Error("spawn sandesh ENOENT");
+    });
+    registerExtension(fakePi);
+    const tool = capturedTools.get("sandesh_send");
+    if (!tool) throw new Error('Tool "sandesh_send" not registered');
+
+    await expect(
+      callExecute(tool, {
+        from: "Track 1 - X",
+        to: ["Mainline - X"],
+        subject: "spawn test",
+        project_id: "X",
+      }),
+    ).rejects.toThrow("spawn sandesh ENOENT");
+  });
+
+  test("sandesh_fetch: pi.exec throws → execute rejects (does not return a result)", async () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    (fakePi as any).exec = mock(async () => {
+      throw new Error("spawn sandesh ENOENT");
+    });
+    registerExtension(fakePi);
+    const tool = capturedTools.get("sandesh_fetch");
+    if (!tool) throw new Error('Tool "sandesh_fetch" not registered');
+
+    let resolved = false;
+    let thrown: unknown;
+    try {
+      await callExecute(tool, {
+        recipient: "Mainline - X",
+        project_id: "X",
+      });
+      resolved = true;
+    } catch (e) {
+      thrown = e;
+    }
+    // Must NOT resolve — must throw
+    expect(resolved).toBe(false);
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("spawn sandesh ENOENT");
   });
 });
 
