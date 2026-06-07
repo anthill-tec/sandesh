@@ -163,6 +163,15 @@ mcp dev -m sandesh.mcp_server     # needs the [mcp] extra; explore tools by hand
 The **wake path stays the `notify` watcher** — MCP exposes the *verbs*, not the wake (an MCP
 server can't re-invoke a sleeping agent). No `notify`/watch tool is exposed over MCP.
 
+### Discover via the MCP Registry
+
+Sandesh is listed on the **official MCP Registry** as **`io.github.anthill-tec/sandesh`** (see
+[`server.json`](server.json)), so MCP-aware clients/aggregators (Claude Code, Cursor, Glama,
+PulseMCP, mcp.so, …) can discover it. The listing points at the PyPI distribution `sandesh-relay`
+and the stdio launch `uvx --from 'sandesh-relay[mcp]' sandesh-mcp`. **The listing is the *server*
+(the verbs) only** — the `notify` wake is a separate background process, not a tool. Publishing the
+listing is a maintainer step (after the PyPI release) — see [RELEASING.md](RELEASING.md).
+
 ## Test
 
 ```bash
