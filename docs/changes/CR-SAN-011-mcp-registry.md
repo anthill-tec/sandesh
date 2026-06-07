@@ -21,26 +21,37 @@ integration (its own design — `docs/research/PRD-pi-extension.md`).
 
 ### §S1 — `server.json`
 - Generate with `mcp-publisher init`, then edit. Commit it at the repo root.
+- **`$schema`: pin the current registry schema** `https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json`
+  (verified current 2026-06; re-confirm/upgrade the date at impl time).
 - **`name`: `io.github.anthill-tec/sandesh`** — the `io.github.*` namespace authenticates via
   GitHub (the repo owner/org), which we have.
 - Description conveys what Sandesh is + the **wake caveat** (the MCP server exposes the *verbs*;
   the `notify` wake is a separate background process, not a tool — PRD-mcp-server §6).
-- Package block: the **PyPI** distribution `sandesh-relay` and the stdio run via the
-  `sandesh-mcp` console script (the launch a client uses, e.g. `uvx --from 'sandesh-relay[mcp]'
-  sandesh-mcp`). Confirm the exact `server.json` package/transport schema against the registry's
-  current `server-json` reference at implementation time.
+- Package block: the **PyPI** distribution `sandesh-relay` (`registryType: pypi`,
+  `identifier: sandesh-relay`), stdio transport, and the run via the `sandesh-mcp` console script
+  (the launch a client uses, e.g. `uvx --from 'sandesh-relay[mcp]' sandesh-mcp`). Confirm the exact
+  package/transport field names against the pinned schema at impl time.
 
-### §S2 — Package-ownership verification
-- The registry verifies the underlying package matches the server metadata. For npm this is an
-  `mcpName` field in `package.json`; **for PyPI, add the registry's required ownership marker**
-  (the PyPI equivalent — confirm the exact mechanism in the registry's "official-registry
-  requirements" / PyPI section at impl time, e.g. a `mcp-name` marker in project metadata or a
-  PyPI attestation). This couples back to CR-SAN-008's `pyproject.toml` (the marker lives there).
+### §S2 — Package-ownership verification (marker in **README**, not pyproject)
+**Verified mechanism (2026-06):** the registry fetches `https://pypi.org/pypi/sandesh-relay/json`
+and checks the package's **README (the PyPI long-description)** for a line
+**`mcp-name: io.github.anthill-tec/sandesh`** that matches `server.json`'s `name`. (For npm it's an
+`mcpName` field in `package.json`; **for PyPI it is the README marker** — there is *no* pyproject
+field for this.)
+- Add `mcp-name: io.github.anthill-tec/sandesh` to **`README.md`** — as an HTML comment
+  (`<!-- mcp-name: io.github.anthill-tec/sandesh -->`) so it doesn't render. Because
+  `pyproject.toml` sets `readme = "README.md"`, the marker ships in the PyPI long-description.
+- **Corrects DRIFT-1:** the original spec said the marker lives in `pyproject.toml` — it does not.
 
-### §S3 — Publish flow
-- `mcp-publisher login github` → `mcp-publisher publish --dry-run` (validate) → `mcp-publisher
-  publish`. Decide manual vs CI (a CI step after the PyPI publish on `release: published` is an
-  option, but registry auth/credentials must be handled — keep manual unless trivially automatable).
+### §S3 — Publish flow (manual; requires the package live on PyPI)
+- The registry validates ownership against the **live PyPI package**, so `mcp-publisher publish`
+  can only succeed **after** the real `v0.1.0` PyPI publish (CR-SAN-010's maintainer step) — the
+  README marker must be in the *published* long-description.
+- Flow (maintainer, post-`v0.1.0`): `mcp-publisher login github` → `mcp-publisher publish`
+  (`--dry-run` first to validate). **Manual** (decision): it needs the package live + GitHub auth
+  as an `anthill-tec` member; not worth CI automation for a low-frequency action.
+- **In CI / this CR we validate `server.json` structurally** against the pinned JSON-schema (a
+  test), independent of the `mcp-publisher` binary (which needs auth and isn't assumable locally).
 
 ### §S4 — Docs
 - README/`instructions`: a short "Discover via the MCP Registry" note + that the listing is the
@@ -48,21 +59,45 @@ integration (its own design — `docs/research/PRD-pi-extension.md`).
 
 ## Acceptance criteria
 
-- [ ] **AC1** — `server.json` exists at the repo root, `name = "io.github.anthill-tec/sandesh"`,
-      and `mcp-publisher publish --dry-run` validates it.
-- [ ] **AC2** — `server.json` declares the **PyPI** package `sandesh-relay` and the stdio run via
-      the `sandesh-mcp` entry (matching how a client launches it).
-- [ ] **AC3** — the package carries the registry's PyPI ownership marker (in `pyproject.toml`)
-      so the registry verifies the package belongs to this server.
-- [ ] **AC4** — `mcp-publisher publish` succeeds and the server is listed (or, if gated on
-      credentials, the dry-run validates and the publish step is documented for the maintainer).
-- [ ] **AC5** — the listing description states the wake (`notify`) is NOT an MCP tool (separate
-      background process).
-- [ ] **AC6** — README documents discovery/install via the registry.
+- [ ] **AC1** — `server.json` exists at the repo root, is valid JSON, declares the pinned
+      `$schema` (2025-10-17), and `name = "io.github.anthill-tec/sandesh"` (asserted by a test
+      parsing `server.json`).
+- [ ] **AC2** — `server.json` declares the **PyPI** package (`registryType: pypi`,
+      `identifier: sandesh-relay`) with stdio transport and the run matching the `sandesh-mcp`
+      console script / `uvx --from 'sandesh-relay[mcp]' sandesh-mcp` (asserted by parsing
+      `server.json`).
+- [ ] **AC3** — **`README.md` contains the ownership marker** `mcp-name: io.github.anthill-tec/sandesh`
+      (an HTML comment is fine) and it **matches** `server.json`'s `name` (asserted by a test
+      reading both). The marker reaches PyPI via `readme = "README.md"`. (NOT a pyproject field.)
+- [ ] **AC4** — `server.json` validates against the pinned JSON-schema (a CI test;
+      `jsonschema`-validate the file, or a structural check if the lib is unavailable — note which).
+      The actual `mcp-publisher publish` is documented in RELEASING.md as a manual maintainer step
+      gated on the live PyPI package (it can't run in this CR's CI).
+- [ ] **AC5** — the `server.json` description states the wake (`notify`) is NOT an MCP tool
+      (separate background process) — asserted by a substring on the description.
+- [ ] **AC6** — README documents discovery via the registry; RELEASING.md documents the
+      `mcp-publisher` publish step (post-`v0.1.0`, manual).
+
+## Gap-analysis findings (2026-06-07) — verdict SPEC_UPDATE applied; now READY
+
+Verified against the live registry docs (web, 2026-06):
+- **DRIFT-1 (Dim 1/3 → §S2/AC3, FIXED):** the PyPI ownership marker is **not** a pyproject field —
+  the registry reads `mcp-name: <name>` from the **README (PyPI long-description)**. Marker moved to
+  `README.md` (HTML comment), reaching PyPI via `readme = "README.md"`.
+- **DRIFT-2 (§S1/AC1, FIXED):** pin `$schema` = `…/schemas/2025-10-17/server.schema.json`.
+- **DRIFT-3 (§S3/AC4, FIXED):** registry publish validates against the **live** PyPI package, so
+  `mcp-publisher publish` is a **manual maintainer step after the `v0.1.0` PyPI publish**; CI here
+  validates `server.json` against the JSON-schema only (the `mcp-publisher` binary needs GitHub auth
+  and isn't assumable locally).
+- **Dim 2 (Spec vs Code):** `pyproject.toml` `readme = "README.md"` ✓ (marker reaches PyPI); the
+  run command matches the shipped `sandesh-mcp` console script ✓.
+- **Decision:** registry publish = **manual** (low-frequency, needs auth + live package).
+- **Sequencing:** this CR ships `server.json` + README marker + docs + a schema-validation test;
+  the live registry publish happens once `v0.1.0` is on PyPI (a maintainer action).
 
 ## Estimated size
-Small: one `server.json` + a pyproject marker + a publish step + a README note. Most effort is
-confirming the current registry schema + PyPI verification mechanism.
+Small: one `server.json` + a README marker + a schema-validation test + README/RELEASING notes.
+Most effort was confirming the current registry schema + PyPI verification mechanism (done).
 
 ## Risks / open questions
 - **Registry schema churn** — `server.json` format + the PyPI ownership-verification mechanism
@@ -75,3 +110,5 @@ confirming the current registry schema + PyPI verification mechanism.
 - Smithery / hosted marketplaces (PRD §6 — local-server mismatch).
 - The Pi integration (see `docs/research/PRD-pi-extension.md`).
 - HTTP/SSE transport.
+- Running the actual `mcp-publisher publish` (a manual maintainer action after the `v0.1.0` PyPI
+  publish; this CR ships `server.json` + the README marker + the schema-validation test + docs).
