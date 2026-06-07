@@ -56,14 +56,16 @@ server; the bare install is the stdlib-only CLI + `notify`.
 
 ```bash
 # persistent — both scripts on PATH (run `uv tool update-shell` once for PATH)
-uv tool install 'sandesh-relay[mcp]'           # once published to PyPI (CR-SAN-010)
+uv tool install 'sandesh-relay[mcp]'           # from PyPI (once v0.1.0 is published — see RELEASING.md)
+uv tool install 'git+https://github.com/anthill-tec/sandesh'        # from git, today
 uv tool install '.[mcp]'                        # from a local checkout, today
 
 # ephemeral — run the server with no install (deps cached on first run)
 uvx --from 'sandesh-relay[mcp]' sandesh-mcp
 ```
 
-uv manages its own Python, so it sidesteps PEP 668 (see below).
+uv manages its own Python, so it sidesteps PEP 668 (see below). PyPI publishing is automated via
+OIDC trusted publishing — see **[RELEASING.md](RELEASING.md)**.
 
 ### pipx / pipxu (alternative)
 
@@ -173,8 +175,11 @@ python3 -m unittest -v          # from the repo root (stdlib-only: CLI + library
   remains the wake path.
 - **Packaging — DONE** (Phase 3): `pyproject.toml` (hatchling + tag-driven `hatch-vcs` version),
   `sandesh`/`sandesh-mcp` console scripts, `[mcp]` extra; uv/pipx/`install.sh` install.
-- **Next** (Phase 3): PyPI publish (`sandesh-relay`, CR-SAN-010), AUR `PKGBUILD` (CR-SAN-009),
-  official MCP Registry listing (CR-SAN-011).
+- **PyPI publish — DONE** (Phase 3, CR-SAN-010): `.github/workflows/publish-pypi.yml` publishes
+  `sandesh-relay` to PyPI on a GitHub Release via OIDC trusted publishing (TestPyPI dry-run on
+  manual dispatch); version is git-tag-driven. See **[RELEASING.md](RELEASING.md)**. (The first
+  `v0.1.0` release to PyPI is a maintainer action.)
+- **Next** (Phase 3): AUR `PKGBUILD` (CR-SAN-009), official MCP Registry listing (CR-SAN-011).
 
 ## License
 
