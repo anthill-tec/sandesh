@@ -17,7 +17,7 @@ Single source of truth for change requests. Pick the next `PENDING` CR by phase 
 | [CR-SAN-011](CR-SAN-011-mcp-registry.md) | Official MCP Registry listing (`server.json`, `io.github.anthill-tec/sandesh`) — discoverable by MCP clients/directories | Phase 3 | COMPLETED | CR-SAN-010 | 2026-06-07 |
 
 Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distribution](../research/PRD-distribution.md) · [PRD-pi-extension](../research/PRD-pi-extension.md)
-Design notes: [DN-windows-notifier](../research/DN-windows-notifier.md)
+Design notes: [DN-windows-notifier](../research/DN-windows-notifier.md) · [DN-pi-wake](../research/DN-pi-wake.md) (Pi wake spike — RESOLVED: native injection)
 PyPI distribution name: **`sandesh-relay`** (`sandesh` is taken; import package + CLI stay `sandesh`).
 Pi integration: see **[PRD-pi-extension](../research/PRD-pi-extension.md)** — a native Pi *extension* (not MCP); its CRs (scaffold/verbs, wake-spike, packaging) spin from that PRD.
 (All scheduled CR specs authored. Remaining: Pi-extension CRs spin from PRD-pi-extension; CR-SAN-012 deferred — core status retirement.)

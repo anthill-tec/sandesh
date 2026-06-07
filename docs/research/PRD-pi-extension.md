@@ -58,7 +58,15 @@ param descriptions/address-format guidance from `docs/usage-scenarios.md` (reuse
 **PE5 — Distribute via Pi packages.** Publish as `npm:`/`git:` for `pi install`; list on
 `pi.dev/packages`. (Independent of the PyPI dist, which is the `sandesh` CLI it calls.)
 
-## 5. The WAKE — the crux, requires a spike (OPEN)
+## 5. The WAKE — the crux — **RESOLVED: (a) native injection** (see `DN-pi-wake.md`)
+
+> **Spike done (2026-06-07, `DN-pi-wake.md`).** A Pi extension **can wake an idle agent** from a
+> background watcher — `ExtensionAPI.sendUserMessage()` ("always triggers a turn") /
+> `sendMessage(…, {triggerTurn:true})`, demonstrated by the canonical `file-trigger.ts` example.
+> So the wake is **native** (outcome **a**): one extension carries the verbs **and** owns the wake
+> loop — no out-of-band `run_in_background`, unlike Claude Code. Recommended design **W1**: a
+> detached `session_start` loop that `pi.exec`s `sandesh notify` (the doorbell) and on exit-0 calls
+> `sendUserMessage(...)`. The original pre-spike analysis is kept below for context.
 
 On Claude Code the wake **must** be the host's `run_in_background` (an MCP server can't re-invoke a
 sleeping agent — PRD-mcp-server §6). Pi extensions have **`session_start`/`before_agent_start`
@@ -84,7 +92,9 @@ independently (PE1–PE5) and treat the wake as a follow-on.
 
 - **Pi extension scaffold + verb tools** (TS extension; `registerTool` over `sandesh` CLI; Typebox
   schemas; depends on CR-SAN-008). The verbs, no wake.
-- **Wake spike → DN**, then a **wake CR** implementing the chosen option (a/b/c).
+- **Pi native wake** — ~~spike~~ **done (`DN-pi-wake.md`, outcome a)**; the wake CR implements **W1**
+  (a detached `session_start` loop: `pi.exec sandesh notify` → on exit-0 `sendUserMessage`). No
+  separate spike needed.
 - **Packaging/listing** on `pi.dev/packages` (npm:/git:).
 
 (Numbers allocated when scheduled, against the queue HEAD.)
