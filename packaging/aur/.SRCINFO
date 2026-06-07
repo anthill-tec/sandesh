@@ -1,0 +1,17 @@
+pkgbase = sandesh-relay
+	pkgdesc = SQLite-backed multi-project messaging relay for cooperating agent/orchestrator sessions (CLI + MCP server)
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/anthill-tec/sandesh
+	arch = any
+	license = GPL-3.0-only
+	makedepends = python-build
+	makedepends = python-installer
+	makedepends = python-hatchling
+	makedepends = python-hatch-vcs
+	depends = python
+	optdepends = python-mcp: the MCP server (sandesh-mcp) — provides the [mcp] extra (AUR)
+	source = https://files.pythonhosted.org/packages/source/s/sandesh-relay/sandesh_relay-0.1.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = sandesh-relay

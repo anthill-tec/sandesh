@@ -78,6 +78,17 @@ sudo pipx install --global 'sandesh-relay[mcp]'        # all users (pipx ≥ 1.5
 
 (`pipxu` gives the same UX on a uv backend — common on Arch.)
 
+### Arch Linux (AUR)
+
+```bash
+yay -S sandesh-relay      # or: paru -S sandesh-relay
+```
+
+pacman/AUR resolves the prerequisites, so this **sidesteps PEP 668** entirely (no uv/pipx
+bootstrap). The MCP server's dependency is offered as an optional `python-mcp` (from the AUR) —
+install it for `sandesh-mcp`; if it's unavailable, use the uv/pipx path for the server. (The AUR
+package is published per release — see [RELEASING.md](RELEASING.md).)
+
 ### install.sh (offline / from-source fallback)
 
 No uv or pipx? `install.sh` builds its **own venv** and pip-installs the package into it — it
