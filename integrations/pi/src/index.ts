@@ -310,7 +310,7 @@ export default function registerExtension(pi: ExtensionAPI): void {
     promptSnippet:
       "Send a message to another orchestrator — To wakes the recipient, Cc is silent.",
     promptGuidelines: [
-      "'to' recipients are woken on their next notify; act-this is the To role.",
+      "'to' recipients are woken on their next notify — use the To role for any recipient that must act on the message.",
       "'cc' recipients are delivered silently — Cc never wakes a watcher (awareness only); it is swept up on the recipient's next fetch.",
       "to: [\"all-tracks\"] broadcasts to every active address except the sender.",
       "'subject' is mandatory; omit a body for a subject-only message.",
