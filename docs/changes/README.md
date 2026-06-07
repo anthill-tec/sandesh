@@ -13,10 +13,12 @@ Single source of truth for change requests. Pick the next `PENDING` CR by phase 
 | CR-SAN-007 | Install `$PATH` hardening | Phase 2 | SUPERSEDED by CR-SAN-008 | CR-SAN-001 | — |
 | [CR-SAN-008](CR-SAN-008-packaging.md) | Packaging: `pyproject.toml`, `sandesh/` package, console scripts, `[mcp]` extra | Phase 3 | PENDING | CR-SAN-001..004 | — |
 | CR-SAN-009 | AUR PKGBUILD (secondary, Arch) — derives from the package | Phase 3 | PENDING | CR-SAN-008 | — |
+| CR-SAN-010 | PyPI release (OIDC trusted publishing) — publishes `sandesh-relay`; enables uv/pipx/pipxu install | Phase 3 | PENDING | CR-SAN-008 | — |
 
 Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distribution](../research/PRD-distribution.md)
 Design notes: [DN-windows-notifier](../research/DN-windows-notifier.md)
-(CR-SAN-005/006 specs to be authored when scheduled; defined in PRD-mcp-server §10.)
+PyPI distribution name: **`sandesh-relay`** (`sandesh` is taken; import package + CLI stay `sandesh`).
+(CR-SAN-005/006/009/010 specs to be authored when scheduled; defined in the PRDs.)
 
 ## Canonical statuses
 `PENDING` / `IN_PROGRESS` / `COMPLETED` / `SUPERSEDED` / `DEFERRED`

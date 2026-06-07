@@ -27,16 +27,22 @@ Out of scope here: the AUR PKGBUILD (CR-SAN-009) and Windows **runtime** (DN-win
 - `cli.py` and `mcp_server.py` each expose a `main()` callable for the entry points.
 
 ### §S2 — `pyproject.toml`
-- `[project]`: `name = "sandesh"`, a version, `requires-python = ">=3.10"` (matches the `mcp`
-  extra), description, readme, **`license = "GPL-3.0-only"`** (SPDX; matches the repo `LICENSE`
-  — or `GPL-3.0-or-later` if the "or later" upgrade clause is wanted) + the GPLv3 trove
-  classifier.
+- `[project]`: **`name = "sandesh-relay"`** — the PyPI *distribution* name (`sandesh` is already
+  taken on PyPI). NOTE: distribution name ≠ import name — the **import package stays `sandesh`**
+  and the **console scripts stay `sandesh` / `sandesh-mcp`**; only the `pip install` name is
+  `sandesh-relay`. Plus a version, `requires-python = ">=3.10"` (matches the `mcp` extra),
+  description, readme, **`license = "GPL-3.0-only"`** (SPDX; matches the repo `LICENSE` — or
+  `GPL-3.0-or-later` if the "or later" upgrade clause is wanted) + the GPLv3 trove classifier.
 - `[project.scripts]`: `sandesh = "sandesh.cli:main"`, `sandesh-mcp = "sandesh.mcp_server:main"`.
 - `[project.optional-dependencies]`: `mcp = ["mcp>=1.27,<2"]`.
 - A build backend (setuptools or hatchling — CR decides); core CLI has **no** runtime deps.
 
 ### §S3 — Install paths (installer-agnostic; **`uv` primary**, per PRD-distribution D2)
 The package is installer-agnostic; the entry points are what each installer puts on `$PATH`.
+> **Distribution name = `sandesh-relay`.** Every `sandesh[mcp]` shorthand below means
+> **`sandesh-relay[mcp]`** (the PyPI install name); the invoked console scripts remain
+> `sandesh` / `sandesh-mcp`. E.g. `uvx --from 'sandesh-relay[mcp]' sandesh-mcp`,
+> `pipx install 'sandesh-relay[mcp]'`.
 - `pip install .` (clean venv) → `sandesh` and `sandesh-mcp` on `$PATH`; CLI works with **no**
   third-party package present. `pip install '.[mcp]'` → `mcp` importable; `mcp` imported ONLY by
   `sandesh.mcp_server`. (This is the build-mechanics contract every installer relies on.)

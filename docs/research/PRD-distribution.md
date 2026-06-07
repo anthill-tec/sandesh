@@ -105,6 +105,16 @@ environment. This makes it the answer for "only pip is available" / no-network /
 / dev. README points to `pipx` first; `install.sh` is the documented fallback. (Revisit removing
 it only if pipx becomes universally assumable — which D2a says it is not.)
 
+**D7 — The "global repo" for uv / pipx / pipxu IS PyPI; there is no separate uv registry.**
+`uv`, `pipx`, and `pipxu` are *installers/clients* — they all pull from **PyPI** (or any
+PEP-503 index you configure). There is no uv-specific package registry. So **publishing to
+PyPI is exactly what lets `uv tool install` / `uvx --from` / `pipx install` / `pipxu install`
+fetch Sandesh** — one publish target serves all three. **Distribution name: `sandesh-relay`**
+(`sandesh` is taken on PyPI); the import package + `sandesh`/`sandesh-mcp` console scripts are
+unchanged. Building/publishing can use either `python -m build` + `pypa/gh-action-pypi-publish`
+(the GitHub trusted-publishing template) **or** uv-native `uv build` + `uv publish` (uv also
+supports OIDC trusted publishing) — both end at PyPI. See CR-SAN-010.
+
 ## 4. Cross-platform scope
 
 - **Linux / macOS:** install + runtime fully supported via pip/pipx.
@@ -119,14 +129,15 @@ it only if pipx becomes universally assumable — which D2a says it is not.)
 |---|---|---|
 | **CR-SAN-008** | **Packaging:** restructure `app/` → `sandesh/` package, `pyproject.toml` with `[project.scripts]` (`sandesh`, `sandesh-mcp`) + `[mcp]` extra; installer-agnostic (uv/pipx/pip); fix tests for the new layout; demote `install.sh` to fallback; README install-via-**uv** (uvx / `uv tool install`) first, pipx alternative. | CR-SAN-001..004 |
 | **CR-SAN-009** | **PKGBUILD (AUR):** build from the package/source; resolve `mcp`; install both console scripts. | CR-SAN-008 |
+| **CR-SAN-010** | **PyPI release (trusted publishing) → enables uv/pipx/pipxu (D7).** Publish `sandesh-relay` to PyPI on GitHub `release: published`, via OIDC trusted publishing (`pypa/gh-action-pypi-publish` **or** `uv build`+`uv publish`). Prereqs (user/maintainer): register the PyPI project + configure a **Trusted Publisher** (repo `anthill-tec/sandesh`, workflow file, env `pypi`); create the **`pypi` GitHub environment**. Add `.github/workflows/`. | CR-SAN-008 |
 
 (CR-SAN-007 "install PATH hardening" is **SUPERSEDED** by CR-SAN-008 — pipx/entry points
 solve `$PATH`.)
 
 ## 6. Non-goals / out of scope
 
-- Publishing to the public PyPI index (a release step; the package is pip-installable from
-  source/Git regardless — decide PyPI separately).
+- ~~Publishing to the public PyPI index~~ — **now PLANNED as CR-SAN-010** (the global index that
+  uv/pipx/pipxu pull from, per D7); distribution name `sandesh-relay`, via OIDC trusted publishing.
 - Windows **runtime** support for the watcher (see `DN-windows-notifier.md`).
 - Homebrew / .deb / .rpm / Nix (revisit by demand once pip + AUR exist).
 - Any change to the MCP tool surface or messaging semantics (covered by the MCP PRD).
