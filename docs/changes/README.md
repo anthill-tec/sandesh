@@ -14,10 +14,12 @@ Single source of truth for change requests. Pick the next `PENDING` CR by phase 
 | [CR-SAN-008](CR-SAN-008-packaging.md) | Packaging: `pyproject.toml`, `sandesh/` package, console scripts, `[mcp]` extra | Phase 3 | PENDING | CR-SAN-001..004 | — |
 | CR-SAN-009 | AUR PKGBUILD (secondary, Arch) — derives from the package | Phase 3 | PENDING | CR-SAN-008 | — |
 | CR-SAN-010 | PyPI release (OIDC trusted publishing) — publishes `sandesh-relay`; enables uv/pipx/pipxu install | Phase 3 | PENDING | CR-SAN-008 | — |
+| [CR-SAN-011](CR-SAN-011-mcp-registry.md) | Official MCP Registry listing (`server.json`, `io.github.anthill-tec/sandesh`) — discoverable by MCP clients/directories | Phase 3 | PENDING | CR-SAN-010 | — |
 
-Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distribution](../research/PRD-distribution.md)
+Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distribution](../research/PRD-distribution.md) · [PRD-pi-extension](../research/PRD-pi-extension.md)
 Design notes: [DN-windows-notifier](../research/DN-windows-notifier.md)
 PyPI distribution name: **`sandesh-relay`** (`sandesh` is taken; import package + CLI stay `sandesh`).
+Pi integration: see **[PRD-pi-extension](../research/PRD-pi-extension.md)** — a native Pi *extension* (not MCP); its CRs (scaffold/verbs, wake-spike, packaging) spin from that PRD.
 (CR-SAN-005/006/009/010 specs to be authored when scheduled; defined in the PRDs.)
 
 ## Canonical statuses
