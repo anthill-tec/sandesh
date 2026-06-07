@@ -325,5 +325,149 @@ class McpSurfaceTest(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class ServerLevelSurfaceTests(unittest.IsolatedAsyncioTestCase):
+    """Server-level MCP surface tests: FastMCP instructions + sandesh://usage resource
+    (CR-SAN-006 §AC5–AC6, C1).
+
+    Both tests FAIL now:
+      - mcp_server.mcp.instructions is None  → assertIsInstance(None, str) fails
+      - list_resources() returns []           → URI membership assert fails
+    """
+
+    # -------------------------------------------------------------------------
+    # AC5 — server instructions
+    # -------------------------------------------------------------------------
+
+    async def test_ac5_instructions_is_a_non_empty_string(self):
+        """AC5: mcp_server.mcp.instructions is a non-empty string."""
+        instructions = mcp_server.mcp.instructions
+        self.assertIsInstance(
+            instructions,
+            str,
+            f"mcp.instructions must be a str, got {type(instructions).__name__!r} ({instructions!r})",
+        )
+        self.assertGreater(
+            len(instructions.strip()),
+            0,
+            "mcp.instructions must not be empty",
+        )
+
+    async def test_ac5_instructions_mentions_notify_and_wake_boundary(self):
+        """AC5: instructions (lowercased) mentions the wake-is-not-a-tool boundary.
+        Must contain 'notify' AND one of ('not a tool', 'not an mcp tool',
+        'run_in_background', 'background')."""
+        instructions = mcp_server.mcp.instructions
+        self.assertIsInstance(
+            instructions,
+            str,
+            f"mcp.instructions must be a str to check wake-boundary content, "
+            f"got {type(instructions).__name__!r}",
+        )
+        lowered = instructions.lower()
+        self.assertIn(
+            "notify",
+            lowered,
+            f"mcp.instructions must mention 'notify' (the wake path). Got: {instructions!r}",
+        )
+        wake_terms = ("not a tool", "not an mcp tool", "run_in_background", "background")
+        self.assertTrue(
+            any(term in lowered for term in wake_terms),
+            f"mcp.instructions must mention the wake-is-not-a-tool boundary "
+            f"(one of {wake_terms}). Got: {instructions!r}",
+        )
+
+    async def test_ac5_instructions_mentions_reply_and_completion_lifecycle(self):
+        """AC5: instructions (lowercased) conveys the reply=done lifecycle.
+        Must contain 'reply' AND one of ('done', 'completion', 'complete')."""
+        instructions = mcp_server.mcp.instructions
+        self.assertIsInstance(
+            instructions,
+            str,
+            f"mcp.instructions must be a str to check lifecycle content, "
+            f"got {type(instructions).__name__!r}",
+        )
+        lowered = instructions.lower()
+        self.assertIn(
+            "reply",
+            lowered,
+            f"mcp.instructions must mention 'reply' (the reply=done lifecycle). "
+            f"Got: {instructions!r}",
+        )
+        completion_terms = ("done", "completion", "complete")
+        self.assertTrue(
+            any(term in lowered for term in completion_terms),
+            f"mcp.instructions must convey the reply=done lifecycle "
+            f"(one of {completion_terms}). Got: {instructions!r}",
+        )
+
+    # -------------------------------------------------------------------------
+    # AC6 — sandesh://usage resource
+    # -------------------------------------------------------------------------
+
+    async def test_ac6_usage_resource_present_in_list_resources(self):
+        """AC6: list_resources() includes a resource with URI 'sandesh://usage'."""
+        resources = await mcp_server.mcp.list_resources()
+        uris = {str(r.uri) for r in resources}
+        self.assertIn(
+            "sandesh://usage",
+            uris,
+            f"list_resources() must include 'sandesh://usage'. "
+            f"Got URIs: {sorted(uris) if uris else '(empty)'}",
+        )
+
+    async def test_ac6_usage_resource_read_returns_non_empty_content(self):
+        """AC6: read_resource('sandesh://usage') returns at least one content item
+        whose .content is a non-empty string."""
+        # First assert URI is present — if not, surface as FAILURE not ERROR.
+        resources = await mcp_server.mcp.list_resources()
+        uris = {str(r.uri) for r in resources}
+        self.assertIn(
+            "sandesh://usage",
+            uris,
+            f"Precondition: 'sandesh://usage' must be listed before it can be read. "
+            f"Got: {sorted(uris) if uris else '(empty)'}",
+        )
+        contents = list(await mcp_server.mcp.read_resource("sandesh://usage"))
+        self.assertGreater(
+            len(contents),
+            0,
+            "read_resource('sandesh://usage') must return at least one content item",
+        )
+        first = contents[0]
+        self.assertIsInstance(
+            first.content,
+            str,
+            f"Content item .content must be a str, got {type(first.content).__name__!r}",
+        )
+        self.assertGreater(
+            len(first.content.strip()),
+            0,
+            "read_resource('sandesh://usage') content must not be empty",
+        )
+
+    async def test_ac6_usage_resource_content_looks_like_usage_doc(self):
+        """AC6: content (lowercased) contains at least one of ('sandesh', 'usage',
+        'model-b', 'scenario') — tolerant check allowing a stub."""
+        # First assert URI is present — if not, surface as FAILURE not ERROR.
+        resources = await mcp_server.mcp.list_resources()
+        uris = {str(r.uri) for r in resources}
+        self.assertIn(
+            "sandesh://usage",
+            uris,
+            f"Precondition: 'sandesh://usage' must be listed before content can be checked. "
+            f"Got: {sorted(uris) if uris else '(empty)'}",
+        )
+        contents = list(await mcp_server.mcp.read_resource("sandesh://usage"))
+        self.assertGreater(len(contents), 0, "read_resource must return at least one item")
+        lowered = contents[0].content.lower() if isinstance(contents[0].content, str) else ""
+        usage_terms = ("sandesh", "usage", "model-b", "scenario")
+        self.assertTrue(
+            any(term in lowered for term in usage_terms),
+            f"sandesh://usage content must look like the usage doc or a stub "
+            f"(one of {usage_terms}). "
+            f"Got (first 200 chars): {contents[0].content[:200]!r}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
