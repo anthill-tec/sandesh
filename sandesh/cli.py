@@ -17,6 +17,7 @@ import argparse
 import os
 import sys
 
+from sandesh import __version__
 from sandesh import sandesh_db as sdb
 from sandesh import notify as _notify
 
@@ -217,6 +218,7 @@ def build_parser():
 
     ap = argparse.ArgumentParser(prog="sandesh", parents=[common],
                                  description="Sandesh messaging CLI (standalone).")
+    ap.add_argument("--version", action="version", version=f"sandesh {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("setup", parents=[common],
