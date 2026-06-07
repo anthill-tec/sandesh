@@ -13,7 +13,7 @@ Single source of truth for change requests. Pick the next `PENDING` CR by phase 
 | CR-SAN-007 | Install `$PATH` hardening | Phase 2 | SUPERSEDED by CR-SAN-008 | CR-SAN-001 | — |
 | [CR-SAN-008](CR-SAN-008-packaging.md) | Packaging: `pyproject.toml` (hatchling + hatch-vcs), `sandesh/` package, console scripts, `[mcp]` extra, bundled usage doc | Phase 3 | COMPLETED | CR-SAN-001..006 | 2026-06-07 |
 | CR-SAN-009 | AUR PKGBUILD (secondary, Arch) — derives from the package | Phase 3 | PENDING | CR-SAN-008 | — |
-| CR-SAN-010 | PyPI release (OIDC trusted publishing) — publishes `sandesh-relay`; enables uv/pipx/pipxu install | Phase 3 | PENDING | CR-SAN-008 | — |
+| [CR-SAN-010](CR-SAN-010-pypi-publish.md) | PyPI release (OIDC trusted publishing) — publishes `sandesh-relay`; enables uv/pipx/pipxu install | Phase 3 | PENDING | CR-SAN-008 | — |
 | [CR-SAN-011](CR-SAN-011-mcp-registry.md) | Official MCP Registry listing (`server.json`, `io.github.anthill-tec/sandesh`) — discoverable by MCP clients/directories | Phase 3 | PENDING | CR-SAN-010 | — |
 
 Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distribution](../research/PRD-distribution.md) · [PRD-pi-extension](../research/PRD-pi-extension.md)
