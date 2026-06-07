@@ -23,8 +23,8 @@ Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distri
 Design notes: [DN-windows-notifier](../research/DN-windows-notifier.md) · [DN-pi-wake](../research/DN-pi-wake.md) (Pi wake spike — RESOLVED: native injection)
 PyPI distribution name: **`sandesh-relay`** (`sandesh` is taken; import package + CLI stay `sandesh`).
 Pi integration: see **[PRD-pi-extension](../research/PRD-pi-extension.md)** — a native Pi *extension* (not MCP); its CRs (scaffold/verbs, wake-spike, packaging) spin from that PRD.
-Phase 4 (Pi) — monorepo TS subfolder `integrations/pi/` (npm + TypeScript + vitest), driven by the
-`vscode-*` TS agents. CR-SAN-013 (verbs) → CR-SAN-014 (native wake, design W1) → CR-SAN-015 (packaging).
+Phase 4 (Pi) — monorepo TS subfolder `integrations/pi/` (**bun** + TypeScript, `bun test`), driven by the
+**`bun-*` agents** via **`bun-crucible.py`**. CR-SAN-013 (verbs) → CR-SAN-014 (native wake, design W1) → CR-SAN-015 (packaging).
 CR-SAN-012 deferred (core status retirement). CR-SAN-007 superseded.
 
 ## Canonical statuses

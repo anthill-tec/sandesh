@@ -23,9 +23,10 @@ shells to `sandesh`.
 
 ### §S1 — Scaffold `integrations/pi/` (TS package)
 - `integrations/pi/` with `package.json` (name e.g. `@anthill-tec/sandesh-pi`, `type: module`),
-  `tsconfig.json`, and a test runner (**vitest**). Dev-dependency on
+  `tsconfig.json`, and tests run by **`bun test`** (native TS test runner — built-in JUnit + lcov,
+  zero extra deps; `bun:test` for `test`/`expect`/`mock`/`spyOn`). Dev-dependency on
   **`@earendil-works/pi-coding-agent`** (for `ExtensionAPI` types) and **`@earendil-works/pi-ai`**
-  (for `StringEnum` / Typebox param schemas). No runtime deps beyond what Pi provides.
+  (for `StringEnum`) + **`typebox`** (param schemas). No runtime deps beyond what Pi provides.
 - The extension entry is a single default-exported function `export default function (pi: ExtensionAPI) { … }`
   loadable from `.pi/extensions/` or `~/.pi/agent/extensions/` (packaging/listing = CR-SAN-015).
 - `.gitignore` the TS build artifacts (`integrations/pi/node_modules/`, `dist/`).
@@ -55,7 +56,7 @@ Use `pi.registerTool({ name, description, parameters, execute })` for each verb,
   `install.sh` / AUR). On load, probe `pi.exec("sandesh", ["--version"])`; if missing, surface a
   clear one-time notice (`ctx.ui.notify`) naming the install options — don't crash.
 
-### §S5 — Tests (vitest)
+### §S5 — Tests (bun test)
 - Unit-test each tool's `execute` with a **mocked `pi.exec`**: assert the exact CLI argv built from
   params (incl. project/from env fallback, to/cc lists, body handling) and the result/error mapping
   (zero vs non-zero `code`).
@@ -73,7 +74,7 @@ Verified Pi API against `earendil-works/pi@main` (via opensrc) and the CLI surfa
 schema (`import { Type } from "typebox"`; `Type.Object/String/Array/Optional`; `StringEnum` from
 `@earendil-works/pi-ai` for `kind`); `execute(toolCallId, params, signal, onUpdate, ctx)` returns an
 **`AgentToolResult`** (`{ content: [{ type: "text", text }], details? }`), not raw stdout. Devdeps:
-`@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, `typebox`, `vitest`.
+`@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, `typebox` (test runner is built-in `bun test`).
 
 **Tool-param → CLI-flag mapping (the wrapper contract — DRIFT vs the loose spec):** the Pi tool
 params may mirror the MCP names for the LLM, but `execute` maps to the CLI's *actual* flags:
@@ -100,8 +101,8 @@ the model per D7; `notify` is the wake → CR-SAN-014; `projects` is non-essenti
 
 ## Acceptance criteria
 
-- [ ] **AC1** — `integrations/pi/` exists with `package.json` (+ `tsconfig.json`, vitest config); a
-      `default`-exported `(pi: ExtensionAPI) => void` entry; `npm test` (vitest) runs in that folder.
+- [ ] **AC1** — `integrations/pi/` exists with `package.json` (+ `tsconfig.json`); a
+      `default`-exported `(pi: ExtensionAPI) => void` entry; `bun test` runs in that folder.
 - [ ] **AC2** — the extension registers **exactly 9** tools named `sandesh_setup`,
       `sandesh_register`, `sandesh_unregister`, `sandesh_addressbook`, `sandesh_send`,
       `sandesh_reply`, `sandesh_inbox`, `sandesh_fetch`, `sandesh_thread` (asserted via a mocked
@@ -127,13 +128,13 @@ the model per D7; `notify` is the wake → CR-SAN-014; `projects` is non-essenti
       extension lives entirely under `integrations/pi/`; the Python suites stay green.
 
 ## Estimated size
-Medium: a new TS package + 9 thin tool wrappers + vitest unit tests. Mechanical once the scaffold +
+Medium: a new TS package + 9 thin tool wrappers + `bun test` unit tests. Mechanical once the scaffold +
 the first tool pattern are set.
 
 ## Risks / open questions
-- **Toolchain:** TS + vitest under `integrations/pi/`, driven by the `vscode-*` TS agents
-  (no bun/TS crucible script exists; `crucible-report-vscode` ingests vitest JUnit+lcov). Confirm at
-  gap-analysis (vitest vs bun test).
+- **Toolchain:** TS under `integrations/pi/` tested with **`bun test`** (native; JUnit + lcov),
+  driven by the **`bun-*` agents** via **`bun-crucible.py`** (register/test/regression/check/pre-merge-gate;
+  `tsc --noEmit` syntax gate). Built + smoke-tested 2026-06-07.
 - **CLI output parsing** — the CLI is human-readable, not JSON. Tools may return verbatim output for
   hard-to-parse verbs; a future `--json` CLI flag (separate CR, would touch Sandesh-core) could make
   this robust — out of scope here.

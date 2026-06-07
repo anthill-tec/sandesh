@@ -49,7 +49,7 @@ not awaited by any turn) that arms the doorbell and translates its exit into a P
 - One loop per session: rely on Sandesh's own notifier dedup (exit `5`) for cross-process safety,
   plus an in-extension guard so `session_start` can't start two loops.
 
-### §S5 — Tests (vitest)
+### §S5 — Tests (bun test)
 - Drive the loop with a **mocked `pi.exec`** returning a scripted sequence of `{code}` and assert:
   - `code 0` → `pi.sendUserMessage` called (once) with a fetch-prompting message, then re-arm;
   - `code 2` → re-arm, no `sendUserMessage`;
@@ -77,7 +77,7 @@ not awaited by any turn) that arms the doorbell and translates its exit into a P
       `integrations/pi/`; the `notify` exit-code contract is consumed, not modified.
 
 ## Estimated size
-Small–medium: one wake-loop module + lifecycle wiring + vitest unit tests over a mocked exec. The
+Small–medium: one wake-loop module + lifecycle wiring + `bun test` unit tests over a mocked exec. The
 design is fully specified by DN-pi-wake (W1); no research left.
 
 ## Risks / open questions
@@ -87,7 +87,7 @@ design is fully specified by DN-pi-wake (W1); no research left.
 - **`sendUserMessage` vs `sendMessage(triggerTurn)`** — `sendUserMessage` always triggers and reads
   as a user turn (chosen); revisit if a custom message type renders better.
 - Manual end-to-end (a real Pi session + two Sandesh addresses) is a maintainer smoke test — the
-  vitest suite covers the loop logic with mocks; document the manual smoke in the extension README.
+  `bun test` suite covers the loop logic with mocks; document the manual smoke in the extension README.
 
 ## Non-goals
 - The verbs (CR-SAN-013).
