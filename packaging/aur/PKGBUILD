@@ -1,0 +1,27 @@
+# Maintainer: Antony John <new.book1604@fastmail.com>
+# shellcheck shell=bash
+pkgname=sandesh-relay
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="SQLite-backed multi-project messaging relay for cooperating agent/orchestrator sessions (CLI + MCP server)"
+arch=('any')
+url="https://github.com/anthill-tec/sandesh"
+license=('GPL-3.0-only')
+depends=('python')
+optdepends=('python-mcp: the MCP server (sandesh-mcp) — provides the [mcp] extra (AUR)')
+makedepends=('python-build' 'python-installer' 'python-hatchling' 'python-hatch-vcs')
+source=("https://files.pythonhosted.org/packages/source/s/sandesh-relay/sandesh_relay-$pkgver.tar.gz")
+# 'SKIP' is a deliberate pre-publish placeholder: the sdist is not on PyPI until
+# CR-SAN-010's first release. Run `updpkgsums` at release to fill the real checksum.
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/sandesh_relay-$pkgver" || exit 1
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "$srcdir/sandesh_relay-$pkgver" || exit 1
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
