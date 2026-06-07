@@ -1,6 +1,6 @@
 # CR-SAN-016 — Pi extension: throw on CLI failure + tool promptSnippet (review corrections)
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-016)
 **Priority:** High (AC1 is a correctness defect — failed CLI calls look like successes to the LLM)
 **Depends on:** CR-SAN-013 (the verbs extension being corrected), CR-SAN-014 (shares `src/index.ts`)
 **Labels:** phase-4, pi, typescript, fix
@@ -66,18 +66,18 @@ Add to each `pi.registerTool({...})`:
 
 ## Acceptance criteria
 
-- [ ] **AC1** — `execute` **throws** on non-zero `pi.exec` `code`; the thrown `Error.message` contains
+- [x] **AC1** — `execute` **throws** on non-zero `pi.exec` `code`; the thrown `Error.message` contains
       the verb, the exit code, and `stderr` (asserted via `rejects.toThrow`/equivalent for ≥2 tools).
-- [ ] **AC2** — `r.code === 0` still returns `{ content: [{ type: "text", text: stdout }], details: undefined }`
+- [x] **AC2** — `r.code === 0` still returns `{ content: [{ type: "text", text: stdout }], details: undefined }`
       (success path unchanged; asserted).
-- [ ] **AC3** — a `pi.exec` **rejection** (spawn throws) propagates out of `execute` as a thrown error
+- [x] **AC3** — a `pi.exec` **rejection** (spawn throws) propagates out of `execute` as a thrown error
       (not swallowed into a returned result) — asserted with a mocked rejecting `pi.exec`.
-- [ ] **AC4** — all **9** tools register a non-empty `promptSnippet`; `sandesh_send` + `sandesh_reply`
+- [x] **AC4** — all **9** tools register a non-empty `promptSnippet`; `sandesh_send` + `sandesh_reply`
       carry `promptGuidelines` conveying To-wakes/Cc-silent and `parent_id`=original-message-id
       respectively (asserted via the captured tool defs).
-- [ ] **AC5** — `src/execute.test.ts` no longer asserts the returned-error-text contract (all
+- [x] **AC5** — `src/execute.test.ts` no longer asserts the returned-error-text contract (all
       non-zero-exit cases assert the throw); full `integrations/pi` suite green; `tsc --noEmit` clean.
-- [ ] **AC6** — **no change** to `peerDependencies` (#3 stays — bundled-core `"*"`) or `tsconfig.json`
+- [x] **AC6** — **no change** to `peerDependencies` (#3 stays — bundled-core `"*"`) or `tsconfig.json`
       (#4 stays); the wake loop's exit-code handling is unchanged; Sandesh-core untouched
       (`git diff develop..HEAD -- sandesh/` empty).
 
@@ -110,3 +110,24 @@ updating the execute tests' error assertions + a promptSnippet test. All in `int
 - Any change to the wake loop behaviour (CR-SAN-014), the CLI argv mapping (CR-SAN-013), Sandesh-core,
   or the MCP surface.
 - npm publish / gallery (CR-SAN-015, already done).
+
+## Implementation Notes (2026-06-07)
+
+Corrective CR from an independent code review. Two cycles + a FIX, agent-dispatched (bun-* agents,
+all Crucible lifecycle via `bun-crucible.py`). Only `integrations/pi/src/{index,execute,index.test,execute.test}.ts`.
+
+- **C0** — throw on CLI failure (`aaf54ce` RED / `b502a44` GREEN): `runSandesh` now `throw`s
+  `Error("sandesh <verb> failed (exit N): <stderr>")` on non-zero exit (Pi sets `isError` + reports
+  to the LLM) — a returned value never sets the flag (#1); `pi.exec` spawn rejections propagate (#3
+  test); success path unchanged. `execute.test.ts` AC5 block flipped to `rejects.toThrow` + a
+  rejection-propagation case (#5).
+- **C1** — `promptSnippet` on all 9 tools + `promptGuidelines` on send/reply/fetch (`72648ca` RED /
+  `282ac06` GREEN), **wording lifted from `sandesh/data/usage-scenarios.md`** (§5 table → snippets;
+  §4/§6 → guideline bullets) — same single source as the MCP docstrings (CR-006) (#2).
+- **VERIFY** (`CR-SAN-016-VERIFY`): 135/135, tsc clean, all AC1–AC6 PASS, 0 blocking; 1 should-fix.
+- **FIX** (`9ac78b1`): cleaned a garbled `act-this` autocomplete artifact in `sandesh_send`'s first
+  guideline bullet (would have shipped verbatim into the LLM system prompt).
+- **Pre-merge gate**: tsc clean; **135/135 bun tests; 99.7% line / 95.2% function coverage**; AC6
+  invariants confirmed (`peerDependencies`/`tsconfig`/`sandesh/` all untouched).
+- **Rejected findings stand:** #3 (deps) — Pi mandates `peerDependencies "*"` for bundled-core; #4
+  (`@earendil-works/pi-tsconfig`) — does not exist (npm 404).

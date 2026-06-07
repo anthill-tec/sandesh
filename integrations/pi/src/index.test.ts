@@ -182,3 +182,54 @@ describe("registerExtension — ToolDefinition shape (AC3)", () => {
     expect(props).toHaveProperty("msg_id");
   });
 });
+
+// AC4 — promptSnippet on all 9 tools; promptGuidelines on sandesh_send + sandesh_reply
+
+describe("registerExtension — promptSnippet + promptGuidelines (AC4)", () => {
+  test("every tool has a non-empty promptSnippet string", () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    registerExtension(fakePi);
+    expect(capturedTools.length).toBe(9);
+    for (const tool of capturedTools) {
+      expect(
+        typeof tool.promptSnippet,
+        `${tool.name}: promptSnippet must be a string`
+      ).toBe("string");
+      expect(
+        (tool.promptSnippet as string).length,
+        `${tool.name}: promptSnippet must be non-empty`
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  // sandesh_send: promptGuidelines must convey To-wakes / Cc-silent semantics
+  test("sandesh_send has promptGuidelines conveying To-wakes / Cc-silent semantics", () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    registerExtension(fakePi);
+    const send = capturedTools.find((t) => t.name === "sandesh_send");
+    expect(send).toBeDefined();
+    expect(Array.isArray(send!.promptGuidelines)).toBe(true);
+    expect((send!.promptGuidelines as string[]).length).toBeGreaterThan(0);
+
+    const joined = (send!.promptGuidelines as string[]).join(" ").toLowerCase();
+    // Must mention "cc" AND one of the "silent/does not wake/not wake/awareness" synonyms AND "wake"
+    expect(joined).toMatch(/cc/);
+    expect(joined).toMatch(/wake/);
+    expect(joined).toMatch(/silent|does not wake|not wake|awareness/);
+  });
+
+  // sandesh_reply: promptGuidelines must convey parent_id = the original message's id
+  test("sandesh_reply has promptGuidelines conveying parent_id = original message id", () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    registerExtension(fakePi);
+    const reply = capturedTools.find((t) => t.name === "sandesh_reply");
+    expect(reply).toBeDefined();
+    expect(Array.isArray(reply!.promptGuidelines)).toBe(true);
+    expect((reply!.promptGuidelines as string[]).length).toBeGreaterThan(0);
+
+    const joined = (reply!.promptGuidelines as string[]).join(" ").toLowerCase();
+    // Must mention parent_id (or "original") AND "message"
+    expect(joined).toMatch(/parent_id|original/);
+    expect(joined).toMatch(/message/);
+  });
+});
