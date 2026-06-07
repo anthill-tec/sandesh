@@ -15,10 +15,31 @@ import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {
   AgentToolResult,
+  ExecResult,
   ExtensionAPI,
   ExtensionContext,
   SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
+
+// ---------------------------------------------------------------------------
+// Native wake loop (CR-SAN-014 C0) — backoff seam
+// ---------------------------------------------------------------------------
+
+/** Backoff cap (ms) for the wake loop's error branch (notify exit 1/other). */
+const WAKE_BACKOFF_MS = 5000;
+
+/**
+ * Injectable sleep for the wake loop's error-branch backoff. Defaults to a real
+ * timer; tests replace it with a no-op via {@link __setWakeSleepFn} so the
+ * backoff path resolves immediately.
+ */
+let wakeSleepFn: () => Promise<void> = () =>
+  new Promise<void>((res) => setTimeout(res, WAKE_BACKOFF_MS));
+
+/** Test seam: inject the wake-loop backoff sleep (e.g. a no-op in tests). */
+export function __setWakeSleepFn(fn: () => Promise<void>): void {
+  wakeSleepFn = fn;
+}
 
 /**
  * Install-options notice surfaced when the `sandesh` CLI is not reachable.
@@ -353,18 +374,76 @@ export default function registerExtension(pi: ExtensionAPI): void {
     },
   });
 
-  // Missing-CLI prerequisite probe (AC7). On session start, probe
-  // `sandesh --version`; if the CLI is unreachable (exec rejects or non-zero
-  // code), surface a one-time install notice via ctx.ui.notify. The probe never
-  // blocks tool registration and never throws.
+  // Missing-CLI prerequisite probe (AC7) + native wake loop (CR-SAN-014 C0).
+  // On session start, probe `sandesh --version`; if the CLI is unreachable
+  // (exec rejects or non-zero code), surface a one-time install notice via
+  // ctx.ui.notify (the probe never blocks tool registration and never throws).
+  // When the probe succeeds and the session identity is known, start a detached
+  // wake loop that arms `sandesh notify` and surfaces unread mail.
   pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext): Promise<void> => {
+    let probeOk = false;
     try {
       const r = await pi.exec("sandesh", ["--version"]);
-      if (r.code !== 0) {
+      if (r.code === 0) {
+        probeOk = true;
+      } else {
         ctx.ui.notify(MISSING_CLI_NOTICE, "warning");
       }
     } catch {
       ctx.ui.notify(MISSING_CLI_NOTICE, "warning");
     }
+
+    if (!probeOk) return;
+
+    // Probe-gated wake loop: only arm when this session's identity is known.
+    const self = process.env.SANDESH_ADDRESS;
+    const project = process.env.SANDESH_PROJECT;
+    if (!self || !project) return;
+
+    // Fire-and-forget: the detached loop owns its own lifetime; the handler
+    // must not await it (it blocks on `sandesh notify`).
+    void wakeLoop(pi, project, self);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Wake loop — arms `sandesh notify` and reacts to its exit code (W1 design).
+// ---------------------------------------------------------------------------
+
+/**
+ * Detached wake loop. Repeatedly runs `sandesh --project <P> notify --to <self>`
+ * and dispatches on the notify exit code:
+ *   - 0           → unread mail: prompt the agent to fetch, then re-arm.
+ *   - 2           → timeout: re-arm silently.
+ *   - 3 | 4 | 5   → terminal (tombstoned / evicted / dedup): stop.
+ *   - 1 | other   → error: back off (injectable sleep) then re-arm.
+ */
+async function wakeLoop(pi: ExtensionAPI, project: string, self: string): Promise<void> {
+  let stopped = false;
+  while (!stopped) {
+    const r: ExecResult = await pi.exec("sandesh", [
+      "--project",
+      project,
+      "notify",
+      "--to",
+      self,
+    ]);
+    switch (r.code) {
+      case 0:
+        pi.sendUserMessage(
+          `You have unread Sandesh mail — call sandesh_fetch for "${self}", then act on it.`,
+        );
+        break; // re-arm
+      case 2:
+        break; // re-arm, no message
+      case 3:
+      case 4:
+      case 5:
+        stopped = true; // terminal — stop the loop
+        break;
+      default:
+        await wakeSleepFn(); // backoff, then re-arm
+        break;
+    }
+  }
 }
