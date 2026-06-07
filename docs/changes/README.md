@@ -8,7 +8,7 @@ Single source of truth for change requests. Pick the next `PENDING` CR by phase 
 | [CR-SAN-002](CR-SAN-002-read-tools.md) | MCP read/query tools | Phase 2 | COMPLETED | CR-SAN-001 | 2026-06-06 |
 | [CR-SAN-003](CR-SAN-003-mutating-tools.md) | MCP mutating tools & error mapping | Phase 2 | COMPLETED | CR-SAN-001 | 2026-06-06 |
 | [CR-SAN-004](CR-SAN-004-e2e-smoke.md) | MCP E2E: protocol + real-subprocess stdio smoke tests | Phase 2 | COMPLETED | CR-SAN-001..003 | 2026-06-06 |
-| [CR-SAN-005](CR-SAN-005-retire-status.md) | Retire `status`/disposition tool: remove `sandesh_actioned` (10→9); lock no `resolves`/`reply_all` (PRD §10/D7) | Phase 2 | PENDING | CR-SAN-001..004 | — |
+| [CR-SAN-005](CR-SAN-005-retire-status.md) | Retire `status`/disposition tool: remove `sandesh_actioned` (10→9); lock no `resolves`/`reply_all` (PRD §10/D7) | Phase 2 | COMPLETED | CR-SAN-001..004 | 2026-06-07 |
 | CR-SAN-006 | Docstring & usability enrichment + server `instructions` + `sandesh://usage` resource (PRD §10) | Phase 2 | PENDING | CR-SAN-005 | — |
 | CR-SAN-007 | Install `$PATH` hardening | Phase 2 | SUPERSEDED by CR-SAN-008 | CR-SAN-001 | — |
 | [CR-SAN-008](CR-SAN-008-packaging.md) | Packaging: `pyproject.toml`, `sandesh/` package, console scripts, `[mcp]` extra | Phase 3 | PENDING | CR-SAN-001..004 | — |
