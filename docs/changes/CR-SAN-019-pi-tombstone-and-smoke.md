@@ -45,17 +45,29 @@ In `integrations/pi/src/index.ts`, scope the success/throw decision so that the 
 
 ### §S2 — real-binary smoke test (#7)
 Add a new test file (e.g. `integrations/pi/src/smoke.test.ts`) that does **not** mock `pi.exec` but
-shells to the actual installed `sandesh` CLI:
-- **Resolve the binary**: if `sandesh` is not on PATH, the test **skips** with a clear message
-  (`test.skipIf`/equivalent) — so CI without the Python CLI installed stays green and the mocked suite
-  is unaffected.
-- **When present**: assert `sandesh --version` exits 0 and prints a parseable version string (fast-fail
-  on a missing/broken CLI). Then a **round-trip** against an isolated temp `$XDG_DATA_HOME`:
-  `setup` → `register` → `send` → `fetch` and assert the sent subject appears in the fetched output
-  (proves the CLI↔shim argv contract end-to-end through the real DB).
-- Keep it lightweight and hermetic (temp data home, cleaned up); no network, no install step.
-- (A hard **minimum CLI version** gate is deferred — the shim has no version-specific dependency today;
-  decide at gap-analysis whether `--version` parsing should enforce a floor or just smoke-check.)
+exercises the actual `sandesh` CLI:
+- **Resolve the binary**: if `sandesh` is not on PATH, the test **skips** (`test.skipIf`/equivalent) —
+  so CI without the Python CLI installed stays green and the mocked suite is unaffected.
+- **⚠️ INSTALL PREREQUISITE (gap-analysis DRIFT-1).** The on-PATH `sandesh` must be **current** — the
+  `--version` flag was added to the top-level parser (`cli.py:221`) in the CR-008 era, and a **stale
+  installed copy lacks it** (`sandesh --version` then errors with **exit 2**, not 0). Before running /
+  verifying this test, **re-run `./install.sh`** so the installed binary matches the repo (the repo
+  source is correct: `python3 -m sandesh.cli --version` → `sandesh 0+unknown`, exit 0). Alternatively
+  resolve the CLI via the repo (`python3 -m sandesh.cli`) for the smoke test. The GREEN/VERIFY agents
+  MUST reinstall first or AC5 fails spuriously on a stale binary.
+- **Version assertion (DRIFT-2).** Assert a **loose, parseable** version string (e.g. matches
+  `/^sandesh \S+/`) — **NOT** a strict semver: pre-release/pre-tag the hatch-vcs fallback is
+  `sandesh 0+unknown`, which is valid.
+- **Round-trip — drive the real shim (DRIFT-3).** Prefer wiring a **real spawning `pi.exec`** (e.g. via
+  Bun's subprocess / `spawnSync`, the pattern `package.test.ts` already uses for `npm pack`) and calling
+  the **captured tools' `execute`** (`setup`→`register`→`send`→`fetch`) so the test exercises the shim's
+  own argv-building (this is what catches CLI↔shim skew). A hand-built argv round-trip is weaker.
+- **Valid fixtures (DRIFT-4).** Use a temp `$XDG_DATA_HOME` and **valid addresses** — `'<Orchestrator>
+  - <Project>'` with the `<Project>` part equal to the `project_id` (locked-semantics #10; `send`/
+  `register` validate the format), e.g. project `Smoke` with `Mainline - Smoke` / `Track 1 - Smoke`.
+  Assert the sent subject appears in the fetched output. Hermetic, cleaned up; no network.
+- (A hard **minimum CLI version** gate is **out of scope** — the shim has no version-specific dependency
+  today; `--version` is a presence/smoke check only, not a floor.)
 
 ## Acceptance criteria
 
@@ -67,27 +79,57 @@ shells to the actual installed `sandesh` CLI:
 - [ ] **AC3** — the exit-3 special-case is **scoped to `unregister`**: another verb (e.g. `send`)
       returning `r.code === 3` **still throws** (asserted).
 - [ ] **AC4** — `unregister` with `r.code === 0` returns the normal success result (unchanged; asserted).
-- [ ] **AC5** — a real-binary smoke test exists that, **when `sandesh` is on PATH**, asserts
-      `sandesh --version` succeeds and a `setup`→`register`→`send`→`fetch` round-trip surfaces the sent
-      message; **when absent**, the test **skips** (does not fail) — asserted by the test running green
-      in both conditions (skip path verified by temporarily masking PATH or via the skip predicate).
+- [ ] **AC5** — a real-binary smoke test exists, **`skipIf`-guarded** on the `sandesh` binary being
+      resolvable (so it skips, not fails, when absent). When it runs, it asserts `sandesh --version`
+      exits 0 with a **loose** parseable version (`/^sandesh \S+/`, NOT semver) and a `setup`→`register`
+      →`send`→`fetch` round-trip (driving the shim's `execute` via a real spawning `pi.exec`, valid
+      `'<Orch> - <Project>'` addresses, temp `$XDG_DATA_HOME`) surfaces the sent subject. (The
+      reinstall prerequisite in §S2 must be honored or `--version` fails on a stale binary.)
 - [ ] **AC6** — full `integrations/pi` suite green; `tsc --noEmit` clean; **Sandesh-core untouched**
       (`git diff develop..HEAD -- sandesh/` empty) and **no change** to `package.json`
       `peerDependencies`/`dependencies` (#2 rejected), `tsconfig.json` (#3 rejected), or
       `mcp_server.py` (#4 already correct).
 
-## Gap-analysis findings
-_To be completed by `/gap-analysis CR-SAN-019` before the feature branch — confirm `cli.py` prints the
-tombstone message to **stdout** (so `r.stdout` carries it), confirm no other verb legitimately returns
-exit 3, and decide the `--version` floor question (smoke-only vs enforced minimum)._
+## Gap-analysis findings (2026-06-07) — verdict READY (spec updated)
+
+Verified against the actual code. **§S1 (the defect fix) is accurate, no drift:**
+- `runSandesh` (`index.ts:139-143`) matches the spec; returns `AgentToolResult<undefined>`/`details:
+  undefined` — the exit-3 success return slots in cleanly.
+- `cli.py:90-92` **prints the tombstone message to stdout** then `return 3` ⇒ §S1's "use `r.stdout`" is
+  correct (risk resolved).
+- **Exit 3 is unique to `unregister`** (`grep`: only `cli.py:92`; all other verbs return 0 or
+  `sys.exit(<str>)`→1) ⇒ scoping the special-case to `verb==="unregister"` is safe.
+- The wake loop uses `pi.exec` **directly** (`index.ts:526`) and reads `r.code` (`:533`) — NOT via
+  `runSandesh` ⇒ unaffected.
+- AC6 invariants hold now: `package.json` has no `dependencies` (peerDeps `"*"`); tsconfig standalone;
+  `mcp_server` uses `description=` (0× `desc=`).
+
+**§S2 (smoke test) — 5 non-blocking findings, folded into the spec above:**
+- **DRIFT-1 (env, important):** the on-PATH `sandesh` is **STALE** and lacks `--version` (`sandesh
+  --version` → **exit 2**). Repo source is correct (`python3 -m sandesh.cli --version` → `sandesh
+  0+unknown`, exit 0; top-level parser `cli.py:221`); the installed `~/.local/share/sandesh/app/cli.py`
+  predates it. ⇒ **GREEN/VERIFY MUST re-run `./install.sh`** before exercising AC5. (Same root cause
+  would make the shipped wake-loop prereq probe `index.ts:464` mis-detect the CLI as missing against a
+  stale install — operational, not a repo defect.)
+- **DRIFT-2:** version is `sandesh 0+unknown` pre-tag ⇒ assert loose `/^sandesh \S+/`, not semver.
+- **DRIFT-3:** drive the captured tools' `execute` with a real spawning `pi.exec` (precedent:
+  `package.test.ts` `spawnSync`) to actually catch argv skew.
+- **DRIFT-4:** round-trip needs valid `'<Orch> - <Project>'` addresses (project part == project_id) +
+  temp `$XDG_DATA_HOME`.
+- **DRIFT-5:** AC5 softened to "`skipIf`-guarded" (don't mechanically assert the skip branch).
+
+No downstream CRs depend on CR-SAN-019. **Proceed to the feature branch.**
 
 ## Estimated size
 Small: one scoped change in `runSandesh`/`unregister` `execute` + its tests, plus one new real-binary
 smoke test file. All under `integrations/pi/`; no Sandesh-core changes.
 
 ## Risks / open questions
-- **Message source** — verify the tombstone text is on `r.stdout` (cli.py uses `print`); fall back to
-  `r.stderr` defensively.
+- **Message source** — confirmed: the tombstone text is on `r.stdout` (`cli.py:90` `print`); fall back
+  to `r.stderr` defensively.
+- **Stale install (DRIFT-1)** — `sandesh --version` exits 2 on a stale on-PATH binary; re-run
+  `./install.sh` before running the smoke test or AC5 fails spuriously. The repo source is correct.
+- **Version format (DRIFT-2)** — pre-tag the version is `0+unknown` (hatch-vcs fallback); assert loosely.
 - **Smoke-test hermeticity / CI** — must skip cleanly without the CLI and must not pollute the real data
   home (temp `$XDG_DATA_HOME`); confirm the bun test runner can spawn the real process in CI.
 - **Other exit-3 producers** — `notify`'s exit codes (2/3/4/5) are NOT routed through `runSandesh`
