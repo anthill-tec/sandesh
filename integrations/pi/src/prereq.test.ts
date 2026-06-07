@@ -257,7 +257,7 @@ describe("AC7b — missing CLI (non-zero code) → notice surfaced, no throw", (
 
     const { fakeCtx, notifyCalls } = makeFakeCtx();
     // Must NOT throw
-    await expect(handler!(fakeSessionStartEvent, fakeCtx)).resolves.not.toThrow();
+    await expect(handler!(fakeSessionStartEvent, fakeCtx)).resolves.toBeUndefined();
 
     expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
   });
@@ -318,8 +318,10 @@ describe("AC7b — missing CLI (non-zero code) → notice surfaced, no throw", (
     await handler!(fakeSessionStartEvent, fakeCtx);
 
     const notice = notifyCalls[0];
+    expect(notice).toBeDefined();
     // Must be surfaced as warning or error, not silently as info
-    expect(["warning", "error"]).toContain(notice.type);
+    const noticeSeverity: string = notice!.type ?? "";
+    expect(["warning", "error"]).toContain(noticeSeverity);
   });
 
   test("exec rejection (CLI not on PATH) → ctx.ui.notify is called, no throw", async () => {
@@ -331,7 +333,7 @@ describe("AC7b — missing CLI (non-zero code) → notice surfaced, no throw", (
 
     const { fakeCtx, notifyCalls } = makeFakeCtx();
     // Must NOT throw even when exec rejects
-    await expect(handler!(fakeSessionStartEvent, fakeCtx)).resolves.not.toThrow();
+    await expect(handler!(fakeSessionStartEvent, fakeCtx)).resolves.toBeUndefined();
 
     expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
   });
@@ -392,6 +394,6 @@ describe("AC7c — present CLI (code 0) → no install notice surfaced", () => {
     const handler = getSessionStartHandler();
     const { fakeCtx } = makeFakeCtx();
 
-    await expect(handler!(fakeSessionStartEvent, fakeCtx)).resolves.not.toThrow();
+    await expect(handler!(fakeSessionStartEvent, fakeCtx)).resolves.toBeUndefined();
   });
 });

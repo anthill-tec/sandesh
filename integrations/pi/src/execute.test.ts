@@ -49,6 +49,7 @@ function makeFakePi(execResult: ExecResult = { stdout: "ok-output", stderr: "", 
       capturedTools.set(tool.name, tool);
     }),
     exec: execMock,
+    on: mock(() => {}),
   } as unknown as ExtensionAPI;
 
   return { fakePi, capturedTools, execMock };

@@ -31,6 +31,7 @@ function makeFakePi() {
     // Stub the rest of ExtensionAPI so TypeScript is satisfied at the call site.
     // C0 only exercises registerTool; all other members are unused.
     exec: mock(async () => ({ stdout: "", stderr: "", code: 0, killed: false })),
+    on: mock(() => {}),
   } as unknown as ExtensionAPI;
 
   return { fakePi, capturedTools, registerTool };
