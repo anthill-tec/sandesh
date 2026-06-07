@@ -18,14 +18,6 @@ Run:
     --agent CR-SAN-008-C3-RED
 """
 
-import sys
-import os
-
-# Ensure the sandesh package is importable from the project source layout.
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
-
 import inspect
 import unittest
 from importlib import resources
@@ -173,9 +165,7 @@ class UsageDocPackagingTest(unittest.IsolatedAsyncioTestCase):
           - 'importlib' and 'resources' must appear in the source.
           - 'repo_root' must NOT appear (the docs-walk variable is gone).
         """
-        src_path = os.path.join(_REPO_ROOT, "sandesh", "mcp_server.py")
-        with open(src_path, "r", encoding="utf-8") as fh:
-            src = fh.read()
+        src = inspect.getsource(mcp_server)
 
         # Must use importlib.resources (the new mechanism).
         self.assertIn(

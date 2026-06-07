@@ -1,4 +1,4 @@
-"""app/mcp_server.py — Sandesh MCP server (stdio).
+"""sandesh/mcp_server.py — Sandesh MCP server (stdio).
 
 A thin adapter exposing Sandesh's verbs as MCP tools over stdio. It owns no business
 logic — each tool resolves the project store and delegates to `sandesh_db.*` (the same
@@ -6,7 +6,8 @@ role `cli.py` plays for the terminal). The wake path stays the standalone `notif
 watcher; this server never re-invokes a sleeping agent (PRD §6).
 
 `mcp` is the only third-party dependency and is imported ONLY here — the CLI path stays
-stdlib-only. Run it via the venv interpreter (the `sandesh-mcp` wrapper); see install.sh.
+stdlib-only. Exposed as the `sandesh-mcp` console script (entry point
+`sandesh.mcp_server:main`); requires the `[mcp]` extra.
 
 Phase 2 / CR-SAN-001 (foundation + sandesh_setup). Later CRs add the remaining tools.
 """
