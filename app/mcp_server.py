@@ -26,7 +26,24 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-mcp = FastMCP("sandesh")
+SANDESH_INSTRUCTIONS = """Sandesh relays messages between cooperating agent orchestrators in the Model-B
+workflow: a Mainline coordinator session plus parallel Track worker sessions that
+cannot talk to each other directly. Addresses represent orchestrators, formatted
+'Mainline - <Project>' or 'Track N - <Project>'.
+
+Two channels, one boundary: this MCP server carries the VERBS (send, reply, fetch,
+inbox, register, ...). The WAKE is out-of-band and is NOT an MCP tool — an MCP server
+cannot re-invoke a sleeping agent. To be woken, an agent launches the standalone
+`sandesh notify` process via its host's `run_in_background` mechanism; when mail
+addressed to it arrives, that background watcher exits and the host wakes the agent,
+which then calls sandesh_fetch.
+
+Lifecycle without a status field: reading a message (fetch) means "received and now
+being acted on"; sending a reply means done — reply signals completion of the
+requested work. See the sandesh://usage resource for full Model-B scenarios."""
+
+
+mcp = FastMCP("sandesh", instructions=SANDESH_INSTRUCTIONS)
 
 
 def _resolve_project(project_id=None):
@@ -398,6 +415,47 @@ def sandesh_reply(
     finally:
         if con is not None:
             con.close()
+
+
+_USAGE_FALLBACK = """# Sandesh — Usage (fallback)
+
+The usage-scenarios document could not be located on disk. Sandesh is a Model-B
+agent-messaging relay (Mainline coordinator + parallel Track workers). For the full
+scenarios, consult the bundled docs/usage-scenarios.md, the MCP tool docstrings
+(each tool's description explains who calls it and why), and the project repository
+at https://github.com/anthill-tec/sandesh.
+"""
+
+
+def _read_usage_doc() -> str:
+    """Return the contents of docs/usage-scenarios.md, resolved relative to this file.
+
+    Walks a couple of candidate locations (source layout <repo>/app/ + <repo>/docs/,
+    and an installed layout) so it does not depend on the CWD. Falls back to a
+    non-empty stub if the file cannot be found or read."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.dirname(here)
+    candidates = [
+        os.path.join(repo_root, "docs", "usage-scenarios.md"),
+        os.path.join(here, "docs", "usage-scenarios.md"),
+        os.path.join(here, "usage-scenarios.md"),
+    ]
+    for path in candidates:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                content = fh.read()
+            if content.strip():
+                return content
+        except OSError:
+            continue
+    return _USAGE_FALLBACK
+
+
+@mcp.resource("sandesh://usage", mime_type="text/markdown")
+def usage_doc() -> str:
+    """The Sandesh usage & communication-scenarios document (Model-B walkthroughs,
+    tool-by-tool reference). Read-only; served from docs/usage-scenarios.md."""
+    return _read_usage_doc()
 
 
 def main():
