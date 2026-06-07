@@ -24,11 +24,16 @@ shells to `sandesh`.
 ### §S1 — Scaffold `integrations/pi/` (TS package)
 - `integrations/pi/` with `package.json` (name e.g. `@anthill-tec/sandesh-pi`, `type: module`),
   `tsconfig.json`, and tests run by **`bun test`** (native TS test runner — built-in JUnit + lcov,
-  zero extra deps; `bun:test` for `test`/`expect`/`mock`/`spyOn`). Dev-dependency on
-  **`@earendil-works/pi-coding-agent`** (for `ExtensionAPI` types) and **`@earendil-works/pi-ai`**
-  (for `StringEnum`) + **`typebox`** (param schemas). No runtime deps beyond what Pi provides.
-- The extension entry is a single default-exported function `export default function (pi: ExtensionAPI) { … }`
-  loadable from `.pi/extensions/` or `~/.pi/agent/extensions/` (packaging/listing = CR-SAN-015).
+  zero extra deps; `bun:test` for `test`/`expect`/`mock`/`spyOn`).
+- **Dependency declaration (verified against Pi's `docs/packages.md`):** Pi **bundles** its core
+  packages for extensions — `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, **`typebox`**
+  — so list the ones we import in **`peerDependencies` with a `"*"` range and do NOT bundle them**.
+  Mirror them in **`devDependencies`** (pinned, e.g. `@earendil-works/pi-coding-agent@^0.78`) so
+  `bun test` / `tsc` resolve types + `StringEnum`/`Type` locally during dev. No other runtime deps.
+- **Declare the extension entry via the `pi` key** in `package.json`:
+  `"pi": { "extensions": ["./src/index.ts"] }` (the package mechanism, per the `with-deps` example) —
+  in addition to the `export default function (pi: ExtensionAPI) { … }` entry. (Dev loading also works
+  from `.pi/extensions/` / `~/.pi/agent/extensions/`; packaging/listing = CR-SAN-015.)
 - `.gitignore` the TS build artifacts (`integrations/pi/node_modules/`, `dist/`).
 
 ### §S2 — Register the Sandesh verbs as Pi tools
@@ -97,12 +102,25 @@ the model per D7; `notify` is the wake → CR-SAN-014; `projects` is non-essenti
 / `reply --all` exist in the CLI (deferred core, CR-SAN-012) but are **deliberately not exposed**
 (matching the MCP surface).
 
-**Verdict: READY** — mapping table is the build contract; no blocking drift (Sandesh-core untouched).
+**Re-run (2026-06-07, `/gap-analysis CR-013`) — two SPEC_UPDATEs applied (now READY):**
+- **DRIFT-1 (Dim 2):** Pi **bundles** `@earendil-works/pi-coding-agent` / `@earendil-works/pi-ai` /
+  `typebox` for extensions (Pi `docs/packages.md`): import them as **`peerDependencies: "*"`, do NOT
+  bundle**; mirror in `devDependencies` for local `bun test`/`tsc`. (Was mis-specified as plain
+  devDependencies.) Verified `StringEnum`←`@earendil-works/pi-ai`, `Type`←`typebox`, pkg
+  `@earendil-works/pi-coding-agent@0.78.1`.
+- **DRIFT-2 (Dim 2):** the extension entry is declared via the **`pi` key** in `package.json`
+  (`"pi": { "extensions": ["./src/index.ts"] }`), per the canonical `with-deps` example — folded
+  into §S1/AC1.
+
+**Verdict: READY** — mapping table is the build contract; deps/entry corrected; no blocking drift
+(Sandesh-core untouched).
 
 ## Acceptance criteria
 
-- [ ] **AC1** — `integrations/pi/` exists with `package.json` (+ `tsconfig.json`); a
-      `default`-exported `(pi: ExtensionAPI) => void` entry; `bun test` runs in that folder.
+- [ ] **AC1** — `integrations/pi/` exists with `package.json` (+ `tsconfig.json`) declaring the
+      `pi.extensions` entry and the Pi-bundled packages (`@earendil-works/pi-coding-agent`,
+      `@earendil-works/pi-ai`, `typebox`) as `peerDependencies: "*"` (mirrored in `devDependencies`);
+      a `default`-exported `(pi: ExtensionAPI) => void` entry; `bun test` runs in that folder.
 - [ ] **AC2** — the extension registers **exactly 9** tools named `sandesh_setup`,
       `sandesh_register`, `sandesh_unregister`, `sandesh_addressbook`, `sandesh_send`,
       `sandesh_reply`, `sandesh_inbox`, `sandesh_fetch`, `sandesh_thread` (asserted via a mocked
