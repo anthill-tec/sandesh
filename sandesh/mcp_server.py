@@ -13,6 +13,7 @@ Phase 2 / CR-SAN-001 (foundation + sandesh_setup). Later CRs add the remaining t
 
 import os
 import sys
+from importlib import resources
 
 from sandesh import sandesh_db
 
@@ -425,40 +426,34 @@ requested work. See the sandesh://usage resource for full Model-B scenarios."""
 
     The usage-scenarios document could not be located on disk. Sandesh is a Model-B
     agent-messaging relay (Mainline coordinator + parallel Track workers). For the full
-    scenarios, consult the bundled docs/usage-scenarios.md, the MCP tool docstrings
+    scenarios, consult the bundled sandesh/data/usage-scenarios.md, the MCP tool docstrings
     (each tool's description explains who calls it and why), and the project repository
     at https://github.com/anthill-tec/sandesh.
     """
 
 
     def _read_usage_doc() -> str:
-        """Return the contents of docs/usage-scenarios.md, resolved relative to this file.
+        """Return the bundled usage-scenarios.md (package data), else a stub.
 
-        Walks a couple of candidate locations (source layout <repo>/app/ + <repo>/docs/,
-        and an installed layout) so it does not depend on the CWD. Falls back to a
-        non-empty stub if the file cannot be found or read."""
-        here = os.path.dirname(os.path.abspath(__file__))
-        repo_root = os.path.dirname(here)
-        candidates = [
-            os.path.join(repo_root, "docs", "usage-scenarios.md"),
-            os.path.join(here, "docs", "usage-scenarios.md"),
-            os.path.join(here, "usage-scenarios.md"),
-        ]
-        for path in candidates:
-            try:
-                with open(path, "r", encoding="utf-8") as fh:
-                    content = fh.read()
-                if content.strip():
-                    return content
-            except OSError:
-                continue
+        Reads sandesh/data/usage-scenarios.md via importlib.resources, which works
+        both from a source checkout/editable install and from the built wheel — no
+        dev/install divergence and no dependence on the CWD. Falls back to a
+        non-empty stub if the resource cannot be found or read."""
+        try:
+            res = resources.files("sandesh").joinpath("data/usage-scenarios.md")
+            text = res.read_text(encoding="utf-8")
+            if text.strip():
+                return text
+        except (FileNotFoundError, OSError, ModuleNotFoundError):
+            pass
         return _USAGE_FALLBACK
 
 
     @mcp.resource("sandesh://usage", mime_type="text/markdown")
     def usage_doc() -> str:
         """The Sandesh usage & communication-scenarios document (Model-B walkthroughs,
-        tool-by-tool reference). Read-only; served from docs/usage-scenarios.md."""
+        tool-by-tool reference). Read-only; served from bundled package data
+        (sandesh/data/usage-scenarios.md)."""
         return _read_usage_doc()
 
 
