@@ -35,8 +35,10 @@ is **not** offered; local-path (`pi install ./integrations/pi`) remains the dev/
   `typebox`) — Pi provides them; do NOT bundle (CR-SAN-013 §S1).
 - `license` (GPL-3.0-only, matching the repo), `repository` (the GitHub repo + `directory:
   "integrations/pi"`), `description`, `publishConfig: { access: "public" }` (scoped `@anthill-tec`).
-- Version: decide whether the TS package version tracks the Sandesh release or versions
-  independently (it depends on the `sandesh` CLI at runtime, not the Python version) — see decisions.
+- **Version = track the Sandesh release** (gap-analysis decision): the extension's
+  `package.json` version is hand-bumped to match the `vX.Y.Z` release tag (the Python
+  `sandesh-relay` version) at each release — "same version everywhere." (Documented as a
+  RELEASING.md step, alongside the git tag; the Python side stays hatch-vcs tag-driven.)
 
 ### §S2 — gallery metadata (pi.dev/packages)
 - `keywords: ["pi-package"]` makes it appear in the gallery; optionally add `pi.image` / `pi.video`
@@ -77,9 +79,24 @@ is **not** offered; local-path (`pi install ./integrations/pi`) remains the dev/
 - [ ] **AC6** — Sandesh-core untouched; all existing `integrations/pi` suites stay green; tsc clean.
       (The actual `npm publish` + gallery listing are maintainer actions, documented not executed.)
 
+## Gap-analysis findings (2026-06-07) — verdict READY
+
+Verified against Pi `docs/packages.md` + the current `integrations/pi/package.json` + `npm pack`:
+- **npm is the mechanism** (Dim 1): Pi `git:` clones the repo root and has **no subdir syntax** — it
+  cannot install `integrations/pi/`; npm publish is the clean path for a subdir package.
+- **Implementation deltas** (Dim 2): package.json currently lacks `keywords`/`files`/`license`/
+  `repository`/`publishConfig`; `npm pack --dry-run` today ships `*.test.ts` + bun.lock and **no
+  README/LICENSE**. §S1/AC1/AC3 add the metadata + a `files` allowlist; **AC4's README + a LICENSE
+  must exist for the pack test (AC3) to pass** — so the extension README + LICENSE are part of the
+  same cycle as the package.json work, not a later docs-only step.
+- **Decisions:** npm name **`@anthill-tec/sandesh-pi`** (scoped; needs the npm `anthill-tec` org —
+  maintainer prereq); publish = **manual `npm publish`** (documented, like CR-SAN-011); version =
+  **tracks the Sandesh release** (`X.Y.Z`, hand-bumped at release).
+- **Dim 3:** shim thin, Sandesh-core untouched. No blocking drift.
+
 ## Estimated size
-Small: package.json publish metadata + a `npm pack` test + an extension README + repo doc notes. The
-real effort is the maintainer prerequisites (npm `@anthill-tec` org + publish) — out of CI scope.
+Small: package.json publish metadata + extension README + LICENSE + a `npm pack` test + repo doc
+notes. The real effort is the maintainer prerequisites (npm `@anthill-tec` org + publish) — out of CI scope.
 
 ## Risks / open questions
 - **`git:` can't target the subdir** → npm is the only clean distribution (decided above). If npm is
