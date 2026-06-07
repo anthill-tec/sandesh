@@ -99,3 +99,29 @@ Releases are built from `main` via git-flow; the version comes from the tag.
 
 The **first** release is `v0.1.0` — it also converts the *pending* publishers (prereqs #1/#2) to
 active and creates the PyPI project.
+
+---
+
+## Listing on the official MCP Registry (after the PyPI publish)
+
+Sandesh ships a [`server.json`](server.json) (`io.github.anthill-tec/sandesh`) for the official MCP
+Registry. The registry **verifies ownership against the live PyPI package** — it fetches
+`https://pypi.org/pypi/sandesh-relay/json` and checks the README (the long-description) for the
+marker `mcp-name: io.github.anthill-tec/sandesh` (present as an HTML comment in `README.md`, so it
+ships via `readme = "README.md"`). So publish to the registry **only after** the package (with that
+README) is live on PyPI.
+
+One-time + per-listing (maintainer, as an `anthill-tec` GitHub member):
+
+```bash
+# install the publisher CLI (see modelcontextprotocol/registry releases), then:
+mcp-publisher login github
+mcp-publisher publish --dry-run     # validate server.json
+mcp-publisher publish               # list io.github.anthill-tec/sandesh
+```
+
+- The `io.github.*` namespace authenticates via GitHub (the repo owner/org).
+- `server.json`'s `version` should track the published PyPI version; bump it when re-listing a new
+  release.
+- CI validates `server.json` structurally (the `tests/test_server_json.py` suite); the authoritative
+  validation is `mcp-publisher publish --dry-run`.

@@ -1,6 +1,6 @@
 # CR-SAN-011 — Official MCP Registry listing (`server.json`)
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-011)
 **Priority:** Medium
 **Depends on:** CR-SAN-008 (package), CR-SAN-010 (PyPI publish — the registry verifies the package)
 **Labels:** phase-3, distribution, mcp-registry
@@ -60,23 +60,23 @@ field for this.)
 
 ## Acceptance criteria
 
-- [ ] **AC1** — `server.json` exists at the repo root, is valid JSON, declares the pinned
+- [x] **AC1** — `server.json` exists at the repo root, is valid JSON, declares the pinned
       `$schema` (2025-12-11), and `name = "io.github.anthill-tec/sandesh"` (asserted by a test
       parsing `server.json`).
-- [ ] **AC2** — `server.json` declares the **PyPI** package (`registryType: pypi`,
+- [x] **AC2** — `server.json` declares the **PyPI** package (`registryType: pypi`,
       `identifier: sandesh-relay`) with stdio transport and the run matching the `sandesh-mcp`
       console script / `uvx --from 'sandesh-relay[mcp]' sandesh-mcp` (asserted by parsing
       `server.json`).
-- [ ] **AC3** — **`README.md` contains the ownership marker** `mcp-name: io.github.anthill-tec/sandesh`
+- [x] **AC3** — **`README.md` contains the ownership marker** `mcp-name: io.github.anthill-tec/sandesh`
       (an HTML comment is fine) and it **matches** `server.json`'s `name` (asserted by a test
       reading both). The marker reaches PyPI via `readme = "README.md"`. (NOT a pyproject field.)
-- [ ] **AC4** — `server.json` validates against the pinned JSON-schema (a CI test;
+- [x] **AC4** — `server.json` validates against the pinned JSON-schema (a CI test;
       `jsonschema`-validate the file, or a structural check if the lib is unavailable — note which).
       The actual `mcp-publisher publish` is documented in RELEASING.md as a manual maintainer step
       gated on the live PyPI package (it can't run in this CR's CI).
-- [ ] **AC5** — the `server.json` description states the wake (`notify`) is NOT an MCP tool
+- [x] **AC5** — the `server.json` description states the wake (`notify`) is NOT an MCP tool
       (separate background process) — asserted by a substring on the description.
-- [ ] **AC6** — README documents discovery via the registry; RELEASING.md documents the
+- [x] **AC6** — README documents discovery via the registry; RELEASING.md documents the
       `mcp-publisher` publish step (post-`v0.1.0`, manual).
 
 ## Gap-analysis findings (2026-06-07) — verdict SPEC_UPDATE applied; now READY
@@ -113,3 +113,25 @@ Most effort was confirming the current registry schema + PyPI verification mecha
 - HTTP/SSE transport.
 - Running the actual `mcp-publisher publish` (a manual maintainer action after the `v0.1.0` PyPI
   publish; this CR ships `server.json` + the README marker + the schema-validation test + docs).
+
+## Implementation Notes (2026-06-07)
+
+One cycle (C0) + a docs step, agent-dispatched, then VERIFY → pre-merge. **No `sandesh/` code
+changed** (`git diff develop..HEAD -- sandesh/` empty).
+
+- **C0** — RED (`2576576`): `tests/test_server_json.py` — contract assertions for `server.json`
+  (schema/name/packages/description) + README marker + jsonschema validation. GREEN (`fc5e3d8`):
+  `server.json` (`io.github.anthill-tec/sandesh`, `$schema` 2025-12-11, PyPI `sandesh-relay`,
+  `runtimeHint: uvx`, stdio, `runtimeArguments` for `--from 'sandesh-relay[mcp]' sandesh-mcp`) +
+  `<!-- mcp-name: io.github.anthill-tec/sandesh -->` in README. Included an **orchestrator-approved
+  test-only fix**: the RED marker-match regex `[^\s\-\->]+` excluded hyphens (truncated the name);
+  corrected to `[\w./-]+` (stricter full-name equality, not weaker).
+- **Docs**: README "Discover via the MCP Registry" note (server only; wake separate) + RELEASING.md
+  `mcp-publisher login/publish` step (post-`v0.1.0`, ownership via the README marker).
+- **VERIFY** (`CR-SAN-011-VERIFY`): all AC1–AC6 PASS, 0 blocking; **independently validated
+  `server.json` against the real fetched 2025-12-11 schema (jsonschema.validate → PASS)**; no prod
+  code changed. 1 suggestion (vendor the schema for self-contained CI — future).
+- **Pre-merge gate**: no prod Python changed; stdlib baseline green; **full venv suite 204/204
+  green** (incl. 20 server.json tests).
+- **Remaining maintainer action:** the live registry publish (`mcp-publisher publish`) after the
+  `v0.1.0` PyPI release — documented in RELEASING.md, gated on the live package.
