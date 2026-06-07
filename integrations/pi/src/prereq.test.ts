@@ -378,8 +378,19 @@ describe("AC7c — present CLI (code 0) → no install notice surfaced", () => {
     const { fakeCtx, notifyCalls } = makeFakeCtx();
     await handler!(fakeSessionStartEvent, fakeCtx);
 
-    // No missing-CLI notice when sandesh is present
-    expect(notifyCalls.length).toBe(0);
+    // CLI present must NOT trigger the missing-CLI / install notice.
+    // (A missing-env notice may still surface — that's CR-SAN-014 AC4 — so we
+    // assert specifically that none of the notices carry install wording.)
+    const hasInstallNotice = notifyCalls.some((c) => {
+      const msg = c.message;
+      return (
+        msg.includes("uv tool install") ||
+        msg.includes("pipx") ||
+        msg.includes("install.sh") ||
+        msg.includes("PATH")
+      );
+    });
+    expect(hasInstallNotice).toBe(false);
   });
 
   test("probe succeeds → handler does not throw", async () => {

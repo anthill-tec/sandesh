@@ -15,10 +15,76 @@ import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {
   AgentToolResult,
+  ExecResult,
   ExtensionAPI,
   ExtensionContext,
+  SessionShutdownEvent,
   SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
+
+// ---------------------------------------------------------------------------
+// Native wake loop (CR-SAN-014 C0) — backoff seam
+// ---------------------------------------------------------------------------
+
+/** Backoff cap (ms) for the wake loop's error branch (notify exit 1/other). */
+const WAKE_BACKOFF_MS = 5000;
+
+/**
+ * Injectable sleep for the wake loop's error-branch backoff. Defaults to a real
+ * timer; tests replace it with a no-op via {@link __setWakeSleepFn} so the
+ * backoff path resolves immediately.
+ */
+let wakeSleepFn: () => Promise<void> = () =>
+  new Promise<void>((res) => setTimeout(res, WAKE_BACKOFF_MS));
+
+/** Test seam: inject the wake-loop backoff sleep (e.g. a no-op in tests). */
+export function __setWakeSleepFn(fn: () => Promise<void>): void {
+  wakeSleepFn = fn;
+}
+
+// ---------------------------------------------------------------------------
+// Wake-loop lifecycle state (CR-SAN-014 C1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Single-loop guard: true while a wake loop is active. A second `session_start`
+ * while the loop runs does NOT start a second concurrent loop.
+ */
+let wakeLoopRunning = false;
+
+/**
+ * Module-level AbortController for the active wake loop. `session_shutdown`
+ * aborts it; its signal is threaded into every `pi.exec("sandesh", … notify …)`
+ * call so a long-blocking notify is cancelled on shutdown.
+ */
+let wakeController: AbortController | undefined;
+
+/**
+ * Stopped flag set by `session_shutdown`. The wake loop checks it so it exits
+ * and does not re-arm after a shutdown.
+ */
+let wakeStopped = false;
+
+/**
+ * Test seam: reset the wake-loop lifecycle state (single-loop guard, controller,
+ * stopped flag) so a fresh `session_start` can start one loop. Mirrors
+ * {@link __setWakeSleepFn}.
+ */
+export function __resetWakeState(): void {
+  wakeLoopRunning = false;
+  wakeController = undefined;
+  wakeStopped = false;
+}
+
+/**
+ * Notice surfaced when the CLI probe succeeds but this session's identity env
+ * vars are unset. Names BOTH $SANDESH_ADDRESS and $SANDESH_PROJECT so the user
+ * knows what to set to enable native wake (§S4 / AC4). Distinct from the
+ * missing-CLI notice.
+ */
+const MISSING_ENV_NOTICE =
+  "Sandesh native wake is disabled: $SANDESH_ADDRESS and $SANDESH_PROJECT are not both set. " +
+  "Set $SANDESH_ADDRESS (this session's address) and $SANDESH_PROJECT (the project id) to enable it.";
 
 /**
  * Install-options notice surfaced when the `sandesh` CLI is not reachable.
@@ -149,6 +215,12 @@ interface ThreadParams {
 // ---------------------------------------------------------------------------
 
 export default function registerExtension(pi: ExtensionAPI): void {
+  // Each extension registration owns a fresh wake-loop lifecycle: clear the
+  // single-loop guard / controller / stopped flag so this registration's first
+  // session_start starts exactly one loop (the guard then persists across
+  // re-entrant session_start until __resetWakeState() or the next registration).
+  __resetWakeState();
+
   // sandesh_setup — provision a project's store (idempotent).
   pi.registerTool({
     name: "sandesh_setup",
@@ -353,18 +425,104 @@ export default function registerExtension(pi: ExtensionAPI): void {
     },
   });
 
-  // Missing-CLI prerequisite probe (AC7). On session start, probe
-  // `sandesh --version`; if the CLI is unreachable (exec rejects or non-zero
-  // code), surface a one-time install notice via ctx.ui.notify. The probe never
-  // blocks tool registration and never throws.
+  // Missing-CLI prerequisite probe (AC7) + native wake loop (CR-SAN-014 C0).
+  // On session start, probe `sandesh --version`; if the CLI is unreachable
+  // (exec rejects or non-zero code), surface a one-time install notice via
+  // ctx.ui.notify (the probe never blocks tool registration and never throws).
+  // When the probe succeeds and the session identity is known, start a detached
+  // wake loop that arms `sandesh notify` and surfaces unread mail.
   pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext): Promise<void> => {
+    let probeOk = false;
     try {
       const r = await pi.exec("sandesh", ["--version"]);
-      if (r.code !== 0) {
+      if (r.code === 0) {
+        probeOk = true;
+      } else {
         ctx.ui.notify(MISSING_CLI_NOTICE, "warning");
       }
     } catch {
       ctx.ui.notify(MISSING_CLI_NOTICE, "warning");
     }
+
+    if (!probeOk) return;
+
+    // Probe-gated wake loop: only arm when this session's identity is known.
+    // When env is missing, surface a distinct notice naming both env vars
+    // (AC4) and do NOT start the loop.
+    const self = process.env.SANDESH_ADDRESS;
+    const project = process.env.SANDESH_PROJECT;
+    if (!self || !project) {
+      ctx.ui.notify(MISSING_ENV_NOTICE, "warning");
+      return;
+    }
+
+    // Single-loop guard: a second session_start while a loop runs must not
+    // spawn a second concurrent loop.
+    if (wakeLoopRunning) return;
+    wakeLoopRunning = true;
+    wakeStopped = false;
+    wakeController = new AbortController();
+
+    // Fire-and-forget: the detached loop owns its own lifetime; the handler
+    // must not await it (it blocks on `sandesh notify`).
+    void wakeLoop(pi, project, self, wakeController.signal);
   });
+
+  // session_shutdown — stop the wake loop: abort any in-flight notify and set
+  // the stopped flag so the loop exits and does not re-arm (AC5).
+  pi.on("session_shutdown", async (_event: SessionShutdownEvent, _ctx: ExtensionContext): Promise<void> => {
+    wakeStopped = true;
+    if (wakeController) wakeController.abort();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Wake loop — arms `sandesh notify` and reacts to its exit code (W1 design).
+// ---------------------------------------------------------------------------
+
+/**
+ * Detached wake loop. Repeatedly runs `sandesh --project <P> notify --to <self>`
+ * and dispatches on the notify exit code:
+ *   - 0           → unread mail: prompt the agent to fetch, then re-arm.
+ *   - 2           → timeout: re-arm silently.
+ *   - 3 | 4 | 5   → terminal (tombstoned / evicted / dedup): stop.
+ *   - 1 | other   → error: back off (injectable sleep) then re-arm.
+ */
+async function wakeLoop(
+  pi: ExtensionAPI,
+  project: string,
+  self: string,
+  signal: AbortSignal,
+): Promise<void> {
+  let stopped = false;
+  // Respect the module-level stopped flag so an abort/shutdown breaks the loop.
+  while (!stopped && !wakeStopped) {
+    const r: ExecResult = await pi.exec(
+      "sandesh",
+      ["--project", project, "notify", "--to", self],
+      { signal },
+    );
+    // A shutdown during the awaited notify must prevent any re-arm.
+    if (wakeStopped) break;
+    switch (r.code) {
+      case 0:
+        pi.sendUserMessage(
+          `You have unread Sandesh mail — call sandesh_fetch for "${self}", then act on it.`,
+        );
+        break; // re-arm
+      case 2:
+        break; // re-arm, no message
+      case 3:
+      case 4:
+      case 5:
+        stopped = true; // terminal — stop the loop
+        break;
+      default:
+        await wakeSleepFn(); // backoff, then re-arm
+        break;
+    }
+  }
+  // The single-loop guard stays set for this session's lifetime once a loop has
+  // started; only __resetWakeState() clears it so a fresh session_start (after a
+  // reset) can start exactly one new loop (AC5f/AC5h).
 }
