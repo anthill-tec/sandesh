@@ -1,6 +1,6 @@
 # CR-SAN-009 — AUR PKGBUILD (Arch packaging, secondary)
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-009)
 **Priority:** Medium
 **Depends on:** CR-SAN-008 (the package + pyproject), CR-SAN-010 (PyPI publish — if the source is the PyPI sdist)
 **Labels:** phase-3, distribution, aur, arch
@@ -65,21 +65,21 @@ Generate `packaging/aur/.SRCINFO` via `makepkg --printsrcinfo > .SRCINFO` (AUR r
 
 ## Acceptance criteria
 
-- [ ] **AC1** — `packaging/aur/PKGBUILD` exists with `pkgname` (the agreed name), `pkgver`,
+- [x] **AC1** — `packaging/aur/PKGBUILD` exists with `pkgname` (the agreed name), `pkgver`,
       `arch=('any')`, `license=('GPL-3.0-only')`, `depends=('python')`, the `optdepends` for
       `python-mcp`, and `makedepends` of `python-build`/`python-installer`/`python-hatchling`/`python-hatch-vcs`
       (asserted by parsing the PKGBUILD).
-- [ ] **AC2** — `build()` uses `python -m build` (hatchling) and `package()` installs via
+- [x] **AC2** — `build()` uses `python -m build` (hatchling) and `package()` installs via
       `python -m installer … dist/*.whl` and installs `LICENSE` under
       `usr/share/licenses/$pkgname/` (asserted by parsing the PKGBUILD).
-- [ ] **AC3** — `packaging/aur/.SRCINFO` exists and equals `makepkg --printsrcinfo` output (the
+- [x] **AC3** — `packaging/aur/.SRCINFO` exists and equals `makepkg --printsrcinfo` output (the
       committed `.SRCINFO` is in sync — asserted by regenerating and diffing).
-- [ ] **AC4** — `namcap packaging/aur/PKGBUILD` reports no errors (warnings triaged/justified), and
+- [x] **AC4** — `namcap packaging/aur/PKGBUILD` reports no errors (warnings triaged/justified), and
       `shellcheck` (with makepkg's known globals) is clean — recorded.
-- [ ] **AC5** — the source line resolves to the agreed source (PyPI sdist `sandesh_relay-$pkgver`
+- [x] **AC5** — the source line resolves to the agreed source (PyPI sdist `sandesh_relay-$pkgver`
       *or* the GitHub tag) and `sha256sums` are present (`SKIP` allowed only for a VCS source);
       version provenance: the built package version == `pkgver` == release `X.Y.Z`.
-- [ ] **AC6** — README documents `yay -S <pkg>` (Arch) + the `python-mcp` (AUR) note; RELEASING.md
+- [x] **AC6** — README documents `yay -S <pkg>` (Arch) + the `python-mcp` (AUR) note; RELEASING.md
       documents the AUR push step (maintainer, post-PyPI-release).
 
 ## Gap-analysis findings (2026-06-07) — verdict READY
@@ -119,3 +119,25 @@ gated on the source being published (PyPI sdist post-`v0.1.0`); lint + .SRCINFO 
 - Official `[extra]`/`community` repo inclusion (AUR only).
 - Windows runtime, Homebrew/.deb/.rpm/Nix (PRD §6).
 - Any change to the package code, MCP tools, or messaging semantics.
+
+## Implementation Notes (2026-06-07)
+
+One cycle (C0) + a docs step, agent-dispatched, then VERIFY → pre-merge. **No `sandesh/` code
+changed** (`git diff develop..HEAD -- sandesh/` empty).
+
+- **C0** — RED (`2510ca3`): `tests/test_pkgbuild.py` — text-parse contract (metadata/build/source) +
+  real `makepkg --printsrcinfo` sync, `namcap`, `shellcheck` gates. GREEN (`ece8e7a`):
+  `packaging/aur/PKGBUILD` (pkgname `sandesh-relay`, `arch=any`, GPL-3.0-only, `depends=python`,
+  `optdepends=python-mcp`, official `makedepends`, PyPI-sdist source, hatchling `build()` +
+  `installer` `package()` + LICENSE install, `sha256sums=('SKIP')` placeholder) + `.SRCINFO`. Added
+  two lint directives (`# shellcheck shell=bash`, `cd … || exit 1`).
+- **Docs**: README "Arch Linux (AUR)" entry (`yay -S sandesh-relay`, `python-mcp` AUR optdep,
+  PEP-668 sidestep) + RELEASING.md AUR-publish step (`updpkgsums` → `.SRCINFO` → `git push`
+  ssh://aur, post-PyPI-release).
+- **VERIFY** (`CR-SAN-009-VERIFY`): all AC1–AC6 PASS, 0 blocking; **namcap zero-output, shellcheck
+  exit 0, `.SRCINFO` byte-identical to `makepkg --printsrcinfo`**; no prod code changed.
+- **Pre-merge gate**: namcap clean; `.SRCINFO` in sync; stdlib baseline green; **full venv suite
+  230/230 green** (+26 PKGBUILD tests).
+- **Remaining maintainer action:** at the `v0.1.0` release — `updpkgsums` (fill the real checksum
+  from the published sdist), regen `.SRCINFO`, `makepkg -f` sanity, `git push` to the AUR
+  (documented in RELEASING.md). Gated on the CR-SAN-010 PyPI publish.
