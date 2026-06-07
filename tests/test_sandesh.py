@@ -4,12 +4,10 @@
 """
 
 import os
-import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app"))
-import sandesh_db as s
+from sandesh import sandesh_db as s
 
 PROJ = "Nai"
 MAINLINE = "Mainline - Nai"
