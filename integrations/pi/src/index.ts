@@ -220,6 +220,8 @@ export default function registerExtension(pi: ExtensionAPI): void {
     label: "Sandesh: Setup",
     description:
       "Provision the Sandesh store for a project (idempotent). Run once before registering addresses or sending messages.",
+    promptSnippet:
+      "Provision a project's Sandesh store (create DB + dirs); run once before anything else.",
     parameters: Type.Object({
       project_id: projectIdParam,
     }),
@@ -235,6 +237,8 @@ export default function registerExtension(pi: ExtensionAPI): void {
     label: "Sandesh: Register",
     description:
       "Register a durable address in the project's addressbook. Addresses follow the format '<Orchestrator> - <Project>' (e.g. 'Mainline - Demo', 'Track 1 - Demo').",
+    promptSnippet:
+      "Add an address to the project's addressbook (self-register on join).",
     parameters: Type.Object({
       address: Type.String({
         description: "Address to register, formatted '<Orchestrator> - <Project>'.",
@@ -263,6 +267,8 @@ export default function registerExtension(pi: ExtensionAPI): void {
     label: "Sandesh: Unregister",
     description:
       "Remove an address from the addressbook. Mainline may unregister anyone; any address may unregister itself.",
+    promptSnippet:
+      "Remove an address (Mainline may remove anyone; any address may remove itself).",
     parameters: Type.Object({
       address: Type.String({ description: "Address to unregister." }),
       requester: Type.Optional(
@@ -284,6 +290,8 @@ export default function registerExtension(pi: ExtensionAPI): void {
     name: "sandesh_addressbook",
     label: "Sandesh: Addressbook",
     description: "List the active addresses registered in the project's addressbook.",
+    promptSnippet:
+      "List all participants and who is currently listening (live notifier).",
     parameters: Type.Object({
       project_id: projectIdParam,
     }),
@@ -299,6 +307,14 @@ export default function registerExtension(pi: ExtensionAPI): void {
     label: "Sandesh: Send",
     description:
       "Send a message. Recipients in 'to' wake on their next notify; recipients in 'cc' are delivered silently (Cc never wakes — it is swept up on the recipient's next fetch). Use the reserved 'all-tracks' recipient to broadcast to every active address except the sender.",
+    promptSnippet:
+      "Send a message to another orchestrator — To wakes the recipient, Cc is silent.",
+    promptGuidelines: [
+      "'to' recipients are woken on their next notify; act-this is the To role.",
+      "'cc' recipients are delivered silently — Cc never wakes a watcher (awareness only); it is swept up on the recipient's next fetch.",
+      "to: [\"all-tracks\"] broadcasts to every active address except the sender.",
+      "'subject' is mandatory; omit a body for a subject-only message.",
+    ],
     parameters: Type.Object({
       from: Type.String({ description: "Sender address." }),
       to: Type.Array(Type.String(), {
@@ -339,6 +355,13 @@ export default function registerExtension(pi: ExtensionAPI): void {
     label: "Sandesh: Reply",
     description:
       "Reply to a message, threading on the original. 'parent_id' is the original message's id; the reply defaults its recipient to the parent's sender and prefixes the subject with 'Re:'.",
+    promptSnippet:
+      "Reply to a message (threads under it); a recipient uses this to signal completion.",
+    promptGuidelines: [
+      "'parent_id' is the original message's id — the message you are replying to.",
+      "Reply defaults its recipient to the parent's sender and the subject to 'Re: …'.",
+      "Read ≠ done: completion is signalled by a reply (read = being acted on, reply = done), often subject-only.",
+    ],
     parameters: Type.Object({
       parent_id: Type.Number({
         description: "Id of the original message being replied to.",
@@ -365,6 +388,8 @@ export default function registerExtension(pi: ExtensionAPI): void {
     label: "Sandesh: Inbox",
     description:
       "List messages addressed to a recipient. By default shows unread only; set unread_only=false to include everything.",
+    promptSnippet:
+      "List an address's messages without consuming them (triage; does not mark read).",
     parameters: Type.Object({
       recipient: Type.String({ description: "Address whose inbox to list." }),
       unread_only: Type.Optional(
@@ -387,6 +412,12 @@ export default function registerExtension(pi: ExtensionAPI): void {
     label: "Sandesh: Fetch",
     description:
       "Fetch the messages addressed to a recipient, marking them read. Set mark=false to peek without marking.",
+    promptSnippet:
+      "Read an address's unread messages (consolidates to+cc, marks read) — call after notify wakes you.",
+    promptGuidelines: [
+      "Consolidates the address's unread to+cc messages into one view and marks them read.",
+      "Set mark=false (or use sandesh_inbox) to peek without consuming.",
+    ],
     parameters: Type.Object({
       recipient: Type.String({ description: "Address whose messages to fetch." }),
       mark: Type.Optional(
@@ -408,6 +439,8 @@ export default function registerExtension(pi: ExtensionAPI): void {
     name: "sandesh_thread",
     label: "Sandesh: Thread",
     description: "Walk the reply chain of a message, showing the full conversation thread.",
+    promptSnippet:
+      "Print a message's full reply chain (root → leaf) to reconstruct a conversation.",
     parameters: Type.Object({
       msg_id: Type.Number({ description: "Id of a message in the thread to walk." }),
       project_id: projectIdParam,
