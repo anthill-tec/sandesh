@@ -13,7 +13,21 @@
 
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ExtensionContext,
+  SessionStartEvent,
+} from "@earendil-works/pi-coding-agent";
+
+/**
+ * Install-options notice surfaced when the `sandesh` CLI is not reachable.
+ * Names the CLI and at least one install option (uv tool install / pipx /
+ * install.sh) and mentions PATH (§S4 / AC7).
+ */
+const MISSING_CLI_NOTICE =
+  "sandesh CLI not found on PATH. Install it with `uv tool install sandesh` or " +
+  "`pipx install sandesh` (or run the repo's install.sh), then ensure it is on your PATH.";
 
 // ---------------------------------------------------------------------------
 // Shared parameter fragments
@@ -337,5 +351,20 @@ export default function registerExtension(pi: ExtensionAPI): void {
       const args = [...projectPrefix(params.project_id), "thread", "--id", String(params.msg_id)];
       return runSandesh(pi, "thread", args, signal);
     },
+  });
+
+  // Missing-CLI prerequisite probe (AC7). On session start, probe
+  // `sandesh --version`; if the CLI is unreachable (exec rejects or non-zero
+  // code), surface a one-time install notice via ctx.ui.notify. The probe never
+  // blocks tool registration and never throws.
+  pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext): Promise<void> => {
+    try {
+      const r = await pi.exec("sandesh", ["--version"]);
+      if (r.code !== 0) {
+        ctx.ui.notify(MISSING_CLI_NOTICE, "warning");
+      }
+    } catch {
+      ctx.ui.notify(MISSING_CLI_NOTICE, "warning");
+    }
   });
 }
