@@ -235,24 +235,6 @@ def sandesh_reply(
             con.close()
 
 
-@mcp.tool()
-def sandesh_actioned(msg_id: int, project_id: str | None = None) -> int:
-    """Mark a message's status as 'actioned'. Returns the message id.
-
-    project_id falls back to $SANDESH_PROJECT if omitted.
-    """
-    con = None
-    try:
-        _project, _store, con = _ctx(project_id)
-        sandesh_db.set_status(con, msg_id, "actioned")
-        return msg_id
-    except (ValueError, PermissionError) as e:
-        raise ToolError(str(e)) from e
-    finally:
-        if con is not None:
-            con.close()
-
-
 def main():
     """Run the MCP server over stdio."""
     mcp.run(transport="stdio")
