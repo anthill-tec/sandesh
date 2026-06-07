@@ -17,9 +17,8 @@ import argparse
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import sandesh_db as sdb
-import notify as _notify
+from sandesh import sandesh_db as sdb
+from sandesh import notify as _notify
 
 
 def _project(args):

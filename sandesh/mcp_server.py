@@ -12,15 +12,11 @@ Phase 2 / CR-SAN-001 (foundation + sandesh_setup). Later CRs add the remaining t
 """
 
 import os
-import sys
 from typing import Annotated
 
 from pydantic import Field
 
-# Make the sibling library importable whether run as a script (app/ is sys.path[0])
-# or imported as a module in tests.
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import sandesh_db
+from sandesh import sandesh_db
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError

@@ -5,4 +5,5 @@
 set -euo pipefail
 self="$(readlink -f "${BASH_SOURCE[0]}")"
 here="$(dirname "$self")"
-exec python3 "$here/../app/cli.py" "$@"
+root="$(dirname "$here")"
+exec env PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" python3 -m sandesh.cli "$@"

@@ -31,8 +31,7 @@ import sys
 import time
 import uuid
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import sandesh_db as sdb
+from sandesh import sandesh_db as sdb
 
 POLL_FLOOR_SECS = 3
 DEFAULT_POLL_SECS = 10
