@@ -2,7 +2,7 @@
 
 **Status:** PENDING
 **Priority:** High
-**Depends on:** CR-SAN-001, CR-SAN-002, CR-SAN-003, CR-SAN-004
+**Depends on:** CR-SAN-001, CR-SAN-002, CR-SAN-003, CR-SAN-004, CR-SAN-005 (9-tool surface), CR-SAN-006 (`sandesh://usage` resource — its doc must be bundled here, §S7)
 **Labels:** phase-3, distribution, packaging, refactor
 **Phase:** Phase 3
 **Design reference:** docs/research/PRD-distribution.md §3 (D1–D4, D6), §5
@@ -35,7 +35,9 @@ Out of scope here: the AUR PKGBUILD (CR-SAN-009) and Windows **runtime** (DN-win
   `GPL-3.0-or-later` if the "or later" upgrade clause is wanted) + the GPLv3 trove classifier.
 - `[project.scripts]`: `sandesh = "sandesh.cli:main"`, `sandesh-mcp = "sandesh.mcp_server:main"`.
 - `[project.optional-dependencies]`: `mcp = ["mcp>=1.27,<2"]`.
-- A build backend (setuptools or hatchling — CR decides); core CLI has **no** runtime deps.
+- **Build backend: `hatchling`** (gap-analysis decision). `[build-system] requires = ["hatchling"]`,
+  `build-backend = "hatchling.build"`. Core CLI has **no** runtime deps. Configure hatchling to
+  include the package and the bundled usage doc (§S7) as package data.
 
 ### §S3 — Install paths (installer-agnostic; **`uv` primary**, per PRD-distribution D2)
 The package is installer-agnostic; the entry points are what each installer puts on `$PATH`.
@@ -62,9 +64,22 @@ The package is installer-agnostic; the entry points are what each installer puts
   pipx. On Arch, the AUR PKGBUILD (CR-SAN-009) sidesteps this entirely (pacman resolves deps).
 
 ### §S4 — Tests adapt to the package layout
-- Update test imports to the package (drop `sys.path` hacks); the whole suite stays green.
-- T3 (e2e subprocess) spawns the server via the installed `sandesh-mcp` entry point **or**
-  `python -m sandesh.mcp_server` (CR decides), not the old `app/mcp_server.py` path.
+The current suite is **7 files**, all using `sys.path.insert(..., "app")` + bare
+`import sandesh_db`/`import mcp_server`/`import cli`. Convert every one to package imports:
+- **stdlib (mcp-free):** `tests/test_sandesh.py` → `from sandesh import sandesh_db`.
+- **MCP suites:** `tests/test_mcp_server.py`, `tests/test_mcp_read_tools.py`,
+  `tests/test_mcp_mutating_tools.py`, `tests/test_mcp_surface.py` → `from sandesh import mcp_server`
+  / `from sandesh import sandesh_db` (drop the `sys.path` hack).
+- **e2e:** `tests/test_mcp_e2e.py` → package imports; **T3 spawns via `python -m sandesh.mcp_server`**
+  (gap-analysis decision — robust without requiring the console script on PATH), not the old
+  `app/mcp_server.py` path.
+- **`tests/test_install.py` — REWRITE** (gap-analysis decision): it currently asserts the *old*
+  `install.sh` venv+wrapper + `app/mcp_server.py` (CR-SAN-001 AC1–AC3), which §S1/§S5 dismantle.
+  Replace it with **package-install integration tests**: in a fresh venv, `pip install .` →
+  `sandesh`/`sandesh-mcp` on PATH + stdlib-only CLI works with no `mcp` (AC3); `pip install '.[mcp]'`
+  → `import mcp` works + server launches (AC4); base install `sandesh-mcp` prints the friendly error
+  and exits non-zero (AC8). (May be renamed `tests/test_package_install.py`.)
+- The whole suite stays green under the new layout.
 
 ### §S5 — `install.sh` demoted to fallback
 - Keep a working offline/dev install (either a thin wrapper that runs `pip install .` into a
@@ -79,6 +94,21 @@ message and a non-zero exit — e.g.:
 > `sandesh-mcp requires the MCP extra. Install it with:  pipx install 'sandesh[mcp]'  (or  pip install 'sandesh[mcp]')`
 
 — instead of a traceback. The `sandesh` CLI is unaffected (it never imports `mcp`).
+
+### §S7 — Bundle the usage doc so `sandesh://usage` serves real content when installed
+CR-SAN-006 added the `sandesh://usage` MCP resource, whose `_read_usage_doc()` resolves
+`docs/usage-scenarios.md` by walking up from the module file. That works from a source checkout,
+but a pip/uv/pipx install ships **only the `sandesh/` package — not the repo `docs/`** — so the
+resource silently degrades to its stub. CR-SAN-006 deferred bundling to this CR; do it now:
+- **Include `usage-scenarios.md` as package data** inside the `sandesh` package (e.g.
+  `sandesh/data/usage-scenarios.md`, kept in sync with / sourced from `docs/usage-scenarios.md`),
+  declared to hatchling so it ships in the wheel.
+- **Switch `_read_usage_doc()` to `importlib.resources`** (e.g.
+  `importlib.resources.files("sandesh").joinpath("data/usage-scenarios.md").read_text()`) to read
+  the bundled copy — robust in any install layout — keeping the non-empty stub as the final
+  fallback. (Keep a single source of truth: either move the canonical doc under the package and
+  have the repo `docs/` reference it, or copy it in at build time — CR decides the sync mechanism;
+  simplest is to relocate the canonical file under `sandesh/data/` and update the few doc links.)
 
 ## Acceptance criteria
 
@@ -112,10 +142,38 @@ message and a non-zero exit — e.g.:
       `uv` (`pacman -S uv` / Astral script / `pip install --user uv`) or `pipx`
       (`pip install --user pipx`) **and** the `install.sh` fallback, plus a PEP-668 warning that
       plain `pip install` into system Python is blocked (use a venv / uv / pipx).
+- [ ] **AC10** — the usage doc is bundled as package data and `sandesh://usage` serves the **real**
+      content from an installed wheel: after `pip install '.[mcp]'` in a clean venv,
+      `read_resource("sandesh://usage")` returns the full `usage-scenarios.md` (NOT the stub) —
+      asserted by a substring unique to the doc (e.g. `"Model-B"` / a §-heading); and
+      `grep -rn "sys.path.insert" sandesh/` is empty (the resource uses `importlib.resources`, not a
+      path walk). (Build mechanics: `python -m build`/`hatchling` wheel contains `usage-scenarios.md`.)
+- [ ] **AC11** — all **7** test modules pass under the package layout with no `sys.path` hacks in
+      tests: stdlib `tests/test_sandesh.py` under system `python3` (no `mcp`); the MCP suites
+      (`test_mcp_server`, `test_mcp_read_tools`, `test_mcp_mutating_tools`, `test_mcp_surface`,
+      `test_mcp_e2e`) under the `[mcp]` env; and the rewritten `test_install.py`/`test_package_install.py`
+      exercising the package install (AC3/AC4/AC8). T3 spawns via `python -m sandesh.mcp_server`.
+
+## Gap-analysis findings (2026-06-07) — verdict SPEC_UPDATE applied; now READY
+
+Analyzed against `develop` after CR-SAN-005/006 merged (this CR predated them). Findings folded
+into scope above:
+- **DRIFT-1 (Dim 3 → §S7/AC10):** CR-SAN-006's `sandesh://usage` resolves `docs/usage-scenarios.md`
+  by walking up from the module; an installed wheel ships no `docs/`, so it degrades to the stub.
+  Resolution: bundle the doc as package data + `importlib.resources` (§S7), asserted by AC10.
+- **DRIFT-2 (Dim 2 → §S4/AC11):** real test inventory is **7 files**, all with `sys.path.insert`
+  hacks; **`test_install.py` tests the old `install.sh` venv+wrapper + `app/mcp_server.py`** that
+  §S1/§S5 dismantle. Resolution: enumerate all 7 in §S4, rewrite `test_install.py` for the package
+  install, AC11.
+- **DRIFT-3 (Dim 1, minor):** Depends-on updated to include CR-SAN-005/006.
+- **Decisions (gap-analysis):** build backend = **hatchling**; usage doc = **bundle + importlib.resources**;
+  `test_install.py` = **rewrite for package install**; T3 = **`python -m sandesh.mcp_server`**;
+  `install.sh` = **kept as the PEP-668-safe own-venv fallback** (PRD D6), rewritten to the new layout.
+- **No blocking code drift** — the move is structural; `mcp` stays isolated to `sandesh/mcp_server.py`.
 
 ## Estimated size
 Medium–large: a structural refactor (module moves + import rewrites across code & tests) +
-`pyproject.toml` + installer/README edits. Mechanical but broad.
+`pyproject.toml` + installer/README edits + doc bundling. Mechanical but broad.
 
 ## Risks / open questions
 - The `sys.path.insert` test bootstrap is removed — every test's imports change; do it
