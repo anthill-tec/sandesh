@@ -156,3 +156,29 @@ cd aur-sandesh-relay && git commit -am "X.Y.Z-1" && git push
 - `python-mcp` is an **AUR** dependency (optdepends) — yay/paru resolve it for users who want the
   server. The repo keeps `sha256sums=('SKIP')` as a pre-publish placeholder; `updpkgsums` fills the
   real hash at release.
+
+---
+
+## Publishing the Pi extension (npm, after the release)
+
+The Sandesh **Pi extension** lives at [`integrations/pi/`](integrations/pi/) and is distributed via
+**npm** as **`@anthill-tec/sandesh-pi`** (Pi's `git:` install can't target a repo subdir, so npm is
+the mechanism). Pi users then `pi install npm:@anthill-tec/sandesh-pi`; it appears on the
+[pi.dev/packages](https://pi.dev/packages) gallery via the `pi-package` keyword.
+
+One-time prerequisite: the **`@anthill-tec` npm org** must exist and you a member.
+
+Per release (maintainer):
+
+```bash
+cd integrations/pi
+# 1. version tracks the Sandesh release (X.Y.Z == the vX.Y.Z tag)
+#    edit package.json "version" to X.Y.Z
+bun test && bun x tsc --noEmit          # green + typecheck
+npm pack --dry-run                       # sanity: ships src/index.ts + README.md + LICENSE, no *.test.ts
+npm publish --access public              # scoped public publish
+```
+
+- The extension depends on the **`sandesh` CLI** on PATH (the PyPI/AUR install) — it shells to it
+  via `pi.exec`; it does not bundle Sandesh-core.
+- `@earendil-works/*` + `typebox` stay `peerDependencies` (Pi bundles them) — not shipped in the tarball.

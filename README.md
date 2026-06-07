@@ -199,9 +199,14 @@ python3 -m unittest -v          # from the repo root (stdlib-only: CLI + library
   `sandesh`/`sandesh-mcp` console scripts, `[mcp]` extra; uv/pipx/`install.sh` install.
 - **PyPI publish — DONE** (Phase 3, CR-SAN-010): `.github/workflows/publish-pypi.yml` publishes
   `sandesh-relay` to PyPI on a GitHub Release via OIDC trusted publishing (TestPyPI dry-run on
-  manual dispatch); version is git-tag-driven. See **[RELEASING.md](RELEASING.md)**. (The first
-  `v0.1.0` release to PyPI is a maintainer action.)
-- **Next** (Phase 3): AUR `PKGBUILD` (CR-SAN-009), official MCP Registry listing (CR-SAN-011).
+  manual dispatch); version is git-tag-driven. See **[RELEASING.md](RELEASING.md)**.
+- **Discovery/distribution — DONE** (Phase 3): AUR `PKGBUILD` (CR-SAN-009, `packaging/aur/`) +
+  official **MCP Registry** listing (CR-SAN-011, [`server.json`](server.json) `io.github.anthill-tec/sandesh`).
+- **Pi extension — DONE** (Phase 4): a native Pi extension at [`integrations/pi/`](integrations/pi/)
+  — registers the Sandesh verbs as Pi tools (CR-SAN-013) and a **native wake** (CR-SAN-014: the
+  extension wakes the idle agent itself via `sendUserMessage`, no host background task) — published to
+  npm as `@anthill-tec/sandesh-pi` (CR-SAN-015). See [`integrations/pi/README.md`](integrations/pi/README.md).
+- The first `v0.1.0` releases (PyPI / AUR / MCP-registry / npm) are maintainer actions — see RELEASING.md.
 
 ## License
 
