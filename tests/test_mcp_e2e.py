@@ -18,7 +18,6 @@ Result-shape reference (confirmed via /tmp probes, mcp 1.27.x):
   python-crucible.py test --tests tests.test_mcp_e2e --agent CR-SAN-004-C0-RED
 """
 
-import asyncio
 import os
 import shutil
 import sys
