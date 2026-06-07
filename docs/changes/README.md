@@ -26,7 +26,9 @@ PyPI distribution name: **`sandesh-relay`** (`sandesh` is taken; import package 
 Pi integration: see **[PRD-pi-extension](../research/PRD-pi-extension.md)** — a native Pi *extension* (not MCP); its CRs (scaffold/verbs, wake-spike, packaging) spin from that PRD.
 Phase 4 (Pi) — monorepo TS subfolder `integrations/pi/` (**bun** + TypeScript, `bun test`), driven by the
 **`bun-*` agents** via **`bun-crucible.py`**. CR-SAN-013 (verbs) → CR-SAN-014 (native wake, design W1) → CR-SAN-015 (packaging).
-CR-SAN-012 deferred (core status retirement). CR-SAN-007 superseded.
+CR-SAN-012 deferred (core status retirement) — **must include a SQLite migration** for existing
+stores when it drops `message.status` (`CREATE TABLE IF NOT EXISTS` only covers new installs; SQLite
+column-drop needs a rebuild/migration). CR-SAN-007 superseded.
 
 ## Canonical statuses
 `PENDING` / `IN_PROGRESS` / `COMPLETED` / `SUPERSEDED` / `DEFERRED`
