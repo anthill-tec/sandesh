@@ -40,11 +40,8 @@ except ImportError:
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.dirname(_HERE)
 _VENV_PYTHON = os.path.join(_REPO, ".venv", "bin", "python")
-_MCP_SERVER_PY = os.path.join(_REPO, "app", "mcp_server.py")
 
-# Add app/ to sys.path so sandesh_db is importable for seeding helpers.
-sys.path.insert(0, os.path.join(_REPO, "app"))
-import sandesh_db as sdb  # noqa: E402 — must come after sys.path insert
+from sandesh import sandesh_db as sdb
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +95,7 @@ class T2InMemoryClientServerTest(unittest.IsolatedAsyncioTestCase):
         """AC1 (CR-SAN-005) — session.list_tools() returns exactly 9 tools by name.
         RED driver: currently 10 (sandesh_actioned still present) — both assertions will FAIL."""
         # Import here so collection still works when HAS_MCP is False at module level
-        import mcp_server  # noqa: F401 — project-local module
+        from sandesh import mcp_server  # noqa: F401
 
         async with create_connected_server_and_client_session(mcp_server.mcp) as session:
             list_result = await session.list_tools()
@@ -127,7 +124,7 @@ class T2InMemoryClientServerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_ac2_addressbook_matches_seeded_db_state(self):
         """AC2 — sandesh_addressbook via ClientSession returns the seeded addressbook."""
-        import mcp_server  # noqa: F401
+        from sandesh import mcp_server  # noqa: F401
 
         # Seed via the library directly (same XDG_DATA_HOME)
         store = sdb.setup(self.PROJ)
@@ -160,7 +157,7 @@ class T2InMemoryClientServerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_ac2_send_then_fetch_round_trip(self):
         """AC2 — sandesh_send via ClientSession; the message is fetchable by the recipient."""
-        import mcp_server  # noqa: F401
+        from sandesh import mcp_server  # noqa: F401
 
         # Seed addressbook via library
         store = sdb.setup(self.PROJ)
@@ -206,7 +203,7 @@ class T2InMemoryClientServerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_ac3_register_malformed_address_returns_error_result(self):
         """AC3 — sandesh_register with a malformed address: client receives isError=True."""
-        import mcp_server  # noqa: F401
+        from sandesh import mcp_server  # noqa: F401
 
         # Ensure the project store exists so the error is about the address, not setup
         sdb.setup(self.PROJ)
@@ -239,7 +236,7 @@ class T2InMemoryClientServerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_ac2_cc_recipient_stays_unread_after_to_reads(self):
         """AC2 bound — after the 'to' recipient fetches, cc recipient is still unread."""
-        import mcp_server  # noqa: F401
+        from sandesh import mcp_server  # noqa: F401
 
         # Three-address scenario: sender -> to + cc
         SENDER = "Track 1 - E2EMemory"
@@ -328,7 +325,7 @@ class T3SubprocessStdioTest(unittest.IsolatedAsyncioTestCase):
         """AC4 — setup→register→send→fetch over a real subprocess; body round-trips."""
         params = StdioServerParameters(
             command=_VENV_PYTHON,
-            args=[_MCP_SERVER_PY],
+            args=["-m", "sandesh.mcp_server"],
             env={**os.environ, "XDG_DATA_HOME": self.tmp},
         )
         async with stdio_client(params) as (read, write):
@@ -414,7 +411,7 @@ class T3SubprocessStdioTest(unittest.IsolatedAsyncioTestCase):
         RED driver: currently 10 — both assertions will FAIL."""
         params = StdioServerParameters(
             command=_VENV_PYTHON,
-            args=[_MCP_SERVER_PY],
+            args=["-m", "sandesh.mcp_server"],
             env={**os.environ, "XDG_DATA_HOME": self.tmp},
         )
         async with stdio_client(params) as (read, write):
@@ -442,7 +439,7 @@ class T3SubprocessStdioTest(unittest.IsolatedAsyncioTestCase):
         """AC5 — a tool error (malformed address) is returned as isError=True over stdio."""
         params = StdioServerParameters(
             command=_VENV_PYTHON,
-            args=[_MCP_SERVER_PY],
+            args=["-m", "sandesh.mcp_server"],
             env={**os.environ, "XDG_DATA_HOME": self.tmp},
         )
         async with stdio_client(params) as (read, write):

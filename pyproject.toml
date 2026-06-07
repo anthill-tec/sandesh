@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sandesh-relay"
+dynamic = ["version"]
+description = "SQLite-backed multi-project messaging relay for cooperating agent/orchestrator sessions"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-only"
+authors = [{ name = "Antony John" }]
+keywords = ["mcp", "messaging", "agents", "orchestration", "sqlite"]
+classifiers = [
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX",
+  "Topic :: Communications",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.27,<2"]
+
+[project.scripts]
+sandesh = "sandesh.cli:main"
+sandesh-mcp = "sandesh.mcp_server:main"
+
+[project.urls]
+Homepage = "https://github.com/anthill-tec/sandesh"
+Repository = "https://github.com/anthill-tec/sandesh"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sandesh"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"sandesh/data/usage-scenarios.md" = "sandesh/data/usage-scenarios.md"

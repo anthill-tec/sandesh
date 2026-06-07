@@ -1,6 +1,6 @@
 # CR-SAN-008 — Packaging: `pyproject.toml`, `sandesh/` package, console scripts, `[mcp]` extra
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-008)
 **Priority:** High
 **Depends on:** CR-SAN-001, CR-SAN-002, CR-SAN-003, CR-SAN-004, CR-SAN-005 (9-tool surface), CR-SAN-006 (`sandesh://usage` resource — its doc must be bundled here, §S7)
 **Labels:** phase-3, distribution, packaging, refactor
@@ -30,9 +30,17 @@ Out of scope here: the AUR PKGBUILD (CR-SAN-009) and Windows **runtime** (DN-win
 - `[project]`: **`name = "sandesh-relay"`** — the PyPI *distribution* name (`sandesh` is already
   taken on PyPI). NOTE: distribution name ≠ import name — the **import package stays `sandesh`**
   and the **console scripts stay `sandesh` / `sandesh-mcp`**; only the `pip install` name is
-  `sandesh-relay`. Plus a version, `requires-python = ">=3.10"` (matches the `mcp` extra),
+  `sandesh-relay`. Plus `requires-python = ">=3.10"` (matches the `mcp` extra),
   description, readme, **`license = "GPL-3.0-only"`** (SPDX; matches the repo `LICENSE` — or
   `GPL-3.0-or-later` if the "or later" upgrade clause is wanted) + the GPLv3 trove classifier.
+- **Version = git-tag-driven via `hatch-vcs`** (gap-analysis decision). `[project]` declares
+  `dynamic = ["version"]` (NOT a static `version =`); `[tool.hatch.version] source = "vcs"`; and the
+  build backend requires `["hatchling", "hatch-vcs"]`. Single source of truth = the **git tag**:
+  semver `major.minor.patch`, tags formatted **`vX.Y.Z`** (e.g. `v0.1.0`); hatch-vcs strips the `v`
+  so the PEP 440 / PyPI version is `0.1.0`. Between tags, builds version as `0.1.1.devN+g<sha>`.
+  The first release tag (`v0.1.0`) is cut on the eventual git-flow release to `main` (CR-SAN-010
+  publishes the exact tagged version); on `develop` the dev-suffixed version is expected/fine.
+  Expose `sandesh.__version__` (and a `sandesh --version`) via `importlib.metadata.version`.
 - `[project.scripts]`: `sandesh = "sandesh.cli:main"`, `sandesh-mcp = "sandesh.mcp_server:main"`.
 - `[project.optional-dependencies]`: `mcp = ["mcp>=1.27,<2"]`.
 - **Build backend: `hatchling`** (gap-analysis decision). `[build-system] requires = ["hatchling"]`,
@@ -112,43 +120,48 @@ resource silently degrades to its stub. CR-SAN-006 deferred bundling to this CR;
 
 ## Acceptance criteria
 
-- [ ] **AC1** — a `sandesh/` package exists (`__init__.py` + `cli.py`, `sandesh_db.py`,
+- [x] **AC1** — a `sandesh/` package exists (`__init__.py` + `cli.py`, `sandesh_db.py`,
       `notify.py`, `mcp_server.py`); `grep -rn "sys.path.insert" sandesh/` returns nothing
       (no path hacks in production modules).
-- [ ] **AC2** — `pyproject.toml` declares `[project.scripts]` `sandesh = "sandesh.cli:main"`
+- [x] **AC2** — `pyproject.toml` declares `[project.scripts]` `sandesh = "sandesh.cli:main"`
       and `sandesh-mcp = "sandesh.mcp_server:main"`, `[project.optional-dependencies]
       mcp = ["mcp>=1.27,<2"]`, and `requires-python >= 3.10`.
-- [ ] **AC3** — in a clean venv, `pip install .` then `sandesh --help` exits 0 with **no**
+- [x] **AC2b** — versioning is git-tag-driven: `[build-system].requires` includes `hatch-vcs`,
+      `[project].dynamic` includes `"version"` (no static `version =`), and
+      `[tool.hatch.version].source == "vcs"`. A build from a `vX.Y.Z`-tagged checkout produces the
+      `X.Y.Z` PEP 440 version (asserted by config presence; build-from-tag check optional), and
+      `sandesh.__version__` / `sandesh --version` resolves via `importlib.metadata`.
+- [x] **AC3** — in a clean venv, `pip install .` then `sandesh --help` exits 0 with **no**
       `mcp` installed (stdlib-only CLI), and `which sandesh` / `which sandesh-mcp` resolve on
       `$PATH` (the venv's scripts dir).
-- [ ] **AC4** — `pip install '.[mcp]'` makes `python -c "import mcp"` succeed in that env and
+- [x] **AC4** — `pip install '.[mcp]'` makes `python -c "import mcp"` succeed in that env and
       `sandesh-mcp` launches the stdio server; `grep -rln "import mcp" sandesh/` lists only
       `mcp_server.py`.
-- [ ] **AC5** — `cli.main` and `mcp_server.main` are importable callables wired to the entry
+- [x] **AC5** — `cli.main` and `mcp_server.main` are importable callables wired to the entry
       points (the console scripts invoke them).
-- [ ] **AC6** — the full test suite passes against the new layout: the stdlib tests
+- [x] **AC6** — the full test suite passes against the new layout: the stdlib tests
       (`sandesh_db`/CLI) run with system `python3` and **no** `mcp`; the MCP + e2e tests run
       under the `[mcp]` env; T3 spawns via the entry point / `python -m sandesh.mcp_server`.
-- [ ] **AC7** — README install section **leads with `uv`** (`uv tool install 'sandesh[mcp]'`
+- [x] **AC7** — README install section **leads with `uv`** (`uv tool install 'sandesh[mcp]'`
       persistent, and `uvx --from 'sandesh[mcp]' sandesh-mcp` ephemeral), notes the dual-channel
       recommendation (persistent install so the wake's `sandesh` is on PATH), lists **`pipx`**
       (`pipx install … && pipx ensurepath`, +`--global`) as the alternative, and documents
       `install.sh` as the offline/from-source fallback (still functional).
-- [ ] **AC8** — in a base install (no `[mcp]`), running `sandesh-mcp` prints a clear message
+- [x] **AC8** — in a base install (no `[mcp]`), running `sandesh-mcp` prints a clear message
       naming the fix (`pipx install 'sandesh[mcp]'`) and exits non-zero — **not** a raw
       `ImportError`/traceback. (Test: invoke the entry point in an env without `mcp`; assert the
       message + non-zero exit.) The `sandesh` CLI still works in that same env.
-- [ ] **AC9** — README handles **no installer present (uv/pipx absent)**: a bootstrap line for
+- [x] **AC9** — README handles **no installer present (uv/pipx absent)**: a bootstrap line for
       `uv` (`pacman -S uv` / Astral script / `pip install --user uv`) or `pipx`
       (`pip install --user pipx`) **and** the `install.sh` fallback, plus a PEP-668 warning that
       plain `pip install` into system Python is blocked (use a venv / uv / pipx).
-- [ ] **AC10** — the usage doc is bundled as package data and `sandesh://usage` serves the **real**
+- [x] **AC10** — the usage doc is bundled as package data and `sandesh://usage` serves the **real**
       content from an installed wheel: after `pip install '.[mcp]'` in a clean venv,
       `read_resource("sandesh://usage")` returns the full `usage-scenarios.md` (NOT the stub) —
       asserted by a substring unique to the doc (e.g. `"Model-B"` / a §-heading); and
       `grep -rn "sys.path.insert" sandesh/` is empty (the resource uses `importlib.resources`, not a
       path walk). (Build mechanics: `python -m build`/`hatchling` wheel contains `usage-scenarios.md`.)
-- [ ] **AC11** — all **7** test modules pass under the package layout with no `sys.path` hacks in
+- [x] **AC11** — all **7** test modules pass under the package layout with no `sys.path` hacks in
       tests: stdlib `tests/test_sandesh.py` under system `python3` (no `mcp`); the MCP suites
       (`test_mcp_server`, `test_mcp_read_tools`, `test_mcp_mutating_tools`, `test_mcp_surface`,
       `test_mcp_e2e`) under the `[mcp]` env; and the rewritten `test_install.py`/`test_package_install.py`
@@ -166,9 +179,11 @@ into scope above:
   §S1/§S5 dismantle. Resolution: enumerate all 7 in §S4, rewrite `test_install.py` for the package
   install, AC11.
 - **DRIFT-3 (Dim 1, minor):** Depends-on updated to include CR-SAN-005/006.
-- **Decisions (gap-analysis):** build backend = **hatchling**; usage doc = **bundle + importlib.resources**;
-  `test_install.py` = **rewrite for package install**; T3 = **`python -m sandesh.mcp_server`**;
-  `install.sh` = **kept as the PEP-668-safe own-venv fallback** (PRD D6), rewritten to the new layout.
+- **Decisions (gap-analysis):** build backend = **hatchling**; **versioning = git-tag-driven via
+  `hatch-vcs`** (`dynamic=["version"]`, `source="vcs"`; semver `vX.Y.Z` tags → PEP 440 `X.Y.Z`);
+  usage doc = **bundle + importlib.resources**; `test_install.py` = **rewrite for package install**;
+  T3 = **`python -m sandesh.mcp_server`**; `install.sh` = **kept as the PEP-668-safe own-venv
+  fallback** (PRD D6), rewritten to the new layout.
 - **No blocking code drift** — the move is structural; `mcp` stays isolated to `sandesh/mcp_server.py`.
 
 ## Estimated size
@@ -188,3 +203,34 @@ Medium–large: a structural refactor (module moves + import rewrites across cod
 - Windows **runtime** support (DN-windows-notifier).
 - Publishing to public PyPI (a separate release decision; package is installable from source/Git).
 - Any change to the MCP tool surface or messaging semantics.
+
+## Implementation Notes (2026-06-07)
+
+Five RED→GREEN cycles + a README docs step + VERIFY → FIX → pre-merge, agent-dispatched.
+
+- **C0** — restructure (`5d83e47` RED / `23b0856` GREEN): `git mv app/* → sandesh/` + `__init__.py`;
+  dropped every `sys.path.insert` hack (production + all 7 test files); T3 spawns `python -m
+  sandesh.mcp_server`. `app/` removed.
+- **C1** — `pyproject.toml` (`dee7345` / `5e46ece`): hatchling + **hatch-vcs tag-driven version**
+  (`dynamic=["version"]`, `source="vcs"`), console scripts `sandesh`/`sandesh-mcp`, `[mcp]` extra,
+  `requires-python>=3.10`, GPL-3.0-only; `sandesh.__version__` + `sandesh --version` via
+  `importlib.metadata`. Wheel built clean (`sandesh_relay-0.1.devN+g<sha>`).
+- **C2** — friendly `[mcp]`-absent error (`17ff862` / `361e09d`): guarded the mcp imports; `main()`
+  prints the `[mcp]`-extra hint + exits non-zero (no traceback). 9-tool surface intact when present.
+- **C3** — doc bundling (`aae381f` / `a3f8596`): `git mv docs/usage-scenarios.md →
+  sandesh/data/usage-scenarios.md`; `_read_usage_doc()` now uses `importlib.resources`; wheel
+  **proven** to contain the doc. `sandesh://usage` serves real content in source AND installed.
+- **C4** — package-install integration (`5259974` / `616f769`): replaced `test_install.py` with
+  clean-venv `pip install .` / `.[mcp]` tests (AC3/AC4/AC8); rewrote `install.sh` as the
+  PEP-668-safe own-venv fallback (pip-installs the package, symlinks the console scripts).
+- **README** (docs): install via uv (uvx / `uv tool install`) first, dual-channel note, pipx
+  alternative, install.sh fallback, PEP-668 + no-installer bootstrap (AC7/AC9); fixed
+  layout/MCP-path/tool-count (10→9) staleness.
+- **VERIFY** (`CR-SAN-008-VERIFY`): 184 tests green, all AC1–AC11 PASS, 0 blocking; 1 SHOULD-FIX +
+  2 cosmetic. **FIX** (`7c6d4f8`): removed the last `sys.path` hack (test_usage_resource_packaging,
+  AC11) + refreshed the `mcp_server.py` docstring for the package layout.
+- **Pre-merge gate**: py_compile clean; stdlib baseline 24/24 (system python3, no `mcp`);
+  in-process suites 123/123; install integration 16/16. Coverage `mcp_server.py` 90% /
+  `sandesh_db.py` 81% / total 55% (cli/notify exercised via subprocess installs, uncaptured).
+- **Contract preserved**: 9 MCP tools, `sandesh_reply` signature, `mcp` isolated to
+  `sandesh/mcp_server.py`. **CR-SAN-007 (PATH hardening) stays SUPERSEDED** by this CR.

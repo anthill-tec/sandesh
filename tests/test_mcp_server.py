@@ -7,15 +7,13 @@ in-process via FastMCP.call_tool / list_tools (unittest.IsolatedAsyncioTestCase)
 """
 
 import os
-import sys
 import tempfile
 import shutil
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app"))
-import sandesh_db as sdb
-import mcp_server
+from sandesh import sandesh_db as sdb
+from sandesh import mcp_server
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 

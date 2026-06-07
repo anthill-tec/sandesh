@@ -19,13 +19,11 @@ CR-SAN-005 contract: sandesh_actioned has been removed (10 → 9 tools).
 import json
 import os
 import shutil
-import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app"))
-import sandesh_db as sdb
-import mcp_server
+from sandesh import sandesh_db as sdb
+from sandesh import mcp_server
 from mcp.server.fastmcp.exceptions import ToolError
 
 PROJ = "TestMut"

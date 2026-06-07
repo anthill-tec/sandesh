@@ -16,14 +16,11 @@ and @mcp.tool(annotations=...) arguments.
 import inspect
 import os
 import shutil
-import sys
 import tempfile
 import unittest
 
-# Mirror the exact bootstrap from test_mcp_mutating_tools.py.
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app"))
-import sandesh_db as sdb
-import mcp_server
+from sandesh import sandesh_db as sdb
+from sandesh import mcp_server
 
 PROJ = "TestSurface"
 MAINLINE = "Mainline - TestSurface"
