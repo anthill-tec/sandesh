@@ -26,23 +26,20 @@ account + SSH key — documented, not automated here); Windows runtime.
 
 ### §S1 — `packaging/aur/PKGBUILD`
 A standard Python-application PKGBUILD (PEP 517 build via hatchling):
-- `pkgname` — **decision** (gap-analysis): `sandesh-relay` (matches the PyPI dist) vs `sandesh` vs
-  `python-sandesh-relay`. Default recommendation: **`sandesh-relay`**.
+- `pkgname` — **`sandesh-relay`** (gap-analysis decision; matches the PyPI dist). Installed commands
+  stay `sandesh` / `sandesh-mcp`.
 - `pkgver` / `pkgrel` — `pkgver` tracks the release `X.Y.Z` (the git tag `vX.Y.Z` minus `v`).
 - `arch=('any')` (pure Python), `license=('GPL-3.0-only')`, `url` = the GitHub repo.
 - `depends=('python')` — the stdlib CLI + `notify` need only CPython.
 - **`optdepends=('python-mcp: the MCP server (sandesh-mcp); from AUR')`** — the `[mcp]` extra is
-  optional; base install = stdlib CLI. (Decision: optdepends vs a split `sandesh-relay-mcp`
-  package; default **optdepends**.)
+  optional; base install = stdlib CLI. (Gap-analysis decision: **optdepends**, not a split package.)
 - `makedepends=('python-build' 'python-installer' 'python-hatchling' 'python-hatch-vcs')` (all
   official).
-- `source` + `sha256sums` — **decision**: the **PyPI sdist**
-  (`https://files.pythonhosted.org/.../sandesh_relay-$pkgver.tar.gz`, version baked in PKG-INFO —
-  canonical, but gated on the CR-SAN-010 first publish) **vs** a **GitHub release tarball / git
-  tag** (works before PyPI; but a plain tarball has no `.git`, so hatch-vcs needs
-  `HATCH_VCS_PRETEND_VERSION=$pkgver` at build, or use a `git+…#tag=v$pkgver` source). Default
-  recommendation: **PyPI sdist** (version baked, no hatch-vcs-without-git problem; same
-  post-`v0.1.0` gating as the registry listing).
+- `source` + `sha256sums` — **PyPI sdist** (gap-analysis decision):
+  `source=("https://files.pythonhosted.org/packages/source/s/sandesh-relay/sandesh_relay-$pkgver.tar.gz")`
+  — version baked in PKG-INFO (no hatch-vcs-without-git problem), `sha256sums` filled by
+  `updpkgsums` at release. **Gated on the CR-SAN-010 first publish** (same as the registry listing);
+  pre-publish the checksum is a placeholder (`'SKIP'`) and the real build is exercised at release.
 - `build()` — `python -m build --wheel --no-isolation`.
 - `package()` — `python -m installer --destdir="$pkgdir" dist/*.whl`; install `LICENSE` to
   `usr/share/licenses/$pkgname/`. The wheel's entry points place `sandesh` + `sandesh-mcp` in
@@ -84,6 +81,23 @@ Generate `packaging/aur/.SRCINFO` via `makepkg --printsrcinfo > .SRCINFO` (AUR r
       version provenance: the built package version == `pkgver` == release `X.Y.Z`.
 - [ ] **AC6** — README documents `yay -S <pkg>` (Arch) + the `python-mcp` (AUR) note; RELEASING.md
       documents the AUR push step (maintainer, post-PyPI-release).
+
+## Gap-analysis findings (2026-06-07) — verdict READY
+
+- **Dim 1 (Spec vs PRD):** implements PRD D5 (secondary Arch PKGBUILD, derives from the package,
+  pacman resolves deps). No gap.
+- **Dim 2 (Spec vs Code):** verified on the target Arch box — `pyproject.toml` = hatchling +
+  hatch-vcs; `makedepends` (`python-build/installer/hatchling/hatch-vcs`) all in **official** repos;
+  the wheel's `entry_points.txt` declares `sandesh` + `sandesh-mcp` console scripts (so
+  `python -m installer dist/*.whl` lands both in `/usr/bin`); `LICENSE` present. `makepkg`,
+  `namcap`, `shellcheck`, `updpkgsums` available → real lint/build. No drift.
+- **Dim 3 (Code vs PRD):** version provenance — the PyPI sdist bakes the version in PKG-INFO
+  (verified), so hatch-vcs needs no `.git`; `pkgver` == release `X.Y.Z`. No conflict.
+- **Decisions:** `pkgname = sandesh-relay`; source = **PyPI sdist**; `[mcp]` via **`optdepends:
+  python-mcp`** (AUR). `python-mcp` is AUR-only (document the uv/pipx fallback for the server).
+- **Sequencing:** this CR ships the PKGBUILD + `.SRCINFO` + lint/parse tests + docs; the real
+  `makepkg` build + final `sha256sums` (`updpkgsums`) + the AUR `git push` happen at the maintainer
+  release once `v0.1.0` is on PyPI.
 
 ## Estimated size
 Small–medium: one PKGBUILD + `.SRCINFO` + a lint/parse test + README/RELEASING notes. The build is
