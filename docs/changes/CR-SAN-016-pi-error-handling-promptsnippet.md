@@ -81,6 +81,19 @@ Add to each `pi.registerTool({...})`:
       (#4 stays); the wake loop's exit-code handling is unchanged; Sandesh-core untouched
       (`git diff develop..HEAD -- sandesh/` empty).
 
+## Gap-analysis findings (2026-06-07) — verdict READY
+
+Verified against the current `integrations/pi/`:
+- `src/index.ts:138-150` — `runSandesh` returns success on `code===0` and a **returned error result**
+  on non-zero (the exact change point → throw). The 9 `pi.registerTool` calls (e.g. `sandesh_send`
+  L305) have `name`/`label`/`description`/`parameters` but **no `promptSnippet`**.
+- `src/execute.test.ts:620+` — a `describe("AC5 — … non-zero code → error result surfacing stderr")`
+  block (sandesh_send/reply/fetch) asserts `result.content[0].text` contains stderr → **flip to
+  assert the throw**. The zero-exit success assertions (L576+) stay.
+- Findings verified at source: extensions.md:1782 (throw → isError), types.ts:441 (promptSnippet →
+  Available-tools), packages.md:171 (peerDeps "*" for bundled-core → #3 rejected), npm 404 for
+  pi-tsconfig (→ #4 rejected). No drift; the spec matches the code.
+
 ## Estimated size
 Small: one `runSandesh` change (return→throw) + `promptSnippet`/`promptGuidelines` on 9 tools +
 updating the execute tests' error assertions + a promptSnippet test. All in `integrations/pi/`.
