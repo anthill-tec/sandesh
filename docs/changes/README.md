@@ -19,16 +19,19 @@ Single source of truth for change requests. Pick the next `PENDING` CR by phase 
 | [CR-SAN-014](CR-SAN-014-pi-native-wake.md) | Pi native wake (background watcher → `sendUserMessage`; design W1 from DN-pi-wake) | Phase 4 | COMPLETED | CR-SAN-013 | 2026-06-07 |
 | [CR-SAN-015](CR-SAN-015-pi-package-listing.md) | Pi extension packaging/listing — **npm** publish (`npm:@anthill-tec/sandesh-pi`) + pi.dev/packages gallery (git: can't target a subdir) | Phase 4 | COMPLETED | CR-SAN-013, CR-SAN-014 | 2026-06-07 |
 | [CR-SAN-016](CR-SAN-016-pi-error-handling-promptsnippet.md) | Pi extension review fixes: tool `execute` **throws** on CLI failure (sets `isError`) + `promptSnippet`/`promptGuidelines` on all 9 tools (review #1/#2/#5; #3/#4 rejected) | Phase 4 | COMPLETED | CR-SAN-013 | 2026-06-07 |
+| [CR-SAN-017](CR-SAN-017-migration-engine.md) | DB schema **migration engine** + first real migration: `[migrate]` extra (yoyo + jsonschema), `sandesh migrate` CLI (apply/check/status/rollback/dump-schema/diff), baseline `0001` + adoption glue, derived `current-schema.json`; **proven by** the `message.status` drop (`0002` 12-step rebuild — folds deferred CR-SAN-012). CLI/installer only, no MCP/Pi | Phase 5 | PENDING | CR-SAN-008 | — |
+| [CR-SAN-018](CR-SAN-018-migration-installer-integration.md) | Migration **installer & CI integration**: `install.sh` runs `migrate --all` (tolerates missing extra), `--check` release/CI gate, README/RELEASING/CLAUDE docs | Phase 5 | PENDING | CR-SAN-017 | — |
 
-Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distribution](../research/PRD-distribution.md) · [PRD-pi-extension](../research/PRD-pi-extension.md)
+Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distribution](../research/PRD-distribution.md) · [PRD-pi-extension](../research/PRD-pi-extension.md) · [PRD-db-migration](../research/PRD-db-migration.md)
 Design notes: [DN-windows-notifier](../research/DN-windows-notifier.md) · [DN-pi-wake](../research/DN-pi-wake.md) (Pi wake spike — RESOLVED: native injection)
 PyPI distribution name: **`sandesh-relay`** (`sandesh` is taken; import package + CLI stay `sandesh`).
 Pi integration: see **[PRD-pi-extension](../research/PRD-pi-extension.md)** — a native Pi *extension* (not MCP); its CRs (scaffold/verbs, wake-spike, packaging) spin from that PRD.
 Phase 4 (Pi) — monorepo TS subfolder `integrations/pi/` (**bun** + TypeScript, `bun test`), driven by the
 **`bun-*` agents** via **`bun-crucible.py`**. CR-SAN-013 (verbs) → CR-SAN-014 (native wake, design W1) → CR-SAN-015 (packaging).
-CR-SAN-012 deferred (core status retirement) — **must include a SQLite migration** for existing
-stores when it drops `message.status` (`CREATE TABLE IF NOT EXISTS` only covers new installs; SQLite
-column-drop needs a rebuild/migration). CR-SAN-007 superseded.
+Phase 5 (schema evolution) — design contract: **[PRD-db-migration](../research/PRD-db-migration.md)**
+(yoyo runner + `[migrate]` extra + derived JSON snapshot; CLI/installer only, no MCP/Pi).
+CR-SAN-012 (core `message.status` retirement) is **no longer a standalone CR — folded into CR-SAN-017**
+as the engine's first real migration / proving case (the `0002` 12-step rebuild). CR-SAN-007 superseded.
 
 ## Canonical statuses
 `PENDING` / `IN_PROGRESS` / `COMPLETED` / `SUPERSEDED` / `DEFERRED`
