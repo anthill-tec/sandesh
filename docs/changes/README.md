@@ -15,12 +15,17 @@ Single source of truth for change requests. Pick the next `PENDING` CR by phase 
 | [CR-SAN-009](CR-SAN-009-aur-pkgbuild.md) | AUR PKGBUILD (secondary, Arch) — derives from the package | Phase 3 | COMPLETED | CR-SAN-008 | 2026-06-07 |
 | [CR-SAN-010](CR-SAN-010-pypi-publish.md) | PyPI release (OIDC trusted publishing) — publishes `sandesh-relay`; enables uv/pipx/pipxu install | Phase 3 | COMPLETED | CR-SAN-008 | 2026-06-07 |
 | [CR-SAN-011](CR-SAN-011-mcp-registry.md) | Official MCP Registry listing (`server.json`, `io.github.anthill-tec/sandesh`) — discoverable by MCP clients/directories | Phase 3 | COMPLETED | CR-SAN-010 | 2026-06-07 |
+| [CR-SAN-013](CR-SAN-013-pi-verbs-extension.md) | Pi extension: scaffold + verb tools (`integrations/pi/`, TS, `registerTool` over the `sandesh` CLI) | Phase 4 | PENDING | CR-SAN-008 | — |
+| [CR-SAN-014](CR-SAN-014-pi-native-wake.md) | Pi native wake (background watcher → `sendUserMessage`; design W1 from DN-pi-wake) | Phase 4 | PENDING | CR-SAN-013 | — |
+| CR-SAN-015 | Pi extension packaging/listing (`pi.dev/packages`, npm:/git:) | Phase 4 | PENDING | CR-SAN-013, CR-SAN-014 | — |
 
 Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distribution](../research/PRD-distribution.md) · [PRD-pi-extension](../research/PRD-pi-extension.md)
 Design notes: [DN-windows-notifier](../research/DN-windows-notifier.md) · [DN-pi-wake](../research/DN-pi-wake.md) (Pi wake spike — RESOLVED: native injection)
 PyPI distribution name: **`sandesh-relay`** (`sandesh` is taken; import package + CLI stay `sandesh`).
 Pi integration: see **[PRD-pi-extension](../research/PRD-pi-extension.md)** — a native Pi *extension* (not MCP); its CRs (scaffold/verbs, wake-spike, packaging) spin from that PRD.
-(All scheduled CR specs authored. Remaining: Pi-extension CRs spin from PRD-pi-extension; CR-SAN-012 deferred — core status retirement.)
+Phase 4 (Pi) — monorepo TS subfolder `integrations/pi/` (npm + TypeScript + vitest), driven by the
+`vscode-*` TS agents. CR-SAN-013 (verbs) → CR-SAN-014 (native wake, design W1) → CR-SAN-015 (packaging).
+CR-SAN-012 deferred (core status retirement). CR-SAN-007 superseded.
 
 ## Canonical statuses
 `PENDING` / `IN_PROGRESS` / `COMPLETED` / `SUPERSEDED` / `DEFERRED`
