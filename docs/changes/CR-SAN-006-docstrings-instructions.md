@@ -74,6 +74,24 @@ demand (text/markdown), so a client can pull the full scenarios doc when it want
 docstrings. Resolve the doc path relative to the repo/package (robust to the installed layout);
 if the file is absent, return a short explanatory stub rather than raising.
 
+## Gap-analysis findings (2026-06-07) — verdict READY
+
+- **Dim 1 (Spec vs PRD):** spec covers every item in PRD §10's CR-SAN-006 row (docstrings, param
+  descriptions, required params, read/destructive annotations, server `instructions`, optional
+  `sandesh://usage` resource). No gap.
+- **Dim 2 (Spec vs Code):** matches `develop` — 9 tools; `sandesh_fetch(...mark=True)` mutates
+  read-state (correctly **not** read-only); `addressbook`/`inbox`/`thread` are pure reads; `send`
+  has `to`/`cc`; `reply` has `parent_id`. No drift.
+- **Dim 3 (Code vs PRD):** the authoring source `docs/usage-scenarios.md` already reflects D7
+  (read=acting, reply=done) and the wake-not-a-tool boundary (§6). No drift.
+- **API verified** against the installed `mcp`: `Annotated[T, Field(description=…)]` →
+  inputSchema descriptions; `ToolAnnotations(readOnlyHint/destructiveHint/idempotentHint)` via
+  `@mcp.tool(annotations=…)`; `FastMCP(instructions=…)` → `m.instructions`; `@mcp.resource` +
+  `list_resources()`/`read_resource()`. No existing test hard-codes instructions/resources, so the
+  additive enrichment won't break the suite.
+- **DRIFT-1 (non-blocking):** `@mcp.resource` defaults `mimeType` to `text/plain`; §S5 wants
+  markdown — GREEN passes `mime_type="text/markdown"` (AC6 doesn't assert mime).
+
 ## Acceptance criteria
 
 - [ ] **AC1** — `await mcp.list_tools()` still returns **exactly 9** tools (unchanged contract);
