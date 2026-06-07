@@ -12,3 +12,5 @@ test-reports/
 coverage.lcov
 # Codacy CLI scaffolding (local static-analysis tooling, not part of the repo)
 .codacy/
+# Kiro IDE steering / lean-ctx agent tooling (local, not part of the deliverable)
+.kiro/
