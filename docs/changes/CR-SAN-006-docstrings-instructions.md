@@ -1,6 +1,6 @@
 # CR-SAN-006 — Docstring & usability enrichment + server `instructions` + `sandesh://usage` resource
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-006)
 **Priority:** Medium
 **Depends on:** CR-SAN-005 (9-tool surface settled)
 **Labels:** phase-2, mcp, docs, usability
@@ -94,25 +94,25 @@ if the file is absent, return a short explanatory stub rather than raising.
 
 ## Acceptance criteria
 
-- [ ] **AC1** — `await mcp.list_tools()` still returns **exactly 9** tools (unchanged contract);
+- [x] **AC1** — `await mcp.list_tools()` still returns **exactly 9** tools (unchanged contract);
       `sandesh_reply`'s parameters are still `parent_id, from_addr, project_id, subject, body_text`
       (CR-SAN-005 invariant preserved).
-- [ ] **AC2** — Every tool's `inputSchema.properties` carries a non-empty `description` for the
+- [x] **AC2** — Every tool's `inputSchema.properties` carries a non-empty `description` for the
       key params named in §S2 — asserted for at least: `sandesh_send.to`, `sandesh_send.cc`,
       `sandesh_reply.parent_id`, `sandesh_register.addr`, and `project_id` on a representative tool.
-- [ ] **AC3** — `sandesh_send`'s and `sandesh_reply`'s docstrings mention the **To-wakes/Cc-silent**
+- [x] **AC3** — `sandesh_send`'s and `sandesh_reply`'s docstrings mention the **To-wakes/Cc-silent**
       and **`parent_id` = original message id** semantics respectively (asserted by substring on the
       tool's `description` returned from `list_tools()`).
-- [ ] **AC4** — `ToolAnnotations` are set as in §S3: `sandesh_addressbook`/`sandesh_inbox`/
+- [x] **AC4** — `ToolAnnotations` are set as in §S3: `sandesh_addressbook`/`sandesh_inbox`/
       `sandesh_thread` have `readOnlyHint == True`; `sandesh_unregister` has
       `destructiveHint == True`; `sandesh_fetch` does **not** have `readOnlyHint == True`
       (asserted via each tool's `.annotations` from `list_tools()`).
-- [ ] **AC5** — the server exposes non-empty `instructions` that mention the **wake is not a tool**
+- [x] **AC5** — the server exposes non-empty `instructions` that mention the **wake is not a tool**
       / `notify` and the **reply = done** lifecycle (asserted via the FastMCP `instructions`).
-- [ ] **AC6** — `await mcp.list_resources()` includes a resource with URI `sandesh://usage`, and
+- [x] **AC6** — `await mcp.list_resources()` includes a resource with URI `sandesh://usage`, and
       reading it returns the `docs/usage-scenarios.md` content (or, if the doc is missing, a
       non-empty stub) — asserted by `read_resource("sandesh://usage")`.
-- [ ] **AC7** — full regression green: the MCP suites + `python3 tests/test_sandesh.py` (the 24
+- [x] **AC7** — full regression green: the MCP suites + `python3 tests/test_sandesh.py` (the 24
       stdlib baseline) all pass; `mcp` stays imported only in `app/mcp_server.py`.
 
 ## Estimated size
@@ -131,3 +131,26 @@ enriched surface. No `sandesh_db` change.
 - Adding/removing/renaming any tool or parameter (the 9-tool + `sandesh_reply` contract is locked).
 - Any `sandesh_db` / CLI / `notify` change.
 - Bundling `docs/usage-scenarios.md` into the installed package (that's packaging — CR-SAN-008).
+
+## Implementation Notes (2026-06-07)
+
+Two cycles (C0 per-tool, C1 server-level), agent-dispatched, then VERIFY → pre-merge. All
+production edits confined to `app/mcp_server.py`; one new test module `tests/test_mcp_surface.py`.
+
+- **C0 — per-tool surface** — RED (`0d21732`, 15 tests, 12 failing): docstring substrings,
+  per-param `inputSchema` descriptions, `ToolAnnotations`. GREEN (`e17d0f2`): rich docstrings +
+  `Annotated[..., Field(description=…)]` on the meaningful params + `@mcp.tool(annotations=…)` —
+  `readOnlyHint` on `addressbook`/`inbox`/`thread`, `destructiveHint` on `unregister`,
+  `idempotentHint` on `setup`; `fetch` left non-read-only (mutates via `mark`).
+- **C1 — server-level surface** — RED (`4f7033c`, +6 failing): `instructions` + `sandesh://usage`.
+  GREEN (`6216500`): `FastMCP("sandesh", instructions=SANDESH_INSTRUCTIONS)` (Model-B +
+  two-channel wake-not-a-tool + reply=done) and `@mcp.resource("sandesh://usage",
+  mime_type="text/markdown")` serving `docs/usage-scenarios.md` via CWD-independent path resolution
+  (3 candidate paths) with a non-empty stub fallback. (Resolves gap-analysis DRIFT-1: mime set.)
+- **Contract preserved**: still exactly **9 tools**; `sandesh_reply` signature unchanged; `mcp`
+  imported only in `app/mcp_server.py`; `sandesh_db.py`/`cli.py`/`notify.py` untouched (empty diff
+  vs develop).
+- **VERIFY** (`CR-SAN-006-VERIFY`): 79/79 green, all AC1–AC7 PASS, 0 blocking, boundaries clean
+  (2 advisory suggestions: mime already set; a stale RED-phase test-module docstring — cosmetic).
+- **Pre-merge gate**: 79/79 green (55 MCP + 24 stdlib baseline); py_compile clean; coverage
+  `mcp_server.py` 77% / `sandesh_db.py` 94% / total 49%.
