@@ -28,7 +28,9 @@ Out of scope here: the AUR PKGBUILD (CR-SAN-009) and Windows **runtime** (DN-win
 
 ### §S2 — `pyproject.toml`
 - `[project]`: `name = "sandesh"`, a version, `requires-python = ">=3.10"` (matches the `mcp`
-  extra), description, readme.
+  extra), description, readme, **`license = "GPL-3.0-only"`** (SPDX; matches the repo `LICENSE`
+  — or `GPL-3.0-or-later` if the "or later" upgrade clause is wanted) + the GPLv3 trove
+  classifier.
 - `[project.scripts]`: `sandesh = "sandesh.cli:main"`, `sandesh-mcp = "sandesh.mcp_server:main"`.
 - `[project.optional-dependencies]`: `mcp = ["mcp>=1.27,<2"]`.
 - A build backend (setuptools or hatchling — CR decides); core CLI has **no** runtime deps.
