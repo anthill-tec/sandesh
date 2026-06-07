@@ -125,3 +125,34 @@ mcp-publisher publish               # list io.github.anthill-tec/sandesh
   release.
 - CI validates `server.json` structurally (the `tests/test_server_json.py` suite); the authoritative
   validation is `mcp-publisher publish --dry-run`.
+
+---
+
+## Publishing the AUR package (Arch, after the PyPI release)
+
+Sandesh ships an AUR `PKGBUILD` at [`packaging/aur/`](packaging/aur/) (`pkgname=sandesh-relay`,
+source = the PyPI sdist). The published checksum can only be computed **after** the PyPI sdist for
+`X.Y.Z` exists, so publish the AUR package **after** the PyPI release.
+
+One-time + per-release (maintainer, with an AUR account + SSH key registered):
+
+```bash
+# 1. point pkgver at the release and fill the real checksum from the published sdist
+cd packaging/aur
+#   edit PKGBUILD: pkgver=X.Y.Z, pkgrel=1
+updpkgsums                      # replaces sha256sums=('SKIP') with the real hash from PyPI
+makepkg --printsrcinfo > .SRCINFO
+makepkg -f                      # sanity: builds the package locally
+namcap PKGBUILD                 # lint (no E:)
+
+# 2. push to the AUR
+git clone ssh://aur@aur.archlinux.org/sandesh-relay.git aur-sandesh-relay   # first time
+cp PKGBUILD .SRCINFO aur-sandesh-relay/
+cd aur-sandesh-relay && git commit -am "X.Y.Z-1" && git push
+```
+
+- Bump `pkgver` (and reset `pkgrel=1`) + regenerate `.SRCINFO` every release; bump only `pkgrel`
+  for packaging-only fixes.
+- `python-mcp` is an **AUR** dependency (optdepends) — yay/paru resolve it for users who want the
+  server. The repo keeps `sha256sums=('SKIP')` as a pre-publish placeholder; `updpkgsums` fills the
+  real hash at release.
