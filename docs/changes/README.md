@@ -11,7 +11,7 @@ Single source of truth for change requests. Pick the next `PENDING` CR by phase 
 | [CR-SAN-005](CR-SAN-005-retire-status.md) | Retire `status`/disposition tool: remove `sandesh_actioned` (10→9); lock no `resolves`/`reply_all` (PRD §10/D7) | Phase 2 | COMPLETED | CR-SAN-001..004 | 2026-06-07 |
 | [CR-SAN-006](CR-SAN-006-docstrings-instructions.md) | Docstring & usability enrichment + server `instructions` + `sandesh://usage` resource (PRD §10) | Phase 2 | COMPLETED | CR-SAN-005 | 2026-06-07 |
 | CR-SAN-007 | Install `$PATH` hardening | Phase 2 | SUPERSEDED by CR-SAN-008 | CR-SAN-001 | — |
-| [CR-SAN-008](CR-SAN-008-packaging.md) | Packaging: `pyproject.toml`, `sandesh/` package, console scripts, `[mcp]` extra | Phase 3 | PENDING | CR-SAN-001..004 | — |
+| [CR-SAN-008](CR-SAN-008-packaging.md) | Packaging: `pyproject.toml` (hatchling + hatch-vcs), `sandesh/` package, console scripts, `[mcp]` extra, bundled usage doc | Phase 3 | COMPLETED | CR-SAN-001..006 | 2026-06-07 |
 | CR-SAN-009 | AUR PKGBUILD (secondary, Arch) — derives from the package | Phase 3 | PENDING | CR-SAN-008 | — |
 | CR-SAN-010 | PyPI release (OIDC trusted publishing) — publishes `sandesh-relay`; enables uv/pipx/pipxu install | Phase 3 | PENDING | CR-SAN-008 | — |
 | [CR-SAN-011](CR-SAN-011-mcp-registry.md) | Official MCP Registry listing (`server.json`, `io.github.anthill-tec/sandesh`) — discoverable by MCP clients/directories | Phase 3 | PENDING | CR-SAN-010 | — |
