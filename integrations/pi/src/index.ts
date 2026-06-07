@@ -33,8 +33,9 @@ const projectIdParam = Type.Optional(
  * with the real `pi.exec("sandesh", argv, { signal })` invocation + output
  * mapping (zero code → stdout text; non-zero → stderr error result).
  */
-const stubExecute = async (): Promise<AgentToolResult> => ({
+const stubExecute = async (): Promise<AgentToolResult<undefined>> => ({
   content: [{ type: "text", text: "" }],
+  details: undefined,
 });
 
 // ---------------------------------------------------------------------------
