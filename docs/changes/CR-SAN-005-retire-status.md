@@ -42,6 +42,21 @@ exact callers + blast radius**; the finding is recorded under `### S3 Findings`,
 retirement is filed as a **follow-up CR** (or confirmed in-scope only if gap-analysis shows it
 is genuinely small). Default: **defer**.
 
+### S3 Findings (gap-analysis 2026-06-07)
+Core-status blast radius — **confirmed substantial → DEFER to a follow-up CR**
+(candidate **CR-SAN-012 — core `status`/`message.status` retirement**):
+- `sandesh_db.set_status` (line 280) is called by **`reply(resolves=True)`** (line 276) **and**
+  the CLI **`cmd_actioned`** (`cli.py:199`) — not just the MCP tool.
+- **`message.status` is read by `inbox`** (`sandesh_db.py:291` SELECT includes `m.status`), so
+  the column surfaces in inbox output.
+- CLI exposes **`actioned`** (`cli.py:275-278`) and **`reply --resolves`** (`cli.py:258,138`).
+- **The 24 baseline tests depend on it**: `tests/test_sandesh.py:167-168` asserts
+  `SELECT status … == "actioned"` after a resolve.
+Therefore removing the core status machine needs library + CLI + **schema** changes and would
+break the Phase-1 baseline suite — out of scope for this CR. **CR-SAN-005 retires only the MCP
+`sandesh_actioned` tool** (§S1); the core machine stays (dormant from the MCP surface) until the
+deferred follow-up.
+
 ## Acceptance criteria
 
 - [ ] **AC1** — `await mcp.list_tools()` returns **exactly 9** tools and does **not** include
@@ -49,8 +64,11 @@ is genuinely small). Default: **defer**.
 - [ ] **AC2** — `grep -n "sandesh_actioned" app/mcp_server.py` returns nothing (tool removed).
 - [ ] **AC3** — `sandesh_reply`'s signature has **no** `resolves`/`reply_all` parameter
       (asserted by a test inspecting the tool's input schema / signature).
-- [ ] **AC4** — `tests/test_mcp_mutating_tools.py` is updated: no `sandesh_actioned` test; any
-      "exactly 10 tools" assertion becomes "exactly 9"; the file stays green.
+- [ ] **AC4** — the tool-count/`sandesh_actioned` assertions are updated in **both** test files
+      (gap-analysis DRIFT-1): `tests/test_mcp_mutating_tools.py` (remove the `assertIn("sandesh_actioned")`,
+      flip `test_list_tools_returns_exactly_ten_tools` 10→9, remove the `sandesh_actioned` behavior
+      test ~lines 595–637, fix docstrings) **and** `tests/test_mcp_e2e.py` (the `len(names)==10`
+      at ~line 103 → 9); both files stay green.
 - [ ] **AC5** — full regression green: the MCP suites + `python3 tests/test_sandesh.py`
       (existing 24) all pass; tool count is 9.
 - [ ] **AC6** — `### S3 Findings` records the core-status-retirement blast radius + the
