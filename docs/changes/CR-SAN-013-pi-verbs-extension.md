@@ -63,6 +63,41 @@ Use `pi.registerTool({ name, description, parameters, execute })` for each verb,
   carries the key fields (e.g. `send` has `to`/`cc`/`subject`; `reply` has `parent_id`).
 - No wake in this CR (CR-SAN-014).
 
+## Gap-analysis findings (2026-06-07) — verdict SPEC_UPDATE applied; now READY
+
+Verified Pi API against `earendil-works/pi@main` (via opensrc) and the CLI surface against
+`sandesh/cli.py`.
+
+**Pi `ToolDefinition` (correction):** `pi.registerTool({ name, label, description, parameters, execute })`
+— a **`label`** field is required (in addition to `name`/`description`); `parameters` is a **TypeBox**
+schema (`import { Type } from "typebox"`; `Type.Object/String/Array/Optional`; `StringEnum` from
+`@earendil-works/pi-ai` for `kind`); `execute(toolCallId, params, signal, onUpdate, ctx)` returns an
+**`AgentToolResult`** (`{ content: [{ type: "text", text }], details? }`), not raw stdout. Devdeps:
+`@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, `typebox`, `vitest`.
+
+**Tool-param → CLI-flag mapping (the wrapper contract — DRIFT vs the loose spec):** the Pi tool
+params may mirror the MCP names for the LLM, but `execute` maps to the CLI's *actual* flags:
+
+| Pi tool | params (LLM-facing) | `sandesh` CLI argv |
+|---|---|---|
+| `sandesh_setup` | `project_id?` | `[--project P] setup` |
+| `sandesh_register` | `address`, `kind?`, `name?`, `project_id?` | `register --address A [--kind …] [--name …]` |
+| `sandesh_unregister` | `address`, `requester?`, `project_id?` | `unregister --address A [--as R]` |
+| `sandesh_addressbook` | `project_id?` | `addressbook` |
+| `sandesh_send` | `from`, `to[]`, `cc[]?`, `subject`, `kind?`, `body?`, `project_id?` | `send --from F --to a,b --cc c,d --subject S [--kind …] [--body …]` (**`to`/`cc` are comma-joined strings**) |
+| `sandesh_reply` | `parent_id`, `from?`, `subject?`, `body?`, `project_id?` | `reply --to-msg N [--from F] [--subject …] [--body …]` (**`parent_id`→`--to-msg`**; **no** `--resolves`/`--all`) |
+| `sandesh_inbox` | `recipient`, `unread_only?`, `project_id?` | `inbox --to R [--all]` (**`unread_only:false`→`--all`**, inverted) |
+| `sandesh_fetch` | `recipient`, `mark?`, `project_id?` | `fetch --to R [--peek]` (**`mark:false`→`--peek`**, inverted) |
+| `sandesh_thread` | `msg_id`, `project_id?` | `thread --id N` (**`msg_id`→`--id`**) |
+
+Notes: `--project` is the shared flag (before or after the subcommand; defaults to `$SANDESH_PROJECT`).
+The CLI also has `projects`, `actioned`, `notify` — **not** registered here (`actioned` is retired from
+the model per D7; `notify` is the wake → CR-SAN-014; `projects` is non-essential). `reply --resolves`
+/ `reply --all` exist in the CLI (deferred core, CR-SAN-012) but are **deliberately not exposed**
+(matching the MCP surface).
+
+**Verdict: READY** — mapping table is the build contract; no blocking drift (Sandesh-core untouched).
+
 ## Acceptance criteria
 
 - [ ] **AC1** — `integrations/pi/` exists with `package.json` (+ `tsconfig.json`, vitest config); a
@@ -71,14 +106,18 @@ Use `pi.registerTool({ name, description, parameters, execute })` for each verb,
       `sandesh_register`, `sandesh_unregister`, `sandesh_addressbook`, `sandesh_send`,
       `sandesh_reply`, `sandesh_inbox`, `sandesh_fetch`, `sandesh_thread` (asserted via a mocked
       `pi.registerTool` capturing names).
-- [ ] **AC3** — each tool's `parameters` (Typebox) carries the contract fields, asserted for at
-      least: `sandesh_send` (`from`, `to`, `cc`, `subject`, optional body, `project_id`),
-      `sandesh_reply` (`parent_id`, `from`), `sandesh_register` (`address`).
-- [ ] **AC4** — `execute` builds the correct `sandesh` CLI argv (mocked `pi.exec`): verified for
-      `sandesh_send` (from/to/cc/subject/body) and `sandesh_fetch` (recipient/mark), incl. the
-      `project_id`→`$SANDESH_PROJECT` fallback.
-- [ ] **AC5** — error mapping: a non-zero `pi.exec` `code` makes the tool report an error carrying
-      `stderr`; a zero `code` returns `stdout` (asserted with a mocked exec).
+- [ ] **AC3** — each tool registers with `name`, `label`, `description`, and a TypeBox `parameters`
+      schema carrying the contract fields (per the mapping table), asserted for at least:
+      `sandesh_send` (`from`, `to`, `cc`, `subject`, body, `project_id`), `sandesh_reply`
+      (`parent_id`, `from`), `sandesh_register` (`address`).
+- [ ] **AC4** — `execute` builds the correct `sandesh` CLI argv per the mapping table (mocked
+      `pi.exec`), verified for: `sandesh_send` (`--from/--to a,b/--cc/--subject/--body`, comma-joined
+      lists), `sandesh_reply` (`parent_id`→`--to-msg`, no `--resolves`/`--all`), `sandesh_inbox`
+      (`unread_only:false`→`--all`), `sandesh_fetch` (`mark:false`→`--peek`), `sandesh_thread`
+      (`msg_id`→`--id`), and the `project_id`→`$SANDESH_PROJECT` fallback.
+- [ ] **AC5** — `execute` returns an `AgentToolResult`: a non-zero `pi.exec` `code` yields a result
+      surfacing `stderr` as an error; a zero `code` yields `{content:[{type:"text",text:stdout}]}`
+      (asserted with a mocked exec).
 - [ ] **AC6** — tool descriptions/param text reflect the usage-scenarios semantics (asserted by
       substring: `sandesh_send` description mentions To-wakes/Cc-silent; `sandesh_reply` conveys
       `parent_id` = original message id).
