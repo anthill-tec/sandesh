@@ -1,6 +1,6 @@
 # CR-SAN-014 — Pi native wake (background watcher → turn injection)
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-014)
 **Priority:** Medium
 **Depends on:** CR-SAN-013 (the Pi extension scaffold + verbs), CR-SAN-008 (the `sandesh` CLI / `notify`)
 **Labels:** phase-4, pi, typescript, wake
@@ -75,21 +75,21 @@ wake loop itself**. This CR adds that loop to the extension from CR-SAN-013, reu
 
 ## Acceptance criteria
 
-- [ ] **AC1** — the **existing** `session_start` handler (the CR-013 prereq probe) is extended so
+- [x] **AC1** — the **existing** `session_start` handler (the CR-013 prereq probe) is extended so
       that, **after a successful `sandesh --version` probe**, it starts a wake loop calling
       `pi.exec("sandesh", [..., "notify", "--to", <self>], {signal})` with `self`/project from
       `$SANDESH_ADDRESS`/`$SANDESH_PROJECT` (asserted with mocked exec). If the probe FAILS
       (CLI missing), the loop does NOT start (only the existing install notice fires).
-- [ ] **AC2** — on `notify` exit **0**, the loop calls `pi.sendUserMessage(...)` exactly once with a
+- [x] **AC2** — on `notify` exit **0**, the loop calls `pi.sendUserMessage(...)` exactly once with a
       message directing the agent to fetch (`sandesh_fetch` / "unread mail"), then re-arms (asserted).
-- [ ] **AC3** — exit **2** re-arms silently (no `sendUserMessage`); exit **3** and exit **5** stop
+- [x] **AC3** — exit **2** re-arms silently (no `sendUserMessage`); exit **3** and exit **5** stop
       the loop (no further `pi.exec`); an error code backs off then re-arms (asserted via scripted
       exec sequences).
-- [ ] **AC4** — when `$SANDESH_ADDRESS` or `$SANDESH_PROJECT` is unset, the loop does **not** start
+- [x] **AC4** — when `$SANDESH_ADDRESS` or `$SANDESH_PROJECT` is unset, the loop does **not** start
       and a one-time notice is shown; the verbs (CR-SAN-013) are unaffected (asserted).
-- [ ] **AC5** — `session_shutdown` stops the loop (aborts the in-flight exec; no re-arm afterward)
+- [x] **AC5** — `session_shutdown` stops the loop (aborts the in-flight exec; no re-arm afterward)
       and only one loop runs per session (asserted).
-- [ ] **AC6** — Sandesh-core untouched (no `sandesh/` Python diff); the wake is entirely in
+- [x] **AC6** — Sandesh-core untouched (no `sandesh/` Python diff); the wake is entirely in
       `integrations/pi/`; the `notify` exit-code contract is consumed, not modified.
 
 ## Gap-analysis findings (2026-06-07, `/gap-analysis CR-SAN-014`) — verdict SPEC_UPDATE applied; now READY
@@ -124,3 +124,25 @@ Small–medium: extend the `session_start` handler with a wake-loop module + lif
 - The verbs (CR-SAN-013).
 - Packaging/listing (CR-SAN-015).
 - Any change to Sandesh-core, the CLI, the `notify` watcher, or the MCP surface.
+
+## Implementation Notes (2026-06-07)
+
+Two cycles, agent-dispatched (bun-* agents). All in `integrations/pi/src/index.ts`; Sandesh-core untouched.
+
+- **C0** — wake loop core (`fbbde91` RED / `f19f4ee` GREEN): extended the existing C2 `session_start`
+  handler — after a successful `sandesh --version` probe + env present, fires a detached `wakeLoop`
+  that `pi.exec`s `sandesh notify` and branches on exit code (0→`sendUserMessage`+re-arm, 2→re-arm,
+  3/4/5→stop, 1/other→backoff via the injectable `__setWakeSleepFn` seam). 19 tests.
+- **C1** — lifecycle (`2a94a26` RED / `953991a` GREEN + `b016285` test): `session_shutdown` handler
+  (`AbortController` + `{signal}` threaded to `pi.exec`, `abort()` + stopped flag on shutdown),
+  module-level single-loop guard + `__resetWakeState()` seam, and the missing-env `ctx.ui.notify`
+  (names `$SANDESH_ADDRESS`/`$SANDESH_PROJECT`, distinct from the install notice). 13 tests.
+  - **Cross-CR test conflict (escalated → resolved):** CR-013's `prereq.test.ts` AC7c asserted
+    "CLI present → zero notices", which the new AC4 missing-env notice violated. AC4 (spec) supersedes;
+    AC7c was **narrowed** to "no install/CLI notice" (intent preserved) — an orchestrator-approved
+    test-only fix (the GREEN agent escalated rather than bend production).
+- **VERIFY** (`CR-SAN-014-VERIFY`): 105/105, tsc clean, all AC1–AC6 PASS, 0 blocking.
+- **Pre-merge gate**: tsc clean; **105/105 bun tests; 99.6% line / 95.2% function coverage**;
+  Sandesh-core untouched.
+- **The wake is native** (DN outcome a): the extension owns the loop via `sendUserMessage` — no host
+  `run_in_background`, unlike Claude Code. **Remaining (CR-SAN-015):** Pi-package listing.
