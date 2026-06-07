@@ -1,6 +1,6 @@
 # CR-SAN-015 — Pi extension packaging & listing (npm + pi.dev/packages)
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-015)
 **Priority:** Medium
 **Depends on:** CR-SAN-013 (the extension), CR-SAN-014 (the wake) — the thing being published
 **Labels:** phase-4, pi, distribution, npm
@@ -62,21 +62,21 @@ is **not** offered; local-path (`pi install ./integrations/pi`) remains the dev/
 
 ## Acceptance criteria
 
-- [ ] **AC1** — `integrations/pi/package.json` is npm-publish-ready: `keywords` includes
+- [x] **AC1** — `integrations/pi/package.json` is npm-publish-ready: `keywords` includes
       `"pi-package"`; a `files` allowlist (or `.npmignore`) ships `src/**/*.ts` + README + LICENSE and
       **excludes** `*.test.ts`; `license`, `repository` (with `directory: "integrations/pi"`),
       `description`, `publishConfig.access: "public"` present (asserted by parsing package.json).
-- [ ] **AC2** — the Pi-bundled packages stay `peerDependencies: "*"` (not bundled); the `pi` manifest
+- [x] **AC2** — the Pi-bundled packages stay `peerDependencies: "*"` (not bundled); the `pi` manifest
       `extensions` entry is intact (asserted by parsing package.json).
-- [ ] **AC3** — `npm pack --dry-run` (from `integrations/pi/`) produces a tarball that **includes**
+- [x] **AC3** — `npm pack --dry-run` (from `integrations/pi/`) produces a tarball that **includes**
       `src/index.ts` + README + LICENSE and **excludes** `*.test.ts` (asserted by a test running
       `npm pack --dry-run --json` and checking the file list).
-- [ ] **AC4** — `integrations/pi/README.md` documents install (`pi install npm:@anthill-tec/sandesh-pi`
+- [x] **AC4** — `integrations/pi/README.md` documents install (`pi install npm:@anthill-tec/sandesh-pi`
       + dev local-path), the `sandesh`-CLI prerequisite, env vars, verbs, the native wake, and the
       manual smoke test.
-- [ ] **AC5** — repo `README.md`/`RELEASING.md` document the Pi extension + the npm-publish maintainer
+- [x] **AC5** — repo `README.md`/`RELEASING.md` document the Pi extension + the npm-publish maintainer
       step (and the pi.dev/packages gallery via the `pi-package` keyword).
-- [ ] **AC6** — Sandesh-core untouched; all existing `integrations/pi` suites stay green; tsc clean.
+- [x] **AC6** — Sandesh-core untouched; all existing `integrations/pi` suites stay green; tsc clean.
       (The actual `npm publish` + gallery listing are maintainer actions, documented not executed.)
 
 ## Gap-analysis findings (2026-06-07) — verdict READY
@@ -111,4 +111,28 @@ notes. The real effort is the maintainer prerequisites (npm `@anthill-tec` org +
 ## Non-goals
 - Running the actual `npm publish` / creating the gallery listing (maintainer actions, documented).
 - A JS build pipeline (Pi loads `.ts`).
+
+## Implementation Notes (2026-06-07)
+
+One cycle (C0) + a repo-docs step, agent-dispatched (bun-* agents). All under `integrations/pi/` +
+repo docs; Sandesh-core untouched.
+
+- **C0** — publish-readiness (`2ab9d82` RED / `6a08a3b` GREEN): `package.json` publish metadata
+  (`keywords` incl `pi-package`, `license` GPL-3.0-only, `repository.directory`, `publishConfig.access`
+  public, `files` allowlist) + new `integrations/pi/README.md` (install/prereq/env/verbs/wake/smoke)
+  + `integrations/pi/LICENSE` (GPL-3.0). 23 tests; `npm pack --dry-run` ships exactly
+  `src/index.ts` + `README.md` + `LICENSE` (no `*.test.ts`).
+  - **`files` allowlist is the precise `["src/index.ts","README.md","LICENSE"]`** (not the spec's
+    `src/**/*.ts` glob) — the glob would re-include `*.test.ts` (npm `files` negation is unreliable);
+    the precise list guarantees test exclusion. Update it if a future CR adds non-test source files.
+- **Docs** — repo `README.md` Pi-extension roadmap entry + `RELEASING.md` "Publishing the Pi
+  extension (npm)" step (version tracks the release; `npm publish --access public`; `@anthill-tec`
+  org; pi.dev/packages via the `pi-package` keyword). Also refreshed the roadmap (009/011 marked done).
+- **VERIFY** (`CR-SAN-015-VERIFY`): 128/128, tsc clean, all AC1–AC6 PASS, 0 blocking.
+- **Pre-merge gate**: tsc clean; **128/128 bun tests; 99.6% line / 95.2% function coverage**;
+  Sandesh-core untouched.
+- **Distribution decision:** npm (`@anthill-tec/sandesh-pi`) — Pi `git:` can't target the
+  `integrations/pi/` subdir; manual `npm publish`; version tracks the Sandesh release.
+- **Remaining (maintainer):** claim the `@anthill-tec` npm org + `npm publish` at the first release;
+  list on pi.dev/packages (automatic via the `pi-package` keyword once published).
 - Any change to Sandesh-core, the CLI, the MCP surface, or the extension's behaviour (verbs/wake).
