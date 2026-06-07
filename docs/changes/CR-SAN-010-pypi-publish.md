@@ -1,6 +1,6 @@
 # CR-SAN-010 — PyPI release via OIDC trusted publishing (`sandesh-relay`)
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-010)
 **Priority:** High
 **Depends on:** CR-SAN-008 (the package + `pyproject.toml` + hatch-vcs versioning)
 **Labels:** phase-3, distribution, ci, pypi
@@ -87,31 +87,31 @@ artifact version == the release tag's `X.Y.Z`. (A build from an untagged ref wou
 
 ## Acceptance criteria
 
-- [ ] **AC1** — `.github/workflows/publish-pypi.yml` exists, is valid YAML, and triggers on
+- [x] **AC1** — `.github/workflows/publish-pypi.yml` exists, is valid YAML, and triggers on
       `release` with `types: [published]` (asserted by parsing the workflow).
-- [ ] **AC2** — the `publish-pypi` job declares `permissions: id-token: write`, `environment: pypi`,
+- [x] **AC2** — the `publish-pypi` job declares `permissions: id-token: write`, `environment: pypi`,
       uses `pypa/gh-action-pypi-publish@release/v1`, and contains **no** API-token/`password` input
       and no PyPI secret reference (OIDC-only) — asserted by parsing the workflow.
-- [ ] **AC2b** — a `publish-testpypi` job exists, gated to `workflow_dispatch`, with
+- [x] **AC2b** — a `publish-testpypi` job exists, gated to `workflow_dispatch`, with
       `environment: testpypi`, `permissions: id-token: write`, and the pypa action configured with
       `repository-url: https://test.pypi.org/legacy/` — asserted by parsing the workflow.
-- [ ] **AC3** — a build step runs `python -m build` and `twine check`; locally, building the repo
+- [x] **AC3** — a build step runs `python -m build` and `twine check`; locally, building the repo
       produces a `*.whl` + `*.tar.gz` that `twine check` reports as **PASSED** (asserted by a build
       validation test).
-- [ ] **AC4** — the **build** path runs on `pull_request`/`push` (not only release) while the
+- [x] **AC4** — the **build** path runs on `pull_request`/`push` (not only release) while the
       **publish** job is gated to the `release: published` event (asserted by parsing the workflow:
       build triggers include non-release events; publish job has the release `if`/separation).
-- [ ] **AC5** — the build job checks out with `fetch-depth: 0` (tags present) so the artifact
+- [x] **AC5** — the build job checks out with `fetch-depth: 0` (tags present) so the artifact
       version derives from the git tag (hatch-vcs); a build from a `vX.Y.Z` ref yields bare
       `X.Y.Z` (asserted by parsing the workflow for `fetch-depth: 0`; version-from-tag verified by
       the build test where feasible).
-- [ ] **AC6** — `RELEASING.md` documents (a) the maintainer prerequisites — the *pending* trusted
+- [x] **AC6** — `RELEASING.md` documents (a) the maintainer prerequisites — the *pending* trusted
       publishers for **both** PyPI (env `pypi`) and TestPyPI (env `testpypi`) with the exact fields
       (project `sandesh-relay`, owner `anthill-tec`, repo `sandesh`, workflow `publish-pypi.yml`),
       creating both GitHub environments, and **protecting `pypi` with a required reviewer** — and
       (b) the release→publish flow incl. tag-driven version and the TestPyPI dry-run via
       `workflow_dispatch`; README's PyPI install lines are live + point to RELEASING.md.
-- [ ] **AC7** — the workflow passes a lint/dry check: `actionlint` (or `yamllint`) clean, or
+- [x] **AC7** — the workflow passes a lint/dry check: `actionlint` (or `yamllint`) clean, or
       `act -n` dry-run parses it without error (whichever is available; record which).
 
 ## Gap-analysis findings (2026-06-07) — verdict READY
@@ -153,3 +153,29 @@ not being able to do a real publish from a feature branch.
   the git-flow release to `main`).
 - AUR PKGBUILD (CR-SAN-009), MCP Registry (CR-SAN-011).
 - Any change to the package code, MCP tools, or messaging semantics.
+
+## Implementation Notes (2026-06-07)
+
+One cycle (C0) + a docs step, agent-dispatched, then VERIFY → pre-merge. **No `sandesh/` code
+changed** (`git diff develop..HEAD -- sandesh/` empty) — workflow + docs + tests only.
+
+- **C0** — RED (`d046709`): `tests/test_publish_workflow.py` — text-mode workflow-contract
+  assertions (PyYAML not in venv) + build-validation guards. GREEN (`ef89c81`):
+  `.github/workflows/publish-pypi.yml` — one `build` job (checkout `fetch-depth: 0`, `python -m
+  build`, `twine check`, upload `dist/`; on PR/push/release/dispatch) feeding `publish-pypi`
+  (`if: release`, env `pypi`, OIDC) and `publish-testpypi` (`if: workflow_dispatch`, env `testpypi`,
+  `repository-url` test.pypi.org). `pypa/gh-action-pypi-publish@release/v1`; no token/secret.
+- **Docs** (`RELEASING.md` + README): pending trusted-publisher prereqs for PyPI (env `pypi`,
+  required reviewer) + TestPyPI (env `testpypi`), the git-flow release→tag→GitHub-Release→publish
+  flow (version from the tag), and the `workflow_dispatch` TestPyPI dry-run. README PyPI/git/
+  checkout install lines + RELEASING pointer.
+- **VERIFY** (`CR-SAN-010-VERIFY`): all AC1–AC7 PASS, 0 blocking, no prod code touched; 2 notes
+  (twine absent from venv → AC3 twine-check skipped locally; an optional redundant `if` guard).
+- **Pre-merge gate**: installed `twine` and re-ran — **AC3 `twine check` now PASSES** (sdist+wheel
+  valid, both bundle `sandesh/data/usage-scenarios.md`); stdlib baseline green; **full venv suite
+  184/184 green**. AC7: actionlint/yamllint/act unavailable locally → YAML validity confirmed
+  (contract test parses it; VERIFY `yaml.safe_load` clean) — real lint runs in CI.
+- **Decisions applied:** pypa action + `python -m build`; TestPyPI dry-run via `workflow_dispatch`;
+  `pypi` env required-reviewer (a maintainer GitHub-settings step, documented in RELEASING.md).
+- **First publish** (`v0.1.0` to PyPI) remains a maintainer action at the git-flow release to
+  `main` — this CR ships the automation + docs, not the release itself.
