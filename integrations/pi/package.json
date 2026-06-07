@@ -1,0 +1,23 @@
+{
+  "name": "@anthill-tec/sandesh-pi",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Sandesh verbs as Pi extension tools",
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.78",
+    "@earendil-works/pi-ai": "^0.78",
+    "typebox": "^1.2.2"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  }
+}
