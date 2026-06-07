@@ -127,7 +127,8 @@ function projectPrefix(projectId?: string): string[] {
 /**
  * Shell out to the `sandesh` CLI and map the result to an AgentToolResult:
  *   - exit 0   → success result carrying stdout,
- *   - non-zero → error result surfacing the verb, exit code, and stderr.
+ *   - non-zero → throw Error(verb + exit code + stderr); Pi catches it and
+ *     sets isError on the tool result.
  */
 async function runSandesh(
   pi: ExtensionAPI,
@@ -136,18 +137,10 @@ async function runSandesh(
   signal?: AbortSignal,
 ): Promise<AgentToolResult<undefined>> {
   const r = await pi.exec("sandesh", args, { signal });
-  if (r.code === 0) {
-    return { content: [{ type: "text", text: r.stdout }], details: undefined };
+  if (r.code !== 0) {
+    throw new Error(`sandesh ${verb} failed (exit ${r.code}): ${r.stderr}`);
   }
-  return {
-    content: [
-      {
-        type: "text",
-        text: `sandesh ${verb} failed (exit ${r.code}): ${r.stderr}`,
-      },
-    ],
-    details: undefined,
-  };
+  return { content: [{ type: "text", text: r.stdout }], details: undefined };
 }
 
 // ---------------------------------------------------------------------------
