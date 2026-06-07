@@ -10,3 +10,5 @@ __pycache__/
 test-reports/
 .coverage
 coverage.lcov
+# Codacy CLI scaffolding (local static-analysis tooling, not part of the repo)
+.codacy/
