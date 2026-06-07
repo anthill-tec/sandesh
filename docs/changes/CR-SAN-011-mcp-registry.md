@@ -21,16 +21,17 @@ integration (its own design — `docs/research/PRD-pi-extension.md`).
 
 ### §S1 — `server.json`
 - Generate with `mcp-publisher init`, then edit. Commit it at the repo root.
-- **`$schema`: pin the current registry schema** `https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json`
+- **`$schema`: pin the current registry schema** `https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json`
   (verified current 2026-06; re-confirm/upgrade the date at impl time).
 - **`name`: `io.github.anthill-tec/sandesh`** — the `io.github.*` namespace authenticates via
   GitHub (the repo owner/org), which we have.
 - Description conveys what Sandesh is + the **wake caveat** (the MCP server exposes the *verbs*;
   the `notify` wake is a separate background process, not a tool — PRD-mcp-server §6).
-- Package block: the **PyPI** distribution `sandesh-relay` (`registryType: pypi`,
-  `identifier: sandesh-relay`), stdio transport, and the run via the `sandesh-mcp` console script
-  (the launch a client uses, e.g. `uvx --from 'sandesh-relay[mcp]' sandesh-mcp`). Confirm the exact
-  package/transport field names against the pinned schema at impl time.
+- Package block (field names verified against the pinned schema): `registryType: "pypi"`,
+  `registryBaseUrl: "https://pypi.org"`, `identifier: "sandesh-relay"`, `version`,
+  `runtimeHint: "uvx"`, `transport: { "type": "stdio" }`, and **`runtimeArguments`** to express the
+  extra + script — i.e. the client invocation `uvx --from 'sandesh-relay[mcp]' sandesh-mcp`
+  (e.g. `runtimeArguments: [{type: named, name: "--from", value: "sandesh-relay[mcp]"}, {type: positional, value: "sandesh-mcp"}]` — confirm the exact argument-object shape against the schema in GREEN).
 
 ### §S2 — Package-ownership verification (marker in **README**, not pyproject)
 **Verified mechanism (2026-06):** the registry fetches `https://pypi.org/pypi/sandesh-relay/json`
@@ -60,7 +61,7 @@ field for this.)
 ## Acceptance criteria
 
 - [ ] **AC1** — `server.json` exists at the repo root, is valid JSON, declares the pinned
-      `$schema` (2025-10-17), and `name = "io.github.anthill-tec/sandesh"` (asserted by a test
+      `$schema` (2025-12-11), and `name = "io.github.anthill-tec/sandesh"` (asserted by a test
       parsing `server.json`).
 - [ ] **AC2** — `server.json` declares the **PyPI** package (`registryType: pypi`,
       `identifier: sandesh-relay`) with stdio transport and the run matching the `sandesh-mcp`
@@ -84,7 +85,7 @@ Verified against the live registry docs (web, 2026-06):
 - **DRIFT-1 (Dim 1/3 → §S2/AC3, FIXED):** the PyPI ownership marker is **not** a pyproject field —
   the registry reads `mcp-name: <name>` from the **README (PyPI long-description)**. Marker moved to
   `README.md` (HTML comment), reaching PyPI via `readme = "README.md"`.
-- **DRIFT-2 (§S1/AC1, FIXED):** pin `$schema` = `…/schemas/2025-10-17/server.schema.json`.
+- **DRIFT-2 (§S1/AC1, FIXED):** pin `$schema` = `…/schemas/2025-12-11/server.schema.json`.
 - **DRIFT-3 (§S3/AC4, FIXED):** registry publish validates against the **live** PyPI package, so
   `mcp-publisher publish` is a **manual maintainer step after the `v0.1.0` PyPI publish**; CI here
   validates `server.json` against the JSON-schema only (the `mcp-publisher` binary needs GitHub auth
