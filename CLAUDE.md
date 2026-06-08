@@ -2,7 +2,7 @@
 
 Read this before changing anything. It captures the architecture, the **locked
 design decisions** (don't re-litigate them without reason), the gotchas, and the
-Phase-2 roadmap. The code is small and stdlib-only — pair this doc with the four
+Wave-2 roadmap. The code is small and stdlib-only — pair this doc with the four
 `.py` files and you have the whole picture.
 
 ---
@@ -46,9 +46,9 @@ but nothing is Claude-specific anymore — it's a general agent-messaging primit
 
 ## Status & Roadmap
 
-- **Phase 1 — DONE (this repo).** Standalone CLI: store, addressbook, send/reply/
+- **Wave 1 — DONE (this repo).** Standalone CLI: store, addressbook, send/reply/
   inbox/fetch/thread, `setup`, the `notify` watcher, installer. 24 unit tests green.
-- **Phase 2 — NEXT: an MCP server** (`app/mcp_server.py`). Expose the verbs as MCP
+- **Wave 2 — NEXT: an MCP server** (`app/mcp_server.py`). Expose the verbs as MCP
   tools (each taking `project_id`) so an agent calls them instead of shelling out.
   **The `notify` watcher stays the wake path** (an MCP server can't re-invoke a sleeping
   agent — see "The wake mechanism"). **Before building it, verify the current MCP
@@ -161,7 +161,7 @@ against the Claude Code hooks docs:
 - An MCP server **cannot** push a turn into an idle session either.
 
 **Therefore:** the `notify` watcher must be launched by the agent via its background-task
-tool (which is what re-invokes it on exit). MCP (Phase 2) replaces the *verbs* (send/
+tool (which is what re-invokes it on exit). MCP (Wave 2) replaces the *verbs* (send/
 fetch/…), **not** the wake. Keep `notify` as a standalone process. This is *why* the
 liveness table is crash-safe rather than relying on a shutdown hook.
 
@@ -215,7 +215,7 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
 
 ---
 
-## Phase 2 — MCP server (plan)
+## Wave 2 — MCP server (plan)
 
 1. **Verify the MCP Python SDK first** (read its actual API; it's the one real new
    dependency — decide stdio vs HTTP transport).

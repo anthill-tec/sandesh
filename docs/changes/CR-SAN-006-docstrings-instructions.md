@@ -3,8 +3,8 @@
 **Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-006)
 **Priority:** Medium
 **Depends on:** CR-SAN-005 (9-tool surface settled)
-**Labels:** phase-2, mcp, docs, usability
-**Phase:** Phase 2
+**Labels:** wave-2, mcp, docs, usability
+**Wave:** Wave 2
 **Design reference:** docs/research/PRD-mcp-server.md §10 (CR-SAN-006 row), §5 (tool surface), §6 (the two-channel wake), and `docs/usage-scenarios.md` (the authoring source)
 
 ## Context

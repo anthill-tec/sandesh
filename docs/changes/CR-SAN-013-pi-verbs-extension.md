@@ -3,8 +3,8 @@
 **Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-013)
 **Priority:** Medium
 **Depends on:** CR-SAN-008 (the installed `sandesh` CLI the extension shells to)
-**Labels:** phase-4, pi, typescript, integration
-**Phase:** Phase 4 (Pi integration)
+**Labels:** wave-4, pi, typescript, integration
+**Wave:** Wave 4 (Pi integration)
 **Design reference:** docs/research/PRD-pi-extension.md (PE1–PE5), docs/research/DN-pi-wake.md (the wake is CR-SAN-014)
 
 ## Context

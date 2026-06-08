@@ -3,8 +3,8 @@
 **Status:** COMPLETED (shipped 2026-06-06 on feature/CR-SAN-004)
 **Priority:** Medium
 **Depends on:** CR-SAN-001, CR-SAN-002, CR-SAN-003
-**Labels:** phase-2, mcp, e2e, testing
-**Phase:** Phase 2
+**Labels:** wave-2, mcp, e2e, testing
+**Wave:** Wave 2
 **Design reference:** docs/research/PRD-mcp-server.md §8a (T2/T3), §7a
 
 ## Context
@@ -102,10 +102,10 @@ Medium: two test modules (in-memory + subprocess) + doc edits.
 
 ## Implementation Notes (2026-06-06)
 
-One cycle (C0, E2E tests) + an orchestrator docs step. **Final Phase-2 CR.** No production code changed (`app/` diff empty) — pure test-coverage + docs.
+One cycle (C0, E2E tests) + an orchestrator docs step. **Final Wave-2 CR.** No production code changed (`app/` diff empty) — pure test-coverage + docs.
 
 - **C0** (`637ef96`) — `tests/test_mcp_e2e.py` (8 tests). **T2** (5): real `ClientSession` over `create_connected_server_and_client_session` (in-memory) — `list_tools`=10, read+mutating round-trips, validation→`isError` result. **T3** (3): real subprocess over stdio via `.venv/bin/python app/mcp_server.py` + `stdio_client`+`ClientSession` — `setup→register→send→fetch` round-trip + list_tools + error path. Gated `@skipUnless(HAS_MCP and venv present)` so it skips (not errors) without the venv. Confirmed the real-client result shape: `CallToolResult.structuredContent = {"result": <value>}`, errors via `isError`.
 - **§S4 docs** (`dc8fde5`) — README MCP server section: `claude mcp add` registration (user/project scope), the 10 tools, `mcp dev` manual smoke; Roadmap → MCP DONE.
 - **VERIFY** (`CR-SAN-004-VERIFY`): 8/8 green, T3 confirmed RAN (3 real subprocess spawns, not skipped), `app/` diff empty, stdlib path mcp-free, all AC1–AC8 PASS, 0 blocking.
 - **Pre-merge gate**: 97/97 green; py_compile clean; coverage 52.0% lines / 64.2% funcs.
-- **Phase 2 COMPLETE** — all 4 CRs (SAN-001..004) shipped: 10-tool MCP stdio server, venv isolation, T1 in-process + T2 in-memory + T3 subprocess E2E, docs.
+- **Wave 2 COMPLETE** — all 4 CRs (SAN-001..004) shipped: 10-tool MCP stdio server, venv isolation, T1 in-process + T2 in-memory + T3 subprocess E2E, docs.

@@ -3,8 +3,8 @@
 **Status:** PENDING
 **Priority:** Low (metadata polish on an already-shipped, functional packaging config — no correctness defect)
 **Depends on:** CR-SAN-008 (the `pyproject.toml` it hardens)
-**Labels:** phase-4, packaging, pypi, python
-**Phase:** Phase 4 (filed at the end of the Phase-4 queue per direction; the work is Python/PyPI metadata)
+**Labels:** wave-4, packaging, pypi, python
+**Wave:** Wave 4 (filed at the end of the Wave-4 queue per direction; the work is Python/PyPI metadata)
 **Design reference:** docs/research/PRD-distribution.md (D-build: hatchling + hatch-vcs); packaging audit (2026-06-07)
 
 ## Context

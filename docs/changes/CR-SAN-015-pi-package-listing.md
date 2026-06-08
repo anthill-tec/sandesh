@@ -3,8 +3,8 @@
 **Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-015)
 **Priority:** Medium
 **Depends on:** CR-SAN-013 (the extension), CR-SAN-014 (the wake) — the thing being published
-**Labels:** phase-4, pi, distribution, npm
-**Phase:** Phase 4 (Pi integration)
+**Labels:** wave-4, pi, distribution, npm
+**Wave:** Wave 4 (Pi integration)
 **Design reference:** docs/research/PRD-pi-extension.md PE5 (distribute via Pi packages), Pi `docs/packages.md`
 
 ## Context

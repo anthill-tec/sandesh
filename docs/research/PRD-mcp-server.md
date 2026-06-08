@@ -2,8 +2,8 @@
 
 **Status:** DRAFT
 **Owner:** Mainline - Sandesh
-**Phase:** Phase 2
-**Supersedes:** the Phase-2 sketch in `CLAUDE.md` (this PRD is now the authoritative design)
+**Wave:** Wave 2
+**Supersedes:** the Wave-2 sketch in `CLAUDE.md` (this PRD is now the authoritative design)
 
 This is the design contract (WHY + WHAT) for exposing Sandesh's verbs over the Model
 Context Protocol. CRs derived from it cite it via `**Design reference:**` and implement
@@ -23,7 +23,7 @@ An **MCP server** turns the verbs into first-class, schema-described tools the a
 in-protocol. The library (`sandesh_db.py`) is already a clean, side-effect-free model, so
 the server is a **thin adapter** — the same role `cli.py` plays for the terminal.
 
-This is **Phase 2** on the roadmap. Phase 1 (CLI + watcher) is done and stays unchanged.
+This is **Wave 2** on the roadmap. Wave 1 (CLI + watcher) is done and stays unchanged.
 
 ## 2. What it is (and is not)
 

@@ -3,8 +3,8 @@
 **Status:** PENDING
 **Priority:** High (unblocks every future schema change; the `message.status` retirement is blocked on it)
 **Depends on:** CR-SAN-008 (the `pyproject.toml` extras mechanism), Python core (`sandesh_db`/`cli`)
-**Labels:** phase-5, migration, python, cli
-**Phase:** Phase 5 (schema evolution)
+**Labels:** wave-5, migration, python, cli
+**Wave:** Wave 5 (schema evolution)
 **Design reference:** docs/research/PRD-db-migration.md (D1–D8) — yoyo runner, `[migrate]` extra, Option B
 (yoyo steps = source of truth; JSON = derived `--check` snapshot), CLI/installer only (no MCP/Pi).
 

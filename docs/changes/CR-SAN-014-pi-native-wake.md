@@ -3,8 +3,8 @@
 **Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-014)
 **Priority:** Medium
 **Depends on:** CR-SAN-013 (the Pi extension scaffold + verbs), CR-SAN-008 (the `sandesh` CLI / `notify`)
-**Labels:** phase-4, pi, typescript, wake
-**Phase:** Phase 4 (Pi integration)
+**Labels:** wave-4, pi, typescript, wake
+**Wave:** Wave 4 (Pi integration)
 **Design reference:** docs/research/DN-pi-wake.md (verdict **a** = native injection; design **W1**), PRD-pi-extension.md §5
 
 ## Context

@@ -3,8 +3,8 @@
 **Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-010)
 **Priority:** High
 **Depends on:** CR-SAN-008 (the package + `pyproject.toml` + hatch-vcs versioning)
-**Labels:** phase-3, distribution, ci, pypi
-**Phase:** Phase 3
+**Labels:** wave-3, distribution, ci, pypi
+**Wave:** Wave 3
 **Design reference:** docs/research/PRD-distribution.md §3 D7, §5 (CR-SAN-010 row)
 
 ## Context

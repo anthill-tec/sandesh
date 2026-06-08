@@ -3,8 +3,8 @@
 **Status:** PENDING
 **Priority:** Medium (the version-sync gate + npm CI are real release-integrity value; the rest is polish)
 **Depends on:** CR-SAN-015 (the npm/Pi package being hardened), CR-SAN-011 (server.json — a version-sync target)
-**Labels:** phase-4, packaging, pi, npm, ci
-**Phase:** Phase 4 (Pi integration)
+**Labels:** wave-4, packaging, pi, npm, ci
+**Wave:** Wave 4 (Pi integration)
 **Design reference:** docs/research/PRD-pi-extension.md PE5 (distribute via Pi packages); Pi `docs/packages.md` (deps rules); packaging audit (2026-06-07)
 
 ## Context

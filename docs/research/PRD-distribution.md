@@ -2,7 +2,7 @@
 
 **Status:** DRAFT
 **Owner:** Mainline - Sandesh
-**Phase:** Phase 3 (Distribution)
+**Wave:** Wave 3 (Distribution)
 **Related:** `PRD-mcp-server.md` (supersedes its D2 venv+wrapper *install mechanism* and §7a
 PATH handling), `DN-windows-notifier.md` (runtime portability caveat)
 

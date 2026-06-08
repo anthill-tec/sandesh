@@ -3,8 +3,8 @@
 **Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-008)
 **Priority:** High
 **Depends on:** CR-SAN-001, CR-SAN-002, CR-SAN-003, CR-SAN-004, CR-SAN-005 (9-tool surface), CR-SAN-006 (`sandesh://usage` resource — its doc must be bundled here, §S7)
-**Labels:** phase-3, distribution, packaging, refactor
-**Phase:** Phase 3
+**Labels:** wave-3, distribution, packaging, refactor
+**Wave:** Wave 3
 **Design reference:** docs/research/PRD-distribution.md §3 (D1–D4, D6), §5
 
 ## Context

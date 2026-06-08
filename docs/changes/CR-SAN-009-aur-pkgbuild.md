@@ -3,8 +3,8 @@
 **Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-009)
 **Priority:** Medium
 **Depends on:** CR-SAN-008 (the package + pyproject), CR-SAN-010 (PyPI publish — if the source is the PyPI sdist)
-**Labels:** phase-3, distribution, aur, arch
-**Phase:** Phase 3
+**Labels:** wave-3, distribution, aur, arch
+**Wave:** Wave 3
 **Design reference:** docs/research/PRD-distribution.md §3 D5, §5 (CR-SAN-009 row)
 
 ## Context

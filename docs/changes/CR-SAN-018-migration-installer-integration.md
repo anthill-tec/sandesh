@@ -3,8 +3,8 @@
 **Status:** PENDING
 **Priority:** Medium (makes the engine actually run on update; without it migrations exist but never fire)
 **Depends on:** CR-SAN-017 (the migration engine + `sandesh migrate` CLI)
-**Labels:** phase-5, migration, install, ci, docs
-**Phase:** Phase 5 (schema evolution)
+**Labels:** wave-5, migration, install, ci, docs
+**Wave:** Wave 5 (schema evolution)
 **Design reference:** docs/research/PRD-db-migration.md (D7 installer hook, D8 boundary, §5 CR breakdown)
 
 ## Context

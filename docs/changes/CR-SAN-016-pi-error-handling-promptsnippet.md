@@ -3,8 +3,8 @@
 **Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-016)
 **Priority:** High (AC1 is a correctness defect — failed CLI calls look like successes to the LLM)
 **Depends on:** CR-SAN-013 (the verbs extension being corrected), CR-SAN-014 (shares `src/index.ts`)
-**Labels:** phase-4, pi, typescript, fix
-**Phase:** Phase 4 (Pi integration)
+**Labels:** wave-4, pi, typescript, fix
+**Wave:** Wave 4 (Pi integration)
 **Design reference:** Pi `docs/extensions.md` (tool error signaling), `docs/packages.md` (deps), PRD-pi-extension.md PE4
 
 ## Context

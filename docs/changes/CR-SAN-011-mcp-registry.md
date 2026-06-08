@@ -3,8 +3,8 @@
 **Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-011)
 **Priority:** Medium
 **Depends on:** CR-SAN-008 (package), CR-SAN-010 (PyPI publish — the registry verifies the package)
-**Labels:** phase-3, distribution, mcp-registry
-**Phase:** Phase 3
+**Labels:** wave-3, distribution, mcp-registry
+**Wave:** Wave 3
 **Design reference:** docs/research/PRD-distribution.md §5, D7
 
 ## Context

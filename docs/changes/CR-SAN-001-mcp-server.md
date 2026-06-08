@@ -3,13 +3,13 @@
 **Status:** COMPLETED (shipped 2026-06-06 on feature/CR-SAN-001)
 **Priority:** High
 **Depends on:** —
-**Labels:** phase-2, mcp, foundation
-**Phase:** Phase 2
+**Labels:** wave-2, mcp, foundation
+**Wave:** Wave 2
 **Design reference:** docs/research/PRD-mcp-server.md §3, §4 (D1/D2/D3/D5), §6
 
 ## Context
 
-First CR of the Phase-2 MCP server (PRD §10). Establishes the adapter foundation every
+First CR of the Wave-2 MCP server (PRD §10). Establishes the adapter foundation every
 later tool builds on: the pinned, **isolated** `mcp` dependency (PRD D2 — CLI stays
 stdlib-only), the `FastMCP` application, the per-call store/connection helper mirroring
 `cli.py::_ctx` (D3), the `ToolError` mapping for library errors (D5), the stdio entrypoint

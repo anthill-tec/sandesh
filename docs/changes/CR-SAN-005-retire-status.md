@@ -3,8 +3,8 @@
 **Status:** COMPLETED (shipped 2026-06-07 on feature/CR-SAN-005)
 **Priority:** High
 **Depends on:** CR-SAN-001, CR-SAN-002, CR-SAN-003, CR-SAN-004
-**Labels:** phase-2, mcp, cleanup
-**Phase:** Phase 2
+**Labels:** wave-2, mcp, cleanup
+**Wave:** Wave 2
 **Design reference:** docs/research/PRD-mcp-server.md D7 (corrected lifecycle), §5, §10
 
 ## Context
@@ -16,7 +16,7 @@ from **10 → 9**, and locks in that `sandesh_reply` exposes no `resolves`/`repl
 disposition-coupling the model rejects).
 
 **Scope boundary (sized in gap-analysis):** this CR retires the **MCP tool surface** only. The
-underlying Phase-1 core (`sandesh_db.set_status`, the `message.status` column, the CLI
+underlying Wave-1 core (`sandesh_db.set_status`, the `message.status` column, the CLI
 `actioned` command, `reply(resolves=…)`, and `inbox`'s surfaced `status`) is a larger,
 schema-touching change with its own blast radius (the 24 baseline tests, the CLI) — handled as
 a **deferred follow-up** (see §S3), not bundled here.
@@ -37,7 +37,7 @@ a **deferred follow-up** (see §S3), not bundled here.
 
 ### §S3 — Core status retirement = DEFERRED (record, don't implement here)
 Removing `message.status` / `set_status` / CLI `actioned` / `reply(resolves)` / `inbox.status`
-touches the Phase-1 library + schema + the 24 stdlib tests. **Gap-analysis must enumerate the
+touches the Wave-1 library + schema + the 24 stdlib tests. **Gap-analysis must enumerate the
 exact callers + blast radius**; the finding is recorded under `### S3 Findings`, and the core
 retirement is filed as a **follow-up CR** (or confirmed in-scope only if gap-analysis shows it
 is genuinely small). Default: **defer**.
@@ -53,7 +53,7 @@ Core-status blast radius — **confirmed substantial → DEFER to a follow-up CR
 - **The 24 baseline tests depend on it**: `tests/test_sandesh.py:167-168` asserts
   `SELECT status … == "actioned"` after a resolve.
 Therefore removing the core status machine needs library + CLI + **schema** changes and would
-break the Phase-1 baseline suite — out of scope for this CR. **CR-SAN-005 retires only the MCP
+break the Wave-1 baseline suite — out of scope for this CR. **CR-SAN-005 retires only the MCP
 `sandesh_actioned` tool** (§S1); the core machine stays (dormant from the MCP surface) until the
 deferred follow-up.
 

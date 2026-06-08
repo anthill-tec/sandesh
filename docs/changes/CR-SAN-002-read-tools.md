@@ -3,13 +3,13 @@
 **Status:** COMPLETED (shipped 2026-06-06 on feature/CR-SAN-002)
 **Priority:** High
 **Depends on:** CR-SAN-001
-**Labels:** phase-2, mcp, read-tools
-**Phase:** Phase 2
+**Labels:** wave-2, mcp, read-tools
+**Wave:** Wave 2
 **Design reference:** docs/research/PRD-mcp-server.md §5, §4 (D3/D4)
 
 ## Context
 
-Second CR of the Phase-2 MCP server (PRD §10). Adds the four **read/query** tools on the
+Second CR of the Wave-2 MCP server (PRD §10). Adds the four **read/query** tools on the
 CR-SAN-001 foundation (`_ctx`, error mapping, test harness). No mutation; all delegate to
 pure-DB or body-reading library functions.
 

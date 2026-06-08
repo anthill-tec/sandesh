@@ -3,13 +3,13 @@
 **Status:** COMPLETED (shipped 2026-06-06 on feature/CR-SAN-003)
 **Priority:** High
 **Depends on:** CR-SAN-001
-**Labels:** phase-2, mcp, write-tools
-**Phase:** Phase 2
+**Labels:** wave-2, mcp, write-tools
+**Wave:** Wave 2
 **Design reference:** docs/research/PRD-mcp-server.md §5, §4 (D3/D4/D5)
 
 ## Context
 
-Third CR of the Phase-2 MCP server (PRD §10). Adds the five **mutating** tools and
+Third CR of the Wave-2 MCP server (PRD §10). Adds the five **mutating** tools and
 exercises the CR-SAN-001 error mapping (D5) against the library's real validation and
 authorization errors (bad address format, duplicate registration, unauthorized
 unregister).

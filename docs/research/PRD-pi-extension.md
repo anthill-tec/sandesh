@@ -2,7 +2,7 @@
 
 **Status:** DRAFT (design contract — CRs spin from this later; no code yet)
 **Owner:** Mainline - Sandesh
-**Phase:** Phase 4 (Pi integration)
+**Wave:** Wave 4 (Pi integration)
 **Related:** `PRD-distribution.md` (Pi is a *first-class extension* integration, not the MCP
 adapter), `PRD-mcp-server.md` §6 (the wake constraint this must re-examine for Pi)
 

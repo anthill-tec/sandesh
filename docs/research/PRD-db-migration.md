@@ -2,7 +2,7 @@
 
 **Status:** DRAFT (design contract — CRs spin from this)
 **Owner:** Mainline - Sandesh
-**Phase:** Phase 5 (schema evolution)
+**Wave:** Wave 5 (schema evolution)
 **Related:** `CLAUDE.md` (the four tables / `_SCHEMA`), CR-SAN-005 §S3 + the deferred **CR-SAN-012**
 (core `message.status` retirement — now **folded into CR-SAN-017** as the engine's first real migration /
 proving case), Python-backend audit #4.

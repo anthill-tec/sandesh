@@ -6,8 +6,8 @@ green (4 new tombstone + 4 smoke), `tsc --noEmit` clean, coverage 99.7% lines / 
 Sandesh-core untouched. VERIFY: APPROVE (0 blocking, all 6 ACs PASS). Awaiting merge to `develop`.
 **Priority:** Medium (AC1 is a correctness defect — a cooperative-eviction intermediate state is reported to the agent as a failure)
 **Depends on:** CR-SAN-013 (the verbs extension), CR-SAN-016 (the throw-on-failure contract being refined here)
-**Labels:** phase-4, pi, typescript, fix, test
-**Phase:** Phase 4 (Pi integration)
+**Labels:** wave-4, pi, typescript, fix, test
+**Wave:** Wave 4 (Pi integration)
 **Design reference:** CLAUDE.md §8 (cooperative tombstone eviction, exit 3) + "notify exit codes"; Pi `docs/extensions.md` (throw → isError); the integration audit (2026-06-07).
 
 ## Context
