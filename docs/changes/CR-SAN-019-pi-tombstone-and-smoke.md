@@ -1,6 +1,9 @@
 # CR-SAN-019 — Pi: tombstone-aware unregister + real-binary smoke test
 
-**Status:** PENDING
+**Status:** COMPLETED (2026-06-08) — shipped on `feature/CR-SAN-019-pi-tombstone-smoke`
+(`e536dae` RED → `4b227e4` GREEN §S1 → `2d006ec` tsc-narrow → `94f1c3d` §S2 smoke). 153 tests
+green (4 new tombstone + 4 smoke), `tsc --noEmit` clean, coverage 99.7% lines / 95.2% funcs.
+Sandesh-core untouched. VERIFY: APPROVE (0 blocking, all 6 ACs PASS). Awaiting merge to `develop`.
 **Priority:** Medium (AC1 is a correctness defect — a cooperative-eviction intermediate state is reported to the agent as a failure)
 **Depends on:** CR-SAN-013 (the verbs extension), CR-SAN-016 (the throw-on-failure contract being refined here)
 **Labels:** phase-4, pi, typescript, fix, test
