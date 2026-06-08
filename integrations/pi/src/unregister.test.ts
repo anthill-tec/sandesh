@@ -110,7 +110,7 @@ describe("AC1 — sandesh_unregister: exit 3 returns success result (tombstone)"
     });
 
     expect(result.content[0].type).toBe("text");
-    expect(result.content[0].text).toContain("tombstone set");
+    expect((result.content[0] as { type: "text"; text: string }).text).toContain("tombstone set");
   });
 
   test("result content[0].text carries the full tombstone message from stdout", async () => {
@@ -127,8 +127,8 @@ describe("AC1 — sandesh_unregister: exit 3 returns success result (tombstone)"
       project_id: "Demo",
     });
 
-    expect(result.content[0].text).toContain("re-run once");
-    expect(result.content[0].text).toContain("addressbook");
+    expect((result.content[0] as { type: "text"; text: string }).text).toContain("re-run once");
+    expect((result.content[0] as { type: "text"; text: string }).text).toContain("addressbook");
   });
 
   test("falls back to stderr when stdout is empty on code 3", async () => {
@@ -146,7 +146,7 @@ describe("AC1 — sandesh_unregister: exit 3 returns success result (tombstone)"
     });
 
     // Result must still be a success containing some tombstone text (from stderr fallback)
-    expect(result.content[0].text).toContain("tombstone set");
+    expect((result.content[0] as { type: "text"; text: string }).text).toContain("tombstone set");
   });
 });
 
@@ -322,7 +322,7 @@ describe("AC4 — sandesh_unregister: exit 0 returns normal success result", () 
 
     expect(result).toBeDefined();
     expect(result.content[0].type).toBe("text");
-    expect(result.content[0].text).toContain("address unregistered");
+    expect((result.content[0] as { type: "text"; text: string }).text).toContain("address unregistered");
   });
 
   test("success result details is undefined for exit 0", async () => {
