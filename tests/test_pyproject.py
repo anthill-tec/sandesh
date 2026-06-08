@@ -251,5 +251,191 @@ class HatchVcsVersioningTest(unittest.TestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# CR-SAN-020 — PyPI packaging metadata hardening (AC1, AC2 floors, AC3, AC5)
+# ---------------------------------------------------------------------------
+
+
+class LicenseFilesTest(unittest.TestCase):
+    """AC1 — [project] must declare license-files and the referenced file must exist."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.isfile(_PYPROJECT_PATH):
+            raise unittest.SkipTest("pyproject.toml missing — skipping license-files assertions")
+        cls.data = _load_pyproject()
+        cls.project = cls.data.get("project", {})
+
+    def test_license_files_key_present(self):
+        """AC1: [project].license-files must be declared."""
+        self.assertIn(
+            "license-files",
+            self.project,
+            "[project].license-files must be declared (PEP 639); currently absent",
+        )
+
+    def test_license_files_is_list(self):
+        """AC1: [project].license-files must be a list."""
+        lf = self.project.get("license-files")
+        if lf is None:
+            self.skipTest("license-files absent — covered by test_license_files_key_present")
+        self.assertIsInstance(
+            lf,
+            list,
+            f"[project].license-files must be a list; got {type(lf)!r}: {lf!r}",
+        )
+
+    def test_license_files_contains_LICENSE(self):
+        """AC1: [project].license-files must include 'LICENSE'."""
+        lf = self.project.get("license-files", [])
+        if not isinstance(lf, list):
+            self.skipTest("license-files is not a list — covered by test_license_files_is_list")
+        self.assertIn(
+            "LICENSE",
+            lf,
+            f"[project].license-files must contain 'LICENSE'; got {lf!r}",
+        )
+
+    def test_license_file_exists_on_disk(self):
+        """AC1: the repo-root LICENSE file referenced in license-files must exist."""
+        license_path = os.path.join(_REPO_ROOT, "LICENSE")
+        self.assertTrue(
+            os.path.isfile(license_path),
+            f"LICENSE file must exist at {license_path}",
+        )
+
+
+class BuildSystemPinnedRequiresTest(unittest.TestCase):
+    """AC2 (floors) — [build-system].requires must pin lower bounds >= hatchling>=1.27 and hatch-vcs>=0.4."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.isfile(_PYPROJECT_PATH):
+            raise unittest.SkipTest("pyproject.toml missing — skipping build-system pin assertions")
+        cls.data = _load_pyproject()
+        cls.requires = cls.data.get("build-system", {}).get("requires", [])
+
+    def _find_entry(self, pkg_name):
+        """Return the first requires entry whose text contains pkg_name, or None."""
+        return next(
+            (r for r in self.requires if isinstance(r, str) and pkg_name in r),
+            None,
+        )
+
+    def test_hatchling_entry_has_version_constraint(self):
+        """AC2: hatchling entry in [build-system].requires must not be bare (must carry a constraint)."""
+        entry = self._find_entry("hatchling")
+        self.assertIsNotNone(entry, "[build-system].requires must contain a hatchling entry")
+        # A bare entry equals exactly "hatchling" (no constraint characters)
+        self.assertNotEqual(
+            entry.strip(),
+            "hatchling",
+            f"[build-system].requires hatchling entry must carry a version constraint; got {entry!r}",
+        )
+
+    def test_hatch_vcs_entry_has_version_constraint(self):
+        """AC2: hatch-vcs entry in [build-system].requires must not be bare (must carry a constraint)."""
+        entry = self._find_entry("hatch-vcs")
+        self.assertIsNotNone(entry, "[build-system].requires must contain a hatch-vcs entry")
+        self.assertNotEqual(
+            entry.strip(),
+            "hatch-vcs",
+            f"[build-system].requires hatch-vcs entry must carry a version constraint; got {entry!r}",
+        )
+
+    def test_hatchling_lower_bound_is_at_least_1_27(self):
+        """AC2: hatchling lower bound must be >= 1.27 (PEP 639 / core-metadata-2.4 floor)."""
+        import re
+        entry = self._find_entry("hatchling")
+        self.assertIsNotNone(entry, "[build-system].requires must contain a hatchling entry")
+        # Accept any specifier that includes >=X.Y where X.Y >= 1.27 via substring check.
+        # We look for ">=1.27" or any higher floor (>=1.28, >=2, etc.) as a string match.
+        # The simplest and most tolerant check: assert the entry contains ">=1.27" or
+        # a version number that is numerically >= 1.27 after ">=".
+        m = re.search(r">=\s*(\d+\.\d+)", entry)
+        self.assertIsNotNone(
+            m,
+            f"hatchling entry must include a '>=' lower bound; got {entry!r}",
+        )
+        floor = tuple(int(x) for x in m.group(1).split("."))
+        self.assertGreaterEqual(
+            floor,
+            (1, 27),
+            f"hatchling lower bound must be >= 1.27 (PEP 639 floor); got {entry!r}",
+        )
+
+    def test_hatch_vcs_lower_bound_is_at_least_0_4(self):
+        """AC2: hatch-vcs lower bound must be >= 0.4."""
+        import re
+        entry = self._find_entry("hatch-vcs")
+        self.assertIsNotNone(entry, "[build-system].requires must contain a hatch-vcs entry")
+        m = re.search(r">=\s*(\d+\.\d+)", entry)
+        self.assertIsNotNone(
+            m,
+            f"hatch-vcs entry must include a '>=' lower bound; got {entry!r}",
+        )
+        floor = tuple(int(x) for x in m.group(1).split("."))
+        self.assertGreaterEqual(
+            floor,
+            (0, 4),
+            f"hatch-vcs lower bound must be >= 0.4; got {entry!r}",
+        )
+
+
+class GranularClassifiersTest(unittest.TestCase):
+    """AC3 — classifiers must include granular Python minor-version trove classifiers 3.10–3.13."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.isfile(_PYPROJECT_PATH):
+            raise unittest.SkipTest("pyproject.toml missing — skipping classifier assertions")
+        cls.data = _load_pyproject()
+        cls.classifiers = cls.data.get("project", {}).get("classifiers", [])
+
+    def test_classifier_python_310(self):
+        """AC3: classifiers includes 'Programming Language :: Python :: 3.10'."""
+        self.assertIn(
+            "Programming Language :: Python :: 3.10",
+            self.classifiers,
+            f"classifiers must include 'Programming Language :: Python :: 3.10'; got {self.classifiers!r}",
+        )
+
+    def test_classifier_python_311(self):
+        """AC3: classifiers includes 'Programming Language :: Python :: 3.11'."""
+        self.assertIn(
+            "Programming Language :: Python :: 3.11",
+            self.classifiers,
+            f"classifiers must include 'Programming Language :: Python :: 3.11'; got {self.classifiers!r}",
+        )
+
+    def test_classifier_python_312(self):
+        """AC3: classifiers includes 'Programming Language :: Python :: 3.12'."""
+        self.assertIn(
+            "Programming Language :: Python :: 3.12",
+            self.classifiers,
+            f"classifiers must include 'Programming Language :: Python :: 3.12'; got {self.classifiers!r}",
+        )
+
+    def test_classifier_python_313(self):
+        """AC3: classifiers includes 'Programming Language :: Python :: 3.13'."""
+        self.assertIn(
+            "Programming Language :: Python :: 3.13",
+            self.classifiers,
+            f"classifiers must include 'Programming Language :: Python :: 3.13'; got {self.classifiers!r}",
+        )
+
+
+class PyTypedAbsentGuardTest(unittest.TestCase):
+    """AC5 (guard) — sandesh/py.typed must NOT exist (rejected audit item P3)."""
+
+    def test_py_typed_does_not_exist(self):
+        """AC5: sandesh/py.typed must NOT be present (not a library distributing type stubs)."""
+        py_typed_path = os.path.join(_REPO_ROOT, "sandesh", "py.typed")
+        self.assertFalse(
+            os.path.exists(py_typed_path),
+            f"sandesh/py.typed must NOT exist (audit item P3 rejected); found at {py_typed_path}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
