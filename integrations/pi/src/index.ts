@@ -137,6 +137,13 @@ async function runSandesh(
   signal?: AbortSignal,
 ): Promise<AgentToolResult<undefined>> {
   const r = await pi.exec("sandesh", args, { signal });
+  // Tombstone-aware unregister (CR-SAN-019 §S1): unregister exit 3 means the
+  // address's watcher was tombstoned (cooperative eviction) — a successful
+  // disposition, not a failure. Scoped to unregister; every other verb's
+  // exit 3 still throws via the generic guard below.
+  if (verb === "unregister" && r.code === 3) {
+    return { content: [{ type: "text", text: r.stdout || r.stderr }], details: undefined };
+  }
   if (r.code !== 0) {
     throw new Error(`sandesh ${verb} failed (exit ${r.code}): ${r.stderr}`);
   }
