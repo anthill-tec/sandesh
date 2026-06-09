@@ -298,6 +298,12 @@ def build_parser():
                    help="operate on every project store (apply is fail-fast)")
     p.add_argument("--check", action="store_true",
                    help="read-only gate: pending=non-zero, drift=warning (exit zero)")
+    p.add_argument("--dump-schema", dest="dump_schema", action="store_true",
+                   help="emit the live DB shape as JSON to stdout (read-only)")
+    p.add_argument("--diff", metavar="OLD_SNAPSHOT",
+                   help="compare an old snapshot file against the live shape (read-only)")
+    p.add_argument("--json", dest="json", action="store_true",
+                   help="machine-parseable JSON output for --diff")
     p.set_defaults(fn=cmd_migrate)
     return ap
 

@@ -195,6 +195,104 @@ def _live_shape(db_path):
     return shape
 
 
+def _snapshot_from_shape(shape):
+    """Wrap a flat ``_live_shape`` dict into the §S3 snapshot structure:
+
+        {"tables": {"<table>": {"columns": {"<col>": {…}}}}}
+    """
+    return {"tables": {table: {"columns": cols} for table, cols in shape.items()}}
+
+
+def dump_schema(project_id):
+    """Return the live DB shape of ``project_id``'s store in the §S3 snapshot
+    structure ``{"tables": {table: {"columns": {col: {…}}}}}``.
+
+    Read-only: derived purely from ``PRAGMA table_info`` via ``_live_shape``.
+    On a fully-migrated store this equals the committed ``current-schema.json``
+    (modulo key ordering).
+    """
+    db_path = _db_path(project_id)
+    return _snapshot_from_shape(_live_shape(db_path))
+
+
+def _snapshot_to_tables_dict(snapshot):
+    """Flatten a §S3 snapshot into ``{table: {col: {type,notnull,pk,default}}}``."""
+    return {
+        table: dict(table_data.get("columns", {}))
+        for table, table_data in snapshot.get("tables", {}).items()
+    }
+
+
+def diff(project_id, old_snapshot_path):
+    """Compare an OLD snapshot file against the freshly-dumped CURRENT live shape
+    of ``project_id``'s store.
+
+    Returns a dict with three lists:
+
+      * ``added``   — column present in current but absent in old; each entry is
+        ``{"table", "column", "current": {…}}``.
+      * ``removed`` — column present in old but absent in current; each entry is
+        ``{"table", "column", "old": {…}}``.
+      * ``changed`` — column present in both but with a differing descriptor;
+        each entry is ``{"table", "column", "old": {…}, "current": {…}}``.
+
+    Read-only.
+    """
+    import json
+    with open(old_snapshot_path) as fh:
+        old_snapshot = json.load(fh)
+    old = _snapshot_to_tables_dict(old_snapshot)
+    current = _snapshot_to_tables_dict(dump_schema(project_id))
+
+    added, removed, changed = [], [], []
+    tables = sorted(set(old) | set(current))
+    for table in tables:
+        old_cols = old.get(table, {})
+        cur_cols = current.get(table, {})
+        for col in sorted(set(old_cols) | set(cur_cols)):
+            in_old = col in old_cols
+            in_cur = col in cur_cols
+            if in_cur and not in_old:
+                added.append(
+                    {"table": table, "column": col, "current": cur_cols[col]}
+                )
+            elif in_old and not in_cur:
+                removed.append(
+                    {"table": table, "column": col, "old": old_cols[col]}
+                )
+            elif old_cols[col] != cur_cols[col]:
+                changed.append(
+                    {
+                        "table": table,
+                        "column": col,
+                        "old": old_cols[col],
+                        "current": cur_cols[col],
+                    }
+                )
+    return {"added": added, "removed": removed, "changed": changed}
+
+
+def _format_diff(report):
+    """Render a diff report (``diff()`` return value) as human-readable text.
+
+    Names each differing table/column so the developer can hand-write the next
+    migration step. Returns the rendered text (a trailing-newline-free string).
+    """
+    lines = []
+    for entry in report.get("added", []):
+        lines.append(f"+ added   {entry['table']}.{entry['column']} {entry['current']!r}")
+    for entry in report.get("removed", []):
+        lines.append(f"- removed {entry['table']}.{entry['column']} {entry['old']!r}")
+    for entry in report.get("changed", []):
+        lines.append(
+            f"~ changed {entry['table']}.{entry['column']} "
+            f"old={entry['old']!r} current={entry['current']!r}"
+        )
+    if not lines:
+        return "no differences: live shape matches the old snapshot"
+    return "\n".join(lines)
+
+
 def _drift(db_path):
     """Compare the live DB shape against ``current-schema.json``.
 
@@ -305,6 +403,25 @@ def cmd_migrate(args):
     do_all = getattr(args, "all", False)
     do_status = getattr(args, "status", False)
     do_check = getattr(args, "check", False)
+    do_dump = getattr(args, "dump_schema", False)
+    diff_old = getattr(args, "diff", None)
+    do_json = getattr(args, "json", False)
+
+    if do_dump:
+        import json
+        project_id = _project_from_args(args)
+        print(json.dumps(dump_schema(project_id)))
+        return 0
+
+    if diff_old is not None:
+        import json
+        project_id = _project_from_args(args)
+        report = diff(project_id, diff_old)
+        if do_json:
+            print(json.dumps(report))
+        else:
+            print(_format_diff(report))
+        return 0
 
     if do_check:
         project_id = _project_from_args(args)
