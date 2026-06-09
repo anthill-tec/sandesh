@@ -1,6 +1,6 @@
 # CR-SAN-021 — npm/Pi packaging hardening + release-version integrity
 
-**Status:** PENDING
+**Status:** COMPLETED (2026-06-09)
 **Priority:** Medium (the version-sync gate + npm CI are real release-integrity value; the rest is polish)
 **Depends on:** CR-SAN-015 (the npm/Pi package being hardened), CR-SAN-011 (server.json — a version-sync target)
 **Labels:** wave-4, packaging, pi, npm, ci
@@ -83,7 +83,7 @@ without breaking the pre-first-tag `develop` state.
 
 ## Acceptance criteria
 
-- [ ] **AC1** — `.github/workflows/publish-npm.yml` exists and: publishes `integrations/pi/` to npm
+- [x] **AC1** — `.github/workflows/publish-npm.yml` exists and: publishes `integrations/pi/` to npm
       (scoped, public) on `release: published`; runs a dry-run on `workflow_dispatch`; runs build-check
       only (no publish) on `pull_request`/`push: develop`; the publish job uses a GitHub `environment`
       (`npm`) with `permissions: id-token: write` and **OIDC trusted publishing** (no `NPM_TOKEN`),
@@ -91,22 +91,48 @@ without breaking the pre-first-tag `develop` state.
       up **both** bun and node; runs from `integrations/pi/` (asserted by parsing the workflow YAML:
       triggers, `working-directory: integrations/pi`, `id-token: write`, the npm-upgrade + publish steps,
       the build-check steps).
-- [ ] **AC2** — `integrations/pi/package.json` has `scripts.prepublishOnly` running
+- [x] **AC2** — `integrations/pi/package.json` has `scripts.prepublishOnly` running
       `tsc --noEmit && bun test`, **and** declares `typescript` in `devDependencies` so `tsc` resolves
       under `npm ci` (asserted by parsing package.json).
-- [ ] **AC3** — `integrations/pi/package.json` declares `engines.node` `">=22.19.0"` (matching Pi's own
+- [x] **AC3** — `integrations/pi/package.json` declares `engines.node` `">=22.19.0"` (matching Pi's own
       floor) (asserted by parsing package.json).
-- [ ] **AC4** — **Arm A (always-on):** a `bun test` asserts `package.json.version` ==
+- [x] **AC4** — **Arm A (always-on):** a `bun test` asserts `package.json.version` ==
       `server.json.version` == `server.json.packages[0].version` and **fails** when any one of the three
       is tampered, while the in-sync state passes. **Arm B (release-only):** the workflow has a CI step
       that, on `release`, asserts the three JSON versions equal the release tag (`vX.Y.Z`→`X.Y.Z`,
       resolved from the release ref) (Arm A asserted by the test; Arm B asserted by parsing the workflow).
-- [ ] **AC5** — **rejects intact:** the bundled-core packages stay in `peerDependencies` with `"*"` and
+- [x] **AC5** — **rejects intact:** the bundled-core packages stay in `peerDependencies` with `"*"` and
       are **not** added to `dependencies` (audit P1 rejected); **no `exports` field** is added (audit P2
       rejected) (asserted by parsing package.json).
-- [ ] **AC6** — Sandesh-core untouched; the full `integrations/pi` suite stays green; `tsc --noEmit`
+- [x] **AC6** — Sandesh-core untouched; the full `integrations/pi` suite stays green; `tsc --noEmit`
       clean; `npm pack --dry-run` still ships exactly `src/index.ts` + README + LICENSE (CR-SAN-015 AC3
       invariant preserved).
+
+## Close-out
+_Completed 2026-06-09 (orchestrator: vidushi-sandesh)._
+- **Cycle A** `f87a8db` RED / `729314e` GREEN — package.json: `prepublishOnly`, `typescript` devDep,
+  `engines.node>=22.19.0`; `bun install` added `typescript@5.9.3` so `tsc` resolves.
+- **Cycle B** `c6f16c3` — Arm A guard `src/version_sync.test.ts` (3 asserts, `import.meta.dir`-anchored,
+  tamper-proven non-vacuous).
+- **Cycle C** `d4ce87b` RED / `454453b` GREEN / `15b932a` FIX — `.github/workflows/publish-npm.yml`
+  (OIDC trusted publishing, `npm` env + `id-token:write`, `npm@latest` upgrade, both bun+node,
+  `working-directory: integrations/pi`, build-check on PR/push, dry-run on dispatch) + Arm B release-tag
+  check + `src/workflow.test.ts` (22 asserts). FIX: Arm B was reading nonexistent
+  `./integrations/pi/server.json` → corrected to repo-root `./server.json`; the too-weak substring
+  assertion was strengthened to pin the path (RED 21/1 → GREEN 22/0).
+- **VERIFY** (bun-verify-agent) — PASS, all 6 ACs; zero Sandesh-core diff; tests non-vacuous.
+- **Independent verification (orchestrator):** `tsc --noEmit` clean; full `integrations/pi` suite
+  **188/188**; `npm pack --dry-run` ships exactly `src/index.ts` + `README.md` + `LICENSE` (+ npm's
+  always-included `package.json`).
+- **Pre-merge gate:** `bun-crucible.py pre-merge-gate` → 188 passed / 0 failed, `tsc` exit 0,
+  coverage **99.7% lines / 95.2% funcs**, ingest ok.
+- **Accepted-as-is (orchestrator ruling):** the `dry-run` job omits `npm install -g npm@latest`. AC1
+  requires the upgrade "before publish" (the real `publish-npm` job has it); `npm publish --dry-run`
+  doesn't touch the registry or exercise OIDC, so the upgrade adds no correctness there — not added
+  (avoids scope; trivial follow-up if release-rehearsal fidelity is later wanted).
+- **One-time maintainer prereq (out of CI, for the first real release):** configure the npm Trusted
+  Publisher for `@anthill-tec/sandesh-pi` (org `anthill-tec`, repo `sandesh`, workflow `publish-npm.yml`,
+  environment `npm`) — to be documented in RELEASING.md.
 
 ## Gap-analysis findings
 _Completed 2026-06-08 (orchestrator). Verdict: **READY** (spec updated). Two real gaps found and folded
