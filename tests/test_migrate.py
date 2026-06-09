@@ -1061,5 +1061,791 @@ class MigrateBaselineAdoptionTest(unittest.TestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# Cycle 3 — AC5 + AC10: CLI apply / --status / --all / --project position
+#
+# All tests drive the CLI via subprocess using the repo .venv interpreter so
+# that the full CLI parsing path is exercised (not just the Python API).
+# $XDG_DATA_HOME is redirected to a per-test tmpdir to avoid touching real stores.
+# ---------------------------------------------------------------------------
+
+_VENV_PYTHON = os.path.join(_REPO_ROOT, ".venv", "bin", "python")
+
+
+def _run_cli(argv, data_home, extra_env=None):
+    """Run `python -m sandesh.cli <argv>` with XDG_DATA_HOME overridden.
+
+    Returns the CompletedProcess (stdout + stderr captured as text).
+    """
+    env = {**os.environ, "XDG_DATA_HOME": data_home}
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        [_VENV_PYTHON, "-m", "sandesh.cli"] + argv,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=_REPO_ROOT,
+    )
+
+
+def _setup_project(project_id, data_home):
+    """Provision a project store via sandesh_db.setup() with XDG_DATA_HOME overridden."""
+    import sys
+    sys.path.insert(0, _REPO_ROOT)
+    orig = os.environ.get("XDG_DATA_HOME")
+    os.environ["XDG_DATA_HOME"] = data_home
+    try:
+        # Re-import to pick up the env change (or use direct call)
+        from sandesh import sandesh_db
+        sandesh_db.setup(project_id)
+    finally:
+        if orig is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = orig
+
+
+def _status_api(project_id, data_home):
+    """Call migrate.status(project_id) with XDG_DATA_HOME overridden.
+
+    Returns (applied_ids, pending_ids).
+    """
+    orig = os.environ.get("XDG_DATA_HOME")
+    os.environ["XDG_DATA_HOME"] = data_home
+    try:
+        from sandesh import migrate
+        return migrate.status(project_id)
+    finally:
+        if orig is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = orig
+
+
+# ---------------------------------------------------------------------------
+# AC5 — apply (default action), idempotency, --status
+# ---------------------------------------------------------------------------
+
+class MigrateCliApplyTest(unittest.TestCase):
+    """AC5 — apply (no flag): `sandesh migrate --project X` applies pending
+    migrations; a second call is a no-op; exit 0 both times.
+
+    RED: cmd_migrate() currently calls _require_deps() and returns 0 without
+    dispatching to migrate.apply(), so the store stays un-migrated — the
+    subsequent status() assertions fail because 0001-baseline is not applied.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c3_apply_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def test_apply_exits_zero_on_fresh_store(self):
+        """First apply on a fresh (setup-provisioned) store exits 0.
+
+        RED: cmd_migrate() returns 0 today, so this actually passes currently —
+        the real RED is in the state-assertion tests below that check what
+        apply() actually did.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_apply_exit")
+        _setup_project("ApplyExit", data_home)
+        r = _run_cli(["--project", "ApplyExit", "migrate"], data_home)
+        self.assertEqual(
+            r.returncode, 0,
+            f"migrate --project X must exit 0 on first apply.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_apply_records_0001_as_applied(self):
+        """After `migrate --project X`, status() must report 0001-baseline applied.
+
+        RED: cmd_migrate() does not call migrate.apply(), so the store stays
+        un-migrated and status() returns applied=[] (or raises because _yoyo_migration
+        doesn't exist); either way the assertion fails.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_apply_state")
+        _setup_project("ApplyState", data_home)
+        r = _run_cli(["--project", "ApplyState", "migrate"], data_home)
+        self.assertEqual(r.returncode, 0,
+                         f"migrate --project X must exit 0.\n"
+                         f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        applied, pending = _status_api("ApplyState", data_home)
+        self.assertIn(
+            "0001-baseline", applied,
+            f"After CLI apply, 0001-baseline must be in applied; got applied={applied!r}",
+        )
+
+    def test_apply_leaves_zero_pending(self):
+        """After `migrate --project X`, status() must report 0 pending.
+
+        RED: apply not dispatched → store un-migrated → pending=[0001-baseline].
+        """
+        data_home = os.path.join(self._tmpdir, "dh_apply_pending")
+        _setup_project("ApplyPend", data_home)
+        _run_cli(["--project", "ApplyPend", "migrate"], data_home)
+        applied, pending = _status_api("ApplyPend", data_home)
+        self.assertEqual(
+            len(pending), 0,
+            f"After CLI apply, pending must be 0; got pending={pending!r}",
+        )
+
+    def test_apply_idempotent_second_run_exits_zero(self):
+        """A second `migrate --project X` must exit 0 (yoyo skips applied steps).
+
+        RED: if apply isn't dispatched the first time the state is wrong, but
+        the idempotency assertion catches the second run's side-effect too.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_idempotent_exit")
+        _setup_project("IdempotentExit", data_home)
+        _run_cli(["--project", "IdempotentExit", "migrate"], data_home)
+        r2 = _run_cli(["--project", "IdempotentExit", "migrate"], data_home)
+        self.assertEqual(
+            r2.returncode, 0,
+            f"Second migrate --project X must exit 0 (idempotent).\n"
+            f"stdout: {r2.stdout!r}\nstderr: {r2.stderr!r}",
+        )
+
+    def test_apply_idempotent_still_zero_pending_after_second_run(self):
+        """After two applies, pending is still 0 and applied still contains 0001.
+
+        RED: first apply not dispatched → state wrong → both assertions fail.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_idempotent_state")
+        _setup_project("IdempotentState", data_home)
+        _run_cli(["--project", "IdempotentState", "migrate"], data_home)
+        _run_cli(["--project", "IdempotentState", "migrate"], data_home)
+        applied, pending = _status_api("IdempotentState", data_home)
+        self.assertEqual(
+            len(pending), 0,
+            f"After 2 applies, pending must still be 0; got {pending!r}",
+        )
+        self.assertIn(
+            "0001-baseline", applied,
+            f"After 2 applies, 0001-baseline must still be applied; got {applied!r}",
+        )
+        # Exact count: exactly 1 applied (only 0001 exists this cycle)
+        self.assertEqual(
+            len(applied), 1,
+            f"Exactly 1 migration applied (only 0001 this cycle); got {applied!r}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC5 — --status flag: report applied/pending, no writes
+# ---------------------------------------------------------------------------
+
+class MigrateCliStatusFlagTest(unittest.TestCase):
+    """AC5 — `migrate --status --project X`: reports applied set and pending count;
+    performs no writes (state is unchanged before and after the call).
+
+    RED: --status flag is wired in the parser but cmd_migrate() doesn't check
+    args.status — it just calls _require_deps() and returns 0 without printing
+    anything, so the output assertions fail.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c3_status_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def test_status_flag_exits_zero(self):
+        """--status --project X exits 0.
+
+        RED: likely passes today (cmd_migrate returns 0), but the output tests below
+        are the real gates.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_sf_exit")
+        _setup_project("StatusFlagExit", data_home)
+        # First apply so there is something to report
+        _run_cli(["--project", "StatusFlagExit", "migrate"], data_home)
+        r = _run_cli(["--project", "StatusFlagExit", "migrate", "--status"], data_home)
+        self.assertEqual(
+            r.returncode, 0,
+            f"migrate --status --project X must exit 0.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_status_flag_output_mentions_0001_baseline(self):
+        """--status output must name 0001-baseline as applied.
+
+        RED: cmd_migrate() prints nothing today, so the assertIn fails.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_sf_output")
+        _setup_project("StatusFlagOutput", data_home)
+        _run_cli(["--project", "StatusFlagOutput", "migrate"], data_home)
+        r = _run_cli(["--project", "StatusFlagOutput", "migrate", "--status"], data_home)
+        combined = r.stdout + r.stderr
+        self.assertIn(
+            "0001-baseline", combined,
+            f"--status output must mention '0001-baseline'.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_status_flag_output_mentions_zero_pending(self):
+        """--status output must convey 0 pending (after a full apply).
+
+        RED: no output from cmd_migrate() today.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_sf_pending")
+        _setup_project("StatusFlagPending", data_home)
+        _run_cli(["--project", "StatusFlagPending", "migrate"], data_home)
+        r = _run_cli(["--project", "StatusFlagPending", "migrate", "--status"], data_home)
+        combined = r.stdout + r.stderr
+        # Accept any reasonable phrasing: "0 pending", "pending: 0", "pending: []", etc.
+        has_zero_pending = (
+            "0 pending" in combined
+            or "pending: 0" in combined
+            or "pending: []" in combined
+            or "pending=[]" in combined
+            or ("pending" in combined and "0" in combined)
+        )
+        self.assertTrue(
+            has_zero_pending,
+            f"--status output must convey 0 pending migrations.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_status_flag_does_not_change_state(self):
+        """--status must be read-only: calling it twice leaves state identical.
+
+        Before --status: apply once (1 applied, 0 pending).
+        After --status:  state must still be 1 applied, 0 pending.
+
+        RED: cmd_migrate() doesn't call apply() so we can't even get to 1 applied
+        via the CLI; the state assertions in the apply tests already catch this.
+        For a standalone gate, we prime the store via the Python API directly,
+        then call --status via CLI, then verify state unchanged via API.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_sf_readonly")
+        # Prime via Python API (bypasses CLI dispatch bug)
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db, migrate
+            sandesh_db.setup("StatusReadonly")
+            migrate.apply("StatusReadonly")
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        # State before --status
+        applied_before, pending_before = _status_api("StatusReadonly", data_home)
+
+        # Call --status via CLI
+        _run_cli(["--project", "StatusReadonly", "migrate", "--status"], data_home)
+
+        # State after --status — must be identical
+        applied_after, pending_after = _status_api("StatusReadonly", data_home)
+        self.assertEqual(
+            applied_before, applied_after,
+            f"--status must not change applied set; "
+            f"before={applied_before!r}, after={applied_after!r}",
+        )
+        self.assertEqual(
+            pending_before, pending_after,
+            f"--status must not change pending set; "
+            f"before={pending_before!r}, after={pending_after!r}",
+        )
+
+    def test_status_flag_on_fresh_store_shows_pending(self):
+        """--status on a fresh (un-migrated) store must mention 0001-baseline as pending.
+
+        RED: cmd_migrate() prints nothing; the pending mention is absent.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_sf_fresh")
+        _setup_project("StatusFresh", data_home)
+        # Do NOT apply — store is un-migrated
+        r = _run_cli(["--project", "StatusFresh", "migrate", "--status"], data_home)
+        combined = r.stdout + r.stderr
+        self.assertIn(
+            "0001-baseline", combined,
+            f"--status on un-migrated store must mention '0001-baseline' as pending.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_status_flag_position_project_before_subcommand(self):
+        """--project before `migrate` + --status works (SUPPRESS pattern).
+
+        `sandesh --project X migrate --status` must exit 0 and produce status output.
+
+        RED: --all is not wired yet, but this flag-position test exercises the
+        parser's SUPPRESS parent; if migrate doesn't dispatch --status, no output.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_sf_pos_before")
+        # Prime store via API
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db, migrate
+            sandesh_db.setup("StatusPosBefore")
+            migrate.apply("StatusPosBefore")
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        r = _run_cli(["--project", "StatusPosBefore", "migrate", "--status"], data_home)
+        self.assertEqual(
+            r.returncode, 0,
+            f"migrate --status --project X (project before subcommand) must exit 0.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+        combined = r.stdout + r.stderr
+        self.assertIn(
+            "0001-baseline", combined,
+            f"Project-before-subcommand --status must output '0001-baseline'.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_status_flag_position_project_after_subcommand(self):
+        """--project after `migrate` + --status works (SUPPRESS pattern).
+
+        `sandesh migrate --status --project X` must exit 0 and produce status output.
+
+        RED: as above — if dispatch is missing, no output → assertion fails.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_sf_pos_after")
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db, migrate
+            sandesh_db.setup("StatusPosAfter")
+            migrate.apply("StatusPosAfter")
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        r = _run_cli(["migrate", "--status", "--project", "StatusPosAfter"], data_home)
+        self.assertEqual(
+            r.returncode, 0,
+            f"migrate --status --project X (project after subcommand) must exit 0.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+        combined = r.stdout + r.stderr
+        self.assertIn(
+            "0001-baseline", combined,
+            f"Project-after-subcommand --status must output '0001-baseline'.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC10 — --all: apply to / report on every project store under data home
+# ---------------------------------------------------------------------------
+
+class MigrateCliAllFlagTest(unittest.TestCase):
+    """AC10 — `migrate --all` iterates every projects/<id>/sandesh.db under the
+    data home and applies pending migrations to each.
+    `migrate --status --all` reports each store's status.
+
+    Store discovery: `sandesh_db.list_projects()` already iterates
+    `projects/<id>/sandesh.db` under the data home root — `--all` should use
+    the same mechanism.
+
+    RED: `--all` is not a recognised argument in the migrate subparser (argparse
+    will exit 2 with an unrecognised-argument error), so every test here fails
+    at the exit-code assertion.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c3_all_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def _prime_two_projects(self, data_home):
+        """Set up two pre-yoyo project stores under data_home."""
+        _setup_project("AllAlpha", data_home)
+        _setup_project("AllBeta", data_home)
+
+    def test_all_flag_recognised_by_parser_exits_zero(self):
+        """--all must be a recognised argument (not an argparse unrecognised-arg error).
+
+        RED: `--all` is not wired into the migrate subparser → argparse exits 2
+        with 'unrecognised arguments: --all'.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_all_recog")
+        self._prime_two_projects(data_home)
+        r = _run_cli(["migrate", "--all"], data_home)
+        self.assertEqual(
+            r.returncode, 0,
+            f"migrate --all must exit 0 (recognised arg).\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_all_apply_affects_first_project(self):
+        """After `migrate --all`, the first project (AllAlpha) must have 0001-baseline applied.
+
+        RED: --all unrecognised → argparse exits 2 before anything is applied.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_all_alpha")
+        self._prime_two_projects(data_home)
+        r = _run_cli(["migrate", "--all"], data_home)
+        self.assertEqual(r.returncode, 0,
+                         f"migrate --all exit 0.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        applied, pending = _status_api("AllAlpha", data_home)
+        self.assertIn(
+            "0001-baseline", applied,
+            f"AllAlpha: 0001-baseline must be applied after --all; applied={applied!r}",
+        )
+        self.assertEqual(
+            len(pending), 0,
+            f"AllAlpha: 0 pending after --all; pending={pending!r}",
+        )
+
+    def test_all_apply_affects_second_project(self):
+        """After `migrate --all`, the second project (AllBeta) must also have 0001-baseline applied.
+
+        RED: --all unrecognised → argparse exits 2; neither project is migrated.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_all_beta")
+        self._prime_two_projects(data_home)
+        r = _run_cli(["migrate", "--all"], data_home)
+        self.assertEqual(r.returncode, 0,
+                         f"migrate --all exit 0.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        applied, pending = _status_api("AllBeta", data_home)
+        self.assertIn(
+            "0001-baseline", applied,
+            f"AllBeta: 0001-baseline must be applied after --all; applied={applied!r}",
+        )
+        self.assertEqual(
+            len(pending), 0,
+            f"AllBeta: 0 pending after --all; pending={pending!r}",
+        )
+
+    def test_all_apply_zero_pending_both_projects(self):
+        """After `migrate --all`, both stores report 0 pending (exact count check).
+
+        RED: --all not wired.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_all_both_pend")
+        self._prime_two_projects(data_home)
+        _run_cli(["migrate", "--all"], data_home)
+        for pid in ("AllAlpha", "AllBeta"):
+            applied, pending = _status_api(pid, data_home)
+            self.assertEqual(
+                len(pending), 0,
+                f"{pid}: 0 pending expected after --all; got pending={pending!r}",
+            )
+            # Also confirm 0001-baseline is in the applied set (not just "no pending")
+            self.assertIn(
+                "0001-baseline", applied,
+                f"{pid}: 0001-baseline must be applied; applied={applied!r}",
+            )
+
+    def test_all_apply_idempotent(self):
+        """A second `migrate --all` is a no-op (exits 0, counts unchanged).
+
+        RED: --all not wired → first run fails, second run also fails.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_all_idemp")
+        self._prime_two_projects(data_home)
+        _run_cli(["migrate", "--all"], data_home)
+        r2 = _run_cli(["migrate", "--all"], data_home)
+        self.assertEqual(
+            r2.returncode, 0,
+            f"Second migrate --all must exit 0 (idempotent).\n"
+            f"stdout: {r2.stdout!r}\nstderr: {r2.stderr!r}",
+        )
+        for pid in ("AllAlpha", "AllBeta"):
+            applied, pending = _status_api(pid, data_home)
+            self.assertEqual(len(pending), 0,
+                             f"{pid}: still 0 pending after 2nd --all; pending={pending!r}")
+            self.assertEqual(len(applied), 1,
+                             f"{pid}: exactly 1 applied after 2nd --all; applied={applied!r}")
+
+    def test_status_all_exits_zero(self):
+        """migrate --status --all exits 0.
+
+        RED: --all not wired → argparse exits 2.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_status_all_exit")
+        self._prime_two_projects(data_home)
+        # Prime via API so --status has something to report
+        for pid in ("AllAlpha", "AllBeta"):
+            orig = os.environ.get("XDG_DATA_HOME")
+            os.environ["XDG_DATA_HOME"] = data_home
+            try:
+                from sandesh import migrate
+                migrate.apply(pid)
+            finally:
+                if orig is None:
+                    os.environ.pop("XDG_DATA_HOME", None)
+                else:
+                    os.environ["XDG_DATA_HOME"] = orig
+        r = _run_cli(["migrate", "--status", "--all"], data_home)
+        self.assertEqual(
+            r.returncode, 0,
+            f"migrate --status --all must exit 0.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_status_all_mentions_both_projects(self):
+        """migrate --status --all output must mention both project ids.
+
+        RED: --all not wired → argparse exits 2 with no output.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_status_all_output")
+        self._prime_two_projects(data_home)
+        for pid in ("AllAlpha", "AllBeta"):
+            orig = os.environ.get("XDG_DATA_HOME")
+            os.environ["XDG_DATA_HOME"] = data_home
+            try:
+                from sandesh import migrate
+                migrate.apply(pid)
+            finally:
+                if orig is None:
+                    os.environ.pop("XDG_DATA_HOME", None)
+                else:
+                    os.environ["XDG_DATA_HOME"] = orig
+        r = _run_cli(["migrate", "--status", "--all"], data_home)
+        combined = r.stdout + r.stderr
+        self.assertIn(
+            "AllAlpha", combined,
+            f"--status --all must mention 'AllAlpha' in output.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+        self.assertIn(
+            "AllBeta", combined,
+            f"--status --all must mention 'AllBeta' in output.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_status_all_reports_zero_pending_for_both(self):
+        """migrate --status --all output must convey 0 pending for each store.
+
+        RED: --all not wired.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_status_all_pend")
+        self._prime_two_projects(data_home)
+        for pid in ("AllAlpha", "AllBeta"):
+            orig = os.environ.get("XDG_DATA_HOME")
+            os.environ["XDG_DATA_HOME"] = data_home
+            try:
+                from sandesh import migrate
+                migrate.apply(pid)
+            finally:
+                if orig is None:
+                    os.environ.pop("XDG_DATA_HOME", None)
+                else:
+                    os.environ["XDG_DATA_HOME"] = orig
+        r = _run_cli(["migrate", "--status", "--all"], data_home)
+        combined = r.stdout + r.stderr
+        # The output must convey "0 pending" for each project — accept common phrasings
+        has_zero_pending = (
+            "0 pending" in combined
+            or combined.count("pending: 0") >= 2
+            or combined.count("pending: []") >= 2
+        )
+        self.assertTrue(
+            has_zero_pending,
+            f"--status --all must convey 0 pending for each store.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_status_all_does_not_change_state(self):
+        """--status --all is read-only: state before and after must be identical.
+
+        RED: --all not wired.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_status_all_ro")
+        self._prime_two_projects(data_home)
+        for pid in ("AllAlpha", "AllBeta"):
+            orig = os.environ.get("XDG_DATA_HOME")
+            os.environ["XDG_DATA_HOME"] = data_home
+            try:
+                from sandesh import migrate
+                migrate.apply(pid)
+            finally:
+                if orig is None:
+                    os.environ.pop("XDG_DATA_HOME", None)
+                else:
+                    os.environ["XDG_DATA_HOME"] = orig
+
+        states_before = {pid: _status_api(pid, data_home) for pid in ("AllAlpha", "AllBeta")}
+        _run_cli(["migrate", "--status", "--all"], data_home)
+        states_after = {pid: _status_api(pid, data_home) for pid in ("AllAlpha", "AllBeta")}
+        self.assertEqual(
+            states_before, states_after,
+            f"--status --all must not alter any store state.\n"
+            f"before={states_before!r}\nafter={states_after!r}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC5 / §S4 — --project position regression: project before vs after subcommand
+# ---------------------------------------------------------------------------
+
+class MigrateCliProjectPositionTest(unittest.TestCase):
+    """Regression: `--project` works whether placed before or after `migrate`
+    (the SUPPRESS common-parent pattern documented in CLAUDE.md gotchas).
+
+    RED: if cmd_migrate() doesn't dispatch on --status, the output assertions fail
+    even though the position parsing itself may work.  This suite verifies BOTH
+    the parsing AND the dispatch.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c3_pos_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def _prime(self, project_id, data_home):
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db, migrate
+            sandesh_db.setup(project_id)
+            migrate.apply(project_id)
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+    def test_project_before_subcommand_apply_exits_zero(self):
+        """sandesh --project X migrate (apply, project before subcommand) → exit 0.
+
+        RED: parsing OK today, but state won't be updated → follow-on status
+        assertions catch the real RED.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_pos_before_apply")
+        _setup_project("PosBefore", data_home)
+        r = _run_cli(["--project", "PosBefore", "migrate"], data_home)
+        self.assertEqual(
+            r.returncode, 0,
+            f"--project before subcommand apply must exit 0.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_project_before_subcommand_apply_state(self):
+        """sandesh --project X migrate → state: 0001-baseline applied, 0 pending.
+
+        RED: cmd_migrate() doesn't dispatch apply → 0001 not applied → assertion fails.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_pos_before_state")
+        _setup_project("PosBeforeState", data_home)
+        _run_cli(["--project", "PosBeforeState", "migrate"], data_home)
+        applied, pending = _status_api("PosBeforeState", data_home)
+        self.assertIn("0001-baseline", applied,
+                      f"PosBeforeState: 0001-baseline applied; got {applied!r}")
+        self.assertEqual(len(pending), 0,
+                         f"PosBeforeState: 0 pending; got {pending!r}")
+
+    def test_project_after_subcommand_apply_exits_zero(self):
+        """sandesh migrate --project X (project after subcommand) → exit 0."""
+        data_home = os.path.join(self._tmpdir, "dh_pos_after_apply")
+        _setup_project("PosAfter", data_home)
+        r = _run_cli(["migrate", "--project", "PosAfter"], data_home)
+        self.assertEqual(
+            r.returncode, 0,
+            f"--project after subcommand apply must exit 0.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_project_after_subcommand_apply_state(self):
+        """sandesh migrate --project X → state: 0001-baseline applied, 0 pending.
+
+        RED: cmd_migrate() doesn't dispatch apply.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_pos_after_state")
+        _setup_project("PosAfterState", data_home)
+        _run_cli(["migrate", "--project", "PosAfterState"], data_home)
+        applied, pending = _status_api("PosAfterState", data_home)
+        self.assertIn("0001-baseline", applied,
+                      f"PosAfterState: 0001-baseline applied; got {applied!r}")
+        self.assertEqual(len(pending), 0,
+                         f"PosAfterState: 0 pending; got {pending!r}")
+
+    def test_project_before_subcommand_status_exits_zero(self):
+        """sandesh --project X migrate --status → exit 0.
+
+        RED: cmd_migrate() doesn't dispatch --status → possibly exits 0 but no output.
+        The output test below is the real RED gate.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_pos_before_status_exit")
+        self._prime("PosBeforeStatus", data_home)
+        r = _run_cli(["--project", "PosBeforeStatus", "migrate", "--status"], data_home)
+        self.assertEqual(
+            r.returncode, 0,
+            f"--project before subcommand --status must exit 0.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_project_before_subcommand_status_output(self):
+        """sandesh --project X migrate --status → output contains 0001-baseline.
+
+        RED: no dispatch → no output → assertion fails.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_pos_before_status_out")
+        self._prime("PosBeforeStatusOut", data_home)
+        r = _run_cli(["--project", "PosBeforeStatusOut", "migrate", "--status"], data_home)
+        combined = r.stdout + r.stderr
+        self.assertIn(
+            "0001-baseline", combined,
+            f"--project before subcommand --status must mention '0001-baseline'.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_project_after_subcommand_status_exits_zero(self):
+        """sandesh migrate --status --project X → exit 0."""
+        data_home = os.path.join(self._tmpdir, "dh_pos_after_status_exit")
+        self._prime("PosAfterStatus", data_home)
+        r = _run_cli(["migrate", "--status", "--project", "PosAfterStatus"], data_home)
+        self.assertEqual(
+            r.returncode, 0,
+            f"--project after subcommand --status must exit 0.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_project_after_subcommand_status_output(self):
+        """sandesh migrate --status --project X → output contains 0001-baseline.
+
+        RED: no dispatch → no output.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_pos_after_status_out")
+        self._prime("PosAfterStatusOut", data_home)
+        r = _run_cli(["migrate", "--status", "--project", "PosAfterStatusOut"], data_home)
+        combined = r.stdout + r.stderr
+        self.assertIn(
+            "0001-baseline", combined,
+            f"--project after subcommand --status must mention '0001-baseline'.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
