@@ -25,6 +25,7 @@ classifiers = [
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.27,<2"]
+migrate = ["yoyo-migrations>=9,<10", "jsonschema>=4.26"]
 
 [project.scripts]
 sandesh = "sandesh.cli:main"
@@ -42,3 +43,5 @@ packages = ["sandesh"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "sandesh/data/usage-scenarios.md" = "sandesh/data/usage-scenarios.md"
+"sandesh/migrations" = "sandesh/migrations"
+"sandesh/schema" = "sandesh/schema"

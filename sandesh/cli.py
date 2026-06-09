@@ -20,6 +20,7 @@ import sys
 from sandesh import __version__
 from sandesh import sandesh_db as sdb
 from sandesh import notify as _notify
+from sandesh import migrate as _migrate
 
 
 def _project(args):
@@ -205,6 +206,13 @@ def cmd_notify(args):
     return _notify.run(_project(args), args.to, args.timeout)
 
 
+def cmd_migrate(args):
+    # Delegate to the migration engine (heavy yoyo/jsonschema imports stay lazy
+    # inside migrate.py). The dep guard there exits non-zero with a friendly hint
+    # when the [migrate] extra is absent.
+    return _migrate.cmd_migrate(args)
+
+
 # --------------------------------------------------------------------------- #
 
 def build_parser():
@@ -282,6 +290,11 @@ def build_parser():
     p.add_argument("--to", required=True)
     p.add_argument("--timeout", type=int, default=_notify.DEFAULT_TIMEOUT_SECS)
     p.set_defaults(fn=cmd_notify)
+
+    p = sub.add_parser("migrate", parents=[common],
+                       help="apply/inspect schema migrations (needs the [migrate] extra)")
+    p.add_argument("--status", action="store_true", help="report applied vs pending (no writes)")
+    p.set_defaults(fn=cmd_migrate)
     return ap
 
 
