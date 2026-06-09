@@ -4,7 +4,6 @@
   setup / projects                      — provision + list projects
   register / unregister / addressbook   — the addressbook (durable identities)
   send / reply / inbox / fetch / thread — messages
-  actioned                              — disposition (close a request)
   notify                                — block until 'to' mail arrives (the watcher)
 
 Every data command needs a project: `--project <id>` or $SANDESH_PROJECT.
@@ -133,10 +132,10 @@ def cmd_reply(args):
     try:
         mid = sdb.reply(con, store, args.to_msg, sender, subject=args.subject,
                         body_text=_read_body(args), reply_all=args.all,
-                        resolves=args.resolves, project=project)
+                        project=project)
     except (ValueError, FileNotFoundError) as exc:
         sys.exit(f"[sandesh] {exc}")
-    print(f"replied #{mid} to #{args.to_msg}{' (parent → actioned)' if args.resolves else ''}")
+    print(f"replied #{mid} to #{args.to_msg}")
     return 0
 
 
@@ -190,15 +189,8 @@ def cmd_thread(args):
         sys.exit(f"[sandesh] no such message #{args.id}")
     for m in chain:
         ind = "  " if m["in_reply_to"] else ""
-        print(f"{ind}#{m['id']} {m['from_addr']} · {m['created_at']} · {m['status']}")
+        print(f"{ind}#{m['id']} {m['from_addr']} · {m['created_at']}")
         print(f"{ind}   {m['subject']}")
-    return 0
-
-
-def cmd_actioned(args):
-    _, _, con = _ctx(args)
-    sdb.set_status(con, args.id, args.status)
-    print(f"#{args.id} → {args.status}")
     return 0
 
 
@@ -264,7 +256,6 @@ def build_parser():
     p.add_argument("--body")
     p.add_argument("--body-file", dest="body_file")
     p.add_argument("--all", action="store_true", help="reply-all (cc the parent's recipients)")
-    p.add_argument("--resolves", action="store_true", help="mark the parent 'actioned'")
     p.set_defaults(fn=cmd_reply)
 
     p = sub.add_parser("inbox", parents=[common], help="list a recipient's messages")
@@ -281,11 +272,6 @@ def build_parser():
     p.add_argument("--id", type=int, required=True)
     p.set_defaults(fn=cmd_thread)
 
-    p = sub.add_parser("actioned", parents=[common], help="set a message's disposition")
-    p.add_argument("--id", type=int, required=True)
-    p.add_argument("--status", default="actioned", choices=["open", "actioned", "closed"])
-    p.set_defaults(fn=cmd_actioned)
-
     p = sub.add_parser("notify", parents=[common], help="block until 'to' mail arrives (the mailbox watcher)")
     p.add_argument("--to", required=True)
     p.add_argument("--timeout", type=int, default=_notify.DEFAULT_TIMEOUT_SECS)
@@ -294,6 +280,8 @@ def build_parser():
     p = sub.add_parser("migrate", parents=[common],
                        help="apply/inspect schema migrations (needs the [migrate] extra)")
     p.add_argument("--status", action="store_true", help="report applied vs pending (no writes)")
+    p.add_argument("--rollback", action="store_true",
+                   help="roll back the single most-recent applied migration")
     p.add_argument("--all", action="store_true",
                    help="operate on every project store (apply is fail-fast)")
     p.add_argument("--check", action="store_true",

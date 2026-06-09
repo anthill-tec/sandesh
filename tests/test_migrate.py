@@ -778,22 +778,6 @@ class MigrateBaselineEqualsSchemaTest(unittest.TestCase):
             f"  A: {cols_a}\n  B: {cols_b}",
         )
 
-    def test_message_has_status_column_pre_0002(self):
-        """In this cycle (before 0002), message.status must be present in the
-        migrations-provisioned store — 0001-baseline reproduces _SCHEMA faithfully.
-        RED: apply()/0001-baseline absent.
-        """
-        db_path_a, data_home_a = self._store_a_path()
-        self._provision_via_migrations(data_home_a)
-        cols_a = _pragma_table_info(db_path_a, "message")
-        col_names = [c["name"] for c in cols_a]
-        self.assertIn(
-            "status",
-            col_names,
-            "message.status must exist in a 0001-only migrations store "
-            f"(0002 not yet applied); columns found: {col_names!r}",
-        )
-
     def test_message_recipient_table_columns_match(self):
         """message_recipient table: PRAGMA table_info must match.
         RED: apply()/0001-baseline absent.
@@ -829,9 +813,9 @@ class MigrateBaselineEqualsSchemaTest(unittest.TestCase):
         )
 
     def test_status_returns_0001_applied_zero_pending_after_apply(self):
-        """After apply() from empty, status() must report 0001-baseline applied
-        and zero pending (only one migration exists this cycle).
-        RED: apply()/status() absent OR 0001-baseline not written.
+        """After apply() from empty, status() must report both 0001-baseline and
+        0002-drop-message-status applied, and zero pending.
+        RED: apply()/status() absent OR migrations not written.
         """
         _, data_home_a = self._store_a_path()
         self._provision_via_migrations(data_home_a)
@@ -844,16 +828,21 @@ class MigrateBaselineEqualsSchemaTest(unittest.TestCase):
             applied,
             f"status() must report '0001-baseline' in applied after apply(); got applied={applied!r}",
         )
+        self.assertIn(
+            "0002-drop-message-status",
+            applied,
+            f"status() must report '0002-drop-message-status' in applied after apply(); got applied={applied!r}",
+        )
         self.assertEqual(
             len(pending),
             0,
-            f"status() must report 0 pending after apply() with only 0001; got pending={pending!r}",
+            f"status() must report 0 pending after apply(); got pending={pending!r}",
         )
-        # Exact count: exactly 1 applied (only 0001 exists this cycle)
+        # Exact count: exactly 2 applied (0001-baseline + 0002-drop-message-status)
         self.assertEqual(
             len(applied),
-            1,
-            f"Exactly 1 migration must be applied (only 0001-baseline this cycle); got {applied!r}",
+            2,
+            f"Exactly 2 migrations must be applied (0001-baseline + 0002-drop-message-status); got {applied!r}",
         )
 
 
@@ -1214,7 +1203,7 @@ class MigrateCliApplyTest(unittest.TestCase):
         )
 
     def test_apply_idempotent_still_zero_pending_after_second_run(self):
-        """After two applies, pending is still 0 and applied still contains 0001.
+        """After two applies, pending is still 0 and applied contains both 0001 and 0002.
 
         RED: first apply not dispatched → state wrong → both assertions fail.
         """
@@ -1231,10 +1220,14 @@ class MigrateCliApplyTest(unittest.TestCase):
             "0001-baseline", applied,
             f"After 2 applies, 0001-baseline must still be applied; got {applied!r}",
         )
-        # Exact count: exactly 1 applied (only 0001 exists this cycle)
+        self.assertIn(
+            "0002-drop-message-status", applied,
+            f"After 2 applies, 0002-drop-message-status must still be applied; got {applied!r}",
+        )
+        # Exact count: exactly 2 applied (0001-baseline + 0002-drop-message-status)
         self.assertEqual(
-            len(applied), 1,
-            f"Exactly 1 migration applied (only 0001 this cycle); got {applied!r}",
+            len(applied), 2,
+            f"Exactly 2 migrations applied (0001-baseline + 0002-drop-message-status); got {applied!r}",
         )
 
 
@@ -1577,8 +1570,12 @@ class MigrateCliAllFlagTest(unittest.TestCase):
             applied, pending = _status_api(pid, data_home)
             self.assertEqual(len(pending), 0,
                              f"{pid}: still 0 pending after 2nd --all; pending={pending!r}")
-            self.assertEqual(len(applied), 1,
-                             f"{pid}: exactly 1 applied after 2nd --all; applied={applied!r}")
+            self.assertEqual(len(applied), 2,
+                             f"{pid}: exactly 2 applied after 2nd --all (0001+0002); applied={applied!r}")
+            self.assertIn("0001-baseline", applied,
+                          f"{pid}: 0001-baseline must be applied; applied={applied!r}")
+            self.assertIn("0002-drop-message-status", applied,
+                          f"{pid}: 0002-drop-message-status must be applied; applied={applied!r}")
 
     def test_status_all_exits_zero(self):
         """migrate --status --all exits 0.
@@ -2635,11 +2632,11 @@ class MigrateSnapshotStructureTest(unittest.TestCase):
 
 
 class MigrateSnapshotContentTest(unittest.TestCase):
-    """AC8 — current-schema.json content: the post-0001 snapshot must contain
-    the columns defined by sandesh_db._SCHEMA.
+    """AC8 — current-schema.json content: the post-0002 snapshot must contain
+    the columns defined by sandesh_db._SCHEMA (status absent after 0002).
 
     Spot-checks on specific columns that are load-bearing for --check:
-      - message.status must be PRESENT (this is pre-0002)
+      - message.status is ABSENT (this is the post-0002 snapshot)
       - address.address must be the primary key (pk=1)
       - message.id must be pk=1 and NOT NULL
       - message_recipient PK columns: message_id + recipient
@@ -2663,30 +2660,17 @@ class MigrateSnapshotContentTest(unittest.TestCase):
         """Return the column dict for table.column, or None if missing."""
         return self.tables.get(table, {}).get("columns", {}).get(column)
 
-    def test_message_status_column_present_pre_0002(self):
-        """message.status must be present in the snapshot (this is the pre-0002 snapshot).
+    def test_message_status_absent_post_0002(self):
+        """message.status must be ABSENT in the current-schema.json (post-0002 snapshot).
 
-        RED: file absent (SkipTest); or status column missing from snapshot.
+        0002 drops the status column; the committed snapshot must reflect that.
+        RED: current-schema.json still contains status (0002 not yet run/committed).
         """
         col = self._col("message", "status")
-        self.assertIsNotNone(
+        self.assertIsNone(
             col,
-            "current-schema.json must include message.status (pre-0002 snapshot; "
-            "0002 drops it in a later cycle).\n"
-            f"message columns: {list(self.tables.get('message', {}).get('columns', {}).keys())!r}",
-        )
-
-    def test_message_status_is_not_null(self):
-        """message.status has notnull=1 (NOT NULL DEFAULT 'open' in _SCHEMA).
-
-        RED: file absent (SkipTest); or notnull wrong.
-        """
-        col = self._col("message", "status")
-        if col is None:
-            self.skipTest("message.status absent — covered by test_message_status_column_present_pre_0002")
-        self.assertEqual(
-            col.get("notnull"), 1,
-            f"message.status must have notnull=1; got {col!r}",
+            "current-schema.json must NOT contain message.status after 0002 is applied;\n"
+            f"message columns found: {list(self.tables.get('message', {}).get('columns', {}).keys())!r}",
         )
 
     def test_address_address_is_primary_key(self):
@@ -3535,28 +3519,6 @@ class MigrateDumpSchemaTest(unittest.TestCase):
                 f"--dump-schema output must include table '{t}'; "
                 f"found tables: {list(tables.keys())!r}",
             )
-
-    def test_dump_schema_message_has_status_column_pre_0002(self):
-        """In this cycle (before 0002), --dump-schema must include message.status.
-
-        RED: --dump-schema not wired.
-        """
-        data_home = os.path.join(self._tmpdir, "dh_dump_status_pre0002")
-        _make_fully_migrated_store("DumpStatusPre0002", data_home)
-        r = _run_cli(
-            ["migrate", "--dump-schema", "--project", "DumpStatusPre0002"],
-            data_home,
-        )
-        self.assertEqual(r.returncode, 0,
-                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
-        parsed = _json.loads(r.stdout)
-        msg_cols = parsed.get("tables", {}).get("message", {}).get("columns", {})
-        self.assertIn(
-            "status",
-            msg_cols,
-            f"--dump-schema must include message.status in this pre-0002 cycle; "
-            f"message columns: {list(msg_cols.keys())!r}",
-        )
 
     def test_dump_schema_is_read_only(self):
         """--dump-schema must not alter migration state (applied/pending unchanged).
@@ -4483,57 +4445,63 @@ class MigrateDiffHumanReadableTest(unittest.TestCase):
 # §C6 shared helper — build the "pre-0002" snapshot fixture WITH status
 #
 # The fixture represents the schema BEFORE 0002 is applied (i.e. after 0001
-# only).  It is derived from the live database shape of a 0001-only store
-# rather than hard-coding magic values, so it stays accurate as long as the
-# 0001-baseline faithfully reproduces _SCHEMA.
+# only).  It is a FROZEN, hard-wired dict capturing the known pre-0002 column
+# layout (including message.status) — a live-store derivation would produce the
+# post-0002 shape now that setup() no longer includes status.
 # ---------------------------------------------------------------------------
 
 def _pre0002_snapshot_tables_dict():
     """Return the §S3 tables-dict for the PRE-0002 schema (message HAS status).
 
-    This is derived from a real 0001-only store provisioned in a tmp dir, so
-    it reflects the actual PRAGMA table_info shape rather than hand-wired values.
-    """
-    import tempfile
-    import os
-    from sandesh import sandesh_db, migrate
+    This is a FROZEN, hard-wired snapshot of the schema BEFORE migration 0002
+    was applied (i.e. after 0001-baseline only).  The column descriptors were
+    captured from a real 0001-only store's PRAGMA table_info and are stable —
+    the frozen approach avoids the chicken-and-egg problem where setup() now
+    produces the post-0002 schema (status already absent).
 
-    tmp = tempfile.mkdtemp(prefix="sandesh_pre0002_fixture_")
-    orig = os.environ.get("XDG_DATA_HOME")
-    try:
-        os.environ["XDG_DATA_HOME"] = tmp
-        sandesh_db.setup("_pre0002fixture")
-        # Apply only 0001: point the engine at just 0001 by using the standard
-        # migrations dir (which currently has only 0001 at RED time; when 0002
-        # is added, we need a different approach — see below).
-        #
-        # Safer: build the tables_dict directly from PRAGMA on a setup()-store,
-        # since setup() == 0001-baseline by AC3.  That's always the pre-0002 shape.
-        store = sandesh_db.store_dir("_pre0002fixture")
-        db_path = os.path.join(store, sandesh_db.DB_FILE)
-        import sqlite3
-        con = sqlite3.connect(db_path)
-        con.row_factory = sqlite3.Row
-        tables_dict = {}
-        for table in ("address", "message", "message_recipient", "notifier"):
-            cols = {}
-            for r in con.execute(f"PRAGMA table_info({table})").fetchall():
-                cols[r["name"]] = {
-                    "type": r["type"],
-                    "notnull": r["notnull"],
-                    "pk": r["pk"],
-                    "default": r["dflt_value"],
-                }
-            tables_dict[table] = cols
-        con.close()
-        return tables_dict
-    finally:
-        import shutil
-        shutil.rmtree(tmp, ignore_errors=True)
-        if orig is None:
-            os.environ.pop("XDG_DATA_HOME", None)
-        else:
-            os.environ["XDG_DATA_HOME"] = orig
+    The pre-0002 message table has all the same columns as the current schema
+    PLUS status TEXT NOT NULL DEFAULT 'open' (inserted after 'kind').
+
+    Column descriptor shape: {type, notnull, pk, default}
+    """
+    return {
+        "address": {
+            "address":       {"type": "TEXT",    "notnull": 0, "pk": 1, "default": None},
+            "kind":          {"type": "TEXT",    "notnull": 0, "pk": 0, "default": None},
+            "display_name":  {"type": "TEXT",    "notnull": 0, "pk": 0, "default": None},
+            "active":        {"type": "BOOLEAN", "notnull": 1, "pk": 0, "default": "TRUE"},
+            "registered_at": {"type": "TEXT",    "notnull": 1, "pk": 0, "default": "datetime('now')"},
+            "registered_by": {"type": "TEXT",    "notnull": 0, "pk": 0, "default": None},
+        },
+        "message": {
+            "id":          {"type": "INTEGER", "notnull": 0, "pk": 1, "default": None},
+            "from_addr":   {"type": "TEXT",    "notnull": 1, "pk": 0, "default": None},
+            "subject":     {"type": "TEXT",    "notnull": 1, "pk": 0, "default": None},
+            "kind":        {"type": "TEXT",    "notnull": 0, "pk": 0, "default": None},
+            # status was present before 0002 — this is the key column the diff tests
+            # verify appears in 'removed' when a post-0002 store is compared to this
+            # pre-0002 snapshot.
+            "status":      {"type": "TEXT",    "notnull": 1, "pk": 0, "default": "'open'"},
+            "in_reply_to": {"type": "INTEGER", "notnull": 0, "pk": 0, "default": None},
+            "body_path":   {"type": "TEXT",    "notnull": 0, "pk": 0, "default": None},
+            "created_at":  {"type": "TEXT",    "notnull": 1, "pk": 0, "default": "datetime('now')"},
+        },
+        "message_recipient": {
+            "message_id": {"type": "INTEGER", "notnull": 1, "pk": 1, "default": None},
+            "recipient":  {"type": "TEXT",    "notnull": 1, "pk": 2, "default": None},
+            "role":       {"type": "TEXT",    "notnull": 1, "pk": 0, "default": "'to'"},
+            "read_at":    {"type": "TEXT",    "notnull": 0, "pk": 0, "default": None},
+        },
+        "notifier": {
+            "recipient":    {"type": "TEXT",    "notnull": 0, "pk": 1, "default": None},
+            "pid":          {"type": "INTEGER", "notnull": 0, "pk": 0, "default": None},
+            "token":        {"type": "TEXT",    "notnull": 0, "pk": 0, "default": None},
+            "host":         {"type": "TEXT",    "notnull": 0, "pk": 0, "default": None},
+            "started_at":   {"type": "TEXT",    "notnull": 1, "pk": 0, "default": "datetime('now')"},
+            "heartbeat_at": {"type": "TEXT",    "notnull": 1, "pk": 0, "default": "datetime('now')"},
+            "tombstone":    {"type": "BOOLEAN", "notnull": 1, "pk": 0, "default": "FALSE"},
+        },
+    }
 
 
 def _apply_with_two_migrations(project_id, data_home, mig_dir):
@@ -5493,16 +5461,17 @@ class MigrateDiffStatusRemovedTest(unittest.TestCase):
     def _write_pre0002_fixture(self, fixture_path):
         """Write the pre-0002 snapshot (WITH status) to fixture_path.
 
-        The snapshot is derived from a real setup()-provisioned store so the
-        column descriptors (type, notnull, pk, default) are accurate.
+        The snapshot is the frozen hard-wired pre-0002 dict from
+        _pre0002_snapshot_tables_dict() — it always contains message.status
+        regardless of the current live schema.
         """
         tables_dict = _pre0002_snapshot_tables_dict()
-        # Sanity: the pre-0002 snapshot must contain message.status
+        # Sanity: the frozen pre-0002 snapshot must contain message.status
         self.assertIn(
             "status",
             tables_dict.get("message", {}),
-            "Pre-condition: the pre-0002 snapshot must contain message.status;\n"
-            "This means sandesh_db._SCHEMA still has status (correct at RED time).",
+            "Pre-condition: the frozen pre-0002 snapshot must contain message.status;\n"
+            "If this fails, _pre0002_snapshot_tables_dict() was incorrectly modified.",
         )
         _write_snapshot_fixture(fixture_path, tables_dict)
 

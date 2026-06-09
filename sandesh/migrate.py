@@ -152,6 +152,24 @@ def apply(project_id):
     backend.apply_migrations(backend.to_apply(migrations))
 
 
+def rollback(project_id):
+    """Roll back the single most-recent applied migration for ``project_id``.
+
+    ``backend.to_rollback`` returns the applied migrations in reverse order
+    (most-recent first); we take only the first so a ``--rollback`` undoes one
+    step (e.g. 0002 → 0002 pending again, 0001 stays applied). A no-op when
+    nothing is applied.
+    """
+    yoyo, _jsonschema = _require_deps()
+    backend = _backend(project_id)
+    migrations = _read_migrations()
+    to_rollback = backend.to_rollback(migrations)
+    if not to_rollback:
+        return
+    from yoyo.migrations import MigrationList
+    backend.rollback_migrations(MigrationList([to_rollback[0]]))
+
+
 def status(project_id):
     """Return ``(applied_ids, pending_ids)`` for ``project_id``'s store.
 
@@ -404,8 +422,14 @@ def cmd_migrate(args):
     do_status = getattr(args, "status", False)
     do_check = getattr(args, "check", False)
     do_dump = getattr(args, "dump_schema", False)
+    do_rollback = getattr(args, "rollback", False)
     diff_old = getattr(args, "diff", None)
     do_json = getattr(args, "json", False)
+
+    if do_rollback:
+        project_id = _project_from_args(args)
+        rollback(project_id)
+        return 0
 
     if do_dump:
         import json

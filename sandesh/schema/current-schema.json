@@ -78,12 +78,6 @@
           "pk": 0,
           "type": "TEXT"
         },
-        "status": {
-          "default": "'open'",
-          "notnull": 1,
-          "pk": 0,
-          "type": "TEXT"
-        },
         "subject": {
           "default": null,
           "notnull": 1,
