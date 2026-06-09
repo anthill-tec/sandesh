@@ -294,6 +294,8 @@ def build_parser():
     p = sub.add_parser("migrate", parents=[common],
                        help="apply/inspect schema migrations (needs the [migrate] extra)")
     p.add_argument("--status", action="store_true", help="report applied vs pending (no writes)")
+    p.add_argument("--all", action="store_true",
+                   help="operate on every project store (apply is fail-fast)")
     p.set_defaults(fn=cmd_migrate)
     return ap
 

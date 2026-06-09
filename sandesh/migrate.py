@@ -55,11 +55,18 @@ _CORE_TABLES = ("address", "message", "message_recipient", "notifier")
 
 
 def migrations_dir():
-    """Absolute path to the packaged ``sandesh/migrations/`` directory.
+    """Absolute path to the migrations directory.
 
-    Resolved relative to this module's file so it works from an installed
-    package (force-included into the wheel) as well as from a source checkout.
+    Honours the ``SANDESH_MIGRATIONS_DIR`` environment override (a test/dev hook
+    matching the project's ``XDG_DATA_HOME`` / ``SANDESH_POLL_SECONDS`` pattern):
+    when set, its value is returned verbatim. Otherwise the packaged
+    ``sandesh/migrations/`` directory is resolved relative to this module's file
+    so it works from an installed package (force-included into the wheel) as
+    well as from a source checkout.
     """
+    override = os.environ.get("SANDESH_MIGRATIONS_DIR")
+    if override:
+        return override
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations")
 
 
@@ -144,14 +151,86 @@ def status(project_id):
     return applied_ids, pending_ids
 
 
+def _format_status(project_id, applied_ids, pending_ids):
+    """Render a single project's migration status as a human-readable line set.
+
+    Names every applied id (e.g. ``0001-baseline``) and conveys the pending
+    count/ids — including an explicit "0 pending" when none remain.
+    """
+    applied_part = ", ".join(applied_ids) if applied_ids else "(none)"
+    if pending_ids:
+        pending_part = f"{len(pending_ids)} pending: " + ", ".join(pending_ids)
+    else:
+        pending_part = "0 pending"
+    return (
+        f"[{project_id}] applied: {applied_part}\n"
+        f"[{project_id}] {pending_part}"
+    )
+
+
 def cmd_migrate(args):
     """CLI dispatch entry for `sandesh migrate`.
 
-    The CLI calls this for every `migrate` invocation. The first thing it does is
-    the dependency guard — without the [migrate] extra there is nothing to do but
-    tell the user how to install it (and exit non-zero). The real subcommand flags
-    (--all/--rollback/--check/--dump-schema/--diff) arrive in later cycles.
+    Dispatches on the parsed flags:
+      * default (no ``--status``/``--all``) → apply pending migrations to the
+        single ``--project`` store.
+      * ``--status`` → print applied/pending for the project (read-only).
+      * ``--all`` → operate on every store discovered via
+        ``sandesh_db.list_projects()``. With ``--status`` it reports each store;
+        otherwise it applies to each. Apply is **fail-fast**: the first store
+        whose apply raises aborts the run with a non-zero exit and stores ordered
+        after it are left untouched.
+
+    The dependency guard runs first — without the [migrate] extra there is
+    nothing to do but tell the user how to install it (and exit non-zero).
     """
     _require_deps()
-    # Deps present: later cycles dispatch on args (--status/--all/...) here.
+
+    do_all = getattr(args, "all", False)
+    do_status = getattr(args, "status", False)
+
+    if do_all:
+        from . import sandesh_db
+        projects = sandesh_db.list_projects()
+        if do_status:
+            for pid in projects:
+                applied_ids, pending_ids = status(pid)
+                print(_format_status(pid, applied_ids, pending_ids))
+            return 0
+        # Apply to each store, fail-fast on the first error.
+        for pid in projects:
+            try:
+                apply(pid)
+            except Exception as exc:  # noqa: BLE001 — surface which store failed, then abort
+                print(
+                    f"[sandesh] migrate --all aborted: project {pid!r} failed: {exc}",
+                    file=sys.stderr,
+                )
+                return 1
+        return 0
+
+    # Single-project paths.
+    project_id = _project_from_args(args)
+    if do_status:
+        applied_ids, pending_ids = status(project_id)
+        print(_format_status(project_id, applied_ids, pending_ids))
+        return 0
+
+    apply(project_id)
     return 0
+
+
+def _project_from_args(args):
+    """Resolve the project id from parsed CLI args / ``$SANDESH_PROJECT``.
+
+    Mirrors ``cli._project``: ``--project`` (either position) takes precedence,
+    falling back to ``$SANDESH_PROJECT``; absent both, exit with a friendly error.
+    """
+    project_id = getattr(args, "project", None) or os.environ.get("SANDESH_PROJECT")
+    if not project_id:
+        print(
+            "[sandesh] ERROR: pass --project <id> (or set $SANDESH_PROJECT).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return project_id
