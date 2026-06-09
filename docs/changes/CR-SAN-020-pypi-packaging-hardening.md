@@ -1,6 +1,6 @@
 # CR-SAN-020 — PyPI packaging metadata hardening
 
-**Status:** PENDING
+**Status:** COMPLETED (2026-06-09)
 **Priority:** Low (metadata polish on an already-shipped, functional packaging config — no correctness defect)
 **Depends on:** CR-SAN-008 (the `pyproject.toml` it hardens)
 **Labels:** wave-4, packaging, pypi, python
@@ -41,19 +41,37 @@ version filtering reflects the real support matrix. (Keep them consistent with `
 
 ## Acceptance criteria
 
-- [ ] **AC1** — `pyproject.toml` `[project]` declares `license-files = ["LICENSE"]` and the referenced
+- [x] **AC1** — `pyproject.toml` `[project]` declares `license-files = ["LICENSE"]` and the referenced
       `LICENSE` exists at the repo root (asserted by parsing `pyproject.toml` + file existence).
-- [ ] **AC2** — every entry in `[build-system] requires` carries a version constraint (no bare
+- [x] **AC2** — every entry in `[build-system] requires` carries a version constraint (no bare
       `"hatchling"`/`"hatch-vcs"`); the constraints are valid PEP 440 specifiers, and the lower bounds
       are at least `hatchling>=1.27` and `hatch-vcs>=0.4` (the PEP 639 floor — see §S2) (asserted by
       parsing). The existing `test_pyproject.py` hatchling/hatch-vcs assertions use substring matching,
       so they stay green under the pinned form — the new floor checks are additive.
-- [ ] **AC3** — `classifiers` includes `Programming Language :: Python :: 3.10`, `…3.11`, `…3.12`,
+- [x] **AC3** — `classifiers` includes `Programming Language :: Python :: 3.10`, `…3.11`, `…3.12`,
       `…3.13`, consistent with `requires-python = ">=3.10"` (asserted by parsing).
-- [ ] **AC4** — the build still succeeds and `twine check` passes on the produced sdist+wheel; the
+- [x] **AC4** — the build still succeeds and `twine check` passes on the produced sdist+wheel; the
       `sandesh` import package and CLI/MCP entry points are unchanged (no functional change).
-- [ ] **AC5** — **no `py.typed`** marker is added (audit P3 rejected — see Non-goals); the existing test
+- [x] **AC5** — **no `py.typed`** marker is added (audit P3 rejected — see Non-goals); the existing test
       suites stay green.
+
+## Close-out
+_Completed 2026-06-09 (orchestrator: vidushi-sandesh)._
+- **RED** `4639ef3` — `tests/test_pyproject.py` +4 classes (LicenseFilesTest, BuildSystemPinnedRequiresTest,
+  GranularClassifiersTest, PyTypedAbsentGuardTest), 10 new assertions.
+- **GREEN** `d32362b` — `pyproject.toml`: `requires = ["hatchling>=1.27", "hatch-vcs>=0.4"]`,
+  `[project] license-files = ["LICENSE"]`, classifiers 3.10/3.11/3.12/3.13.
+- **VERIFY** — PASS (python-verify-agent): all 5 ACs satisfied by non-vacuous assertions, no scope creep,
+  no production source changed. Two cosmetic nits (inline `import re`, stale module docstring) accepted
+  as-is — non-blocking.
+- **Independent verification (orchestrator):** `python -m build` built sdist+wheel using the pinned
+  `hatchling>=1.27`/`hatch-vcs>=0.4`; `twine check` **PASSED** on both; wheel METADATA = Metadata-Version
+  2.4, `License-Expression: GPL-3.0-only`, `License-File: LICENSE` (LICENSE bundled under
+  `dist-info/licenses/`), classifiers 3.10–3.13; console_scripts (`sandesh`, `sandesh-mcp`) unchanged;
+  no `py.typed`; full suite **243/243 OK**.
+- **Pre-merge gate:** `python-crucible.py pre-merge-gate` → 243 passed / 0 failed, `py_compile` clean,
+  `ok=True`. (Coverage lcov skipped — wrapper's stale `--source app`; package is `sandesh/`. Wrapper
+  config nit, not a CR defect.)
 
 ## Gap-analysis findings
 _Completed 2026-06-08 (orchestrator). Verdict: **READY** — no drift in any of the three dimensions; the

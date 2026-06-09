@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling>=1.27", "hatch-vcs>=0.4"]
 build-backend = "hatchling.build"
 
 [project]
@@ -9,11 +9,16 @@ description = "SQLite-backed multi-project messaging relay for cooperating agent
 readme = "README.md"
 requires-python = ">=3.10"
 license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 authors = [{ name = "Antony John" }]
 keywords = ["mcp", "messaging", "agents", "orchestration", "sqlite"]
 classifiers = [
   "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Operating System :: POSIX",
   "Topic :: Communications",
 ]
