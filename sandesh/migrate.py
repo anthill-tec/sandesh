@@ -15,6 +15,7 @@ dispatch entry. The apply/status/rollback/check/dump-schema/diff machinery lands
 in later cycles.
 """
 
+import os
 import sys
 
 # The pip install target for the optional migration dependencies.
@@ -39,6 +40,108 @@ def _require_deps():
         print(_EXTRA_HINT, file=sys.stderr)
         sys.exit(1)
     return yoyo, jsonschema
+
+
+# --------------------------------------------------------------------------- #
+# engine — migrations source, store DB path, apply, status
+#
+# All yoyo use is lazy-imported inside the function bodies below so importing
+# this module stays stdlib-pure (AC1). The packaged migrations live alongside
+# this module under sandesh/migrations/.
+
+# The four core tables a pre-yoyo store already has (baseline-adoption probe).
+_BASELINE_ID = "0001-baseline"
+_CORE_TABLES = ("address", "message", "message_recipient", "notifier")
+
+
+def migrations_dir():
+    """Absolute path to the packaged ``sandesh/migrations/`` directory.
+
+    Resolved relative to this module's file so it works from an installed
+    package (force-included into the wheel) as well as from a source checkout.
+    """
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations")
+
+
+def _db_path(project_id):
+    """Absolute path to a project store's ``sandesh.db`` file.
+
+    Routes through ``sandesh_db`` so the XDG data-home logic (and any
+    ``$XDG_DATA_HOME`` override) is honoured — no path duplication here.
+    """
+    from . import sandesh_db
+    store = sandesh_db.store_dir(project_id)
+    os.makedirs(store, exist_ok=True)
+    return os.path.join(store, sandesh_db.DB_FILE)
+
+
+def _backend(project_id):
+    """Open a yoyo SQLite backend for ``project_id``'s store DB."""
+    yoyo, _jsonschema = _require_deps()
+    db_path = _db_path(project_id)
+    return yoyo.get_backend("sqlite:///" + db_path)
+
+
+def _read_migrations():
+    """Read the packaged migrations as a yoyo ``MigrationList``."""
+    yoyo, _jsonschema = _require_deps()
+    return yoyo.read_migrations(migrations_dir())
+
+
+def _core_tables_exist(db_path):
+    """True if all four core tables already exist in ``db_path`` (a pre-yoyo
+    store provisioned by ``sandesh_db.setup`` before the migration engine)."""
+    import sqlite3
+    con = sqlite3.connect(db_path)
+    try:
+        rows = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    finally:
+        con.close()
+    present = {r[0] for r in rows}
+    return all(t in present for t in _CORE_TABLES)
+
+
+def apply(project_id):
+    """Apply pending migrations to ``project_id``'s store.
+
+    Baseline-adoption glue (AC4): if the four core tables already exist (a
+    pre-yoyo store) AND ``0001-baseline`` has not yet been recorded, MARK it
+    applied — recording it without re-running the CREATE TABLE statements that
+    would otherwise collide with the existing tables — then apply any remaining
+    pending migrations normally. A brand-new empty store has no tables, so
+    ``0001-baseline`` simply applies normally.
+    """
+    db_path = _db_path(project_id)
+    backend = _backend(project_id)
+    migrations = _read_migrations()
+
+    baseline = next((m for m in migrations if m.id == _BASELINE_ID), None)
+    if (
+        baseline is not None
+        and _core_tables_exist(db_path)
+        and not backend.is_applied(baseline)
+    ):
+        # Pre-yoyo store: record the baseline as applied without running it.
+        from yoyo.migrations import MigrationList
+        backend.mark_migrations(MigrationList([baseline]))
+
+    backend.apply_migrations(backend.to_apply(migrations))
+
+
+def status(project_id):
+    """Return ``(applied_ids, pending_ids)`` for ``project_id``'s store.
+
+    ``applied_ids`` are the migration ids already recorded in yoyo's tracking
+    table; ``pending_ids`` are those not yet applied — both in migration order.
+    """
+    backend = _backend(project_id)
+    migrations = _read_migrations()
+    pending = {m.id for m in backend.to_apply(migrations)}
+    applied_ids = [m.id for m in migrations if m.id not in pending]
+    pending_ids = [m.id for m in migrations if m.id in pending]
+    return applied_ids, pending_ids
 
 
 def cmd_migrate(args):
