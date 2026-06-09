@@ -225,7 +225,7 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
    dependency — decide stdio vs HTTP transport).
 2. `app/mcp_server.py` exposing tools: `sandesh_setup`, `sandesh_register`,
    `sandesh_unregister`, `sandesh_addressbook`, `sandesh_send`, `sandesh_reply`,
-   `sandesh_inbox`, `sandesh_fetch`, `sandesh_thread`, `sandesh_actioned` — **each takes
+   `sandesh_inbox`, `sandesh_fetch`, `sandesh_thread` — **each takes
    `project_id`**. They call `sandesh_db.*` directly (the server is a thin adapter).
 3. **Do NOT** put the wake in MCP. `notify` stays a background process.
 4. Add the MCP dep to `install.sh` (or document a venv); keep the CLI working unchanged.

@@ -760,8 +760,9 @@ class MigrateBaselineEqualsSchemaTest(unittest.TestCase):
         )
 
     def test_message_table_columns_match(self):
-        """message table: PRAGMA table_info must be identical (including
-        message.status which is present in this pre-0002 cycle).
+        """message table: PRAGMA table_info must be identical (message.status
+        is absent in both stores in this post-0002 cycle — 0002 dropped it and
+        sandesh_db.setup() no longer provisions it).
         RED: apply()/0001-baseline absent.
         """
         db_path_a, data_home_a = self._store_a_path()
