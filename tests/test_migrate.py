@@ -4452,5 +4452,1287 @@ class MigrateDiffHumanReadableTest(unittest.TestCase):
         )
 
 
+# ===========================================================================
+# Cycle 6 — AC6, AC9, AC11, AC12 + --rollback CLI structural gate
+#
+# §S7: the proving case — 0002-drop-message-status + core removal.
+#
+# Key facts used throughout this cycle's tests:
+#   - sandesh does NOT enforce PRAGMA foreign_keys (no call in connect()), so the
+#     12-step rebuild needs no FK toggling, but the rebuilt message table must
+#     still DECLARE  in_reply_to INTEGER REFERENCES message(id).
+#   - The "pre-0002 snapshot" fixture is the WITH-status shape (7 columns on
+#     message: id, from_addr, subject, kind, status, in_reply_to, body_path,
+#     created_at).  The post-0002 shape drops status (7 → 6 carrying columns:
+#     id, from_addr, subject, kind, in_reply_to, body_path, created_at — the
+#     "status" column is absent).
+#   - _make_fully_migrated_store (Cycle 5 helper, module-level) provisions a
+#     store and applies ALL available migrations.  After GREEN ships 0002, that
+#     store will be at post-0002 state (no status).  At RED time the function
+#     applies only 0001, so the post-0002 assertions fail with a clear reason.
+#
+# _CURRENT_SCHEMA_PATH (defined in the Cycle 4 section at line ~2384) and
+# _SCHEMA_DIR are already in scope; _run_cli / _status_api / _VENV_PYTHON /
+# _write_snapshot_fixture / _current_snapshot_as_tables_dict are all in scope
+# from Cycles 3–5.  The helper _pragma_table_info / _list_user_tables / _REPO_ROOT
+# / _SYSTEM_PYTHON are defined earlier.
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# §C6 shared helper — build the "pre-0002" snapshot fixture WITH status
+#
+# The fixture represents the schema BEFORE 0002 is applied (i.e. after 0001
+# only).  It is derived from the live database shape of a 0001-only store
+# rather than hard-coding magic values, so it stays accurate as long as the
+# 0001-baseline faithfully reproduces _SCHEMA.
+# ---------------------------------------------------------------------------
+
+def _pre0002_snapshot_tables_dict():
+    """Return the §S3 tables-dict for the PRE-0002 schema (message HAS status).
+
+    This is derived from a real 0001-only store provisioned in a tmp dir, so
+    it reflects the actual PRAGMA table_info shape rather than hand-wired values.
+    """
+    import tempfile
+    import os
+    from sandesh import sandesh_db, migrate
+
+    tmp = tempfile.mkdtemp(prefix="sandesh_pre0002_fixture_")
+    orig = os.environ.get("XDG_DATA_HOME")
+    try:
+        os.environ["XDG_DATA_HOME"] = tmp
+        sandesh_db.setup("_pre0002fixture")
+        # Apply only 0001: point the engine at just 0001 by using the standard
+        # migrations dir (which currently has only 0001 at RED time; when 0002
+        # is added, we need a different approach — see below).
+        #
+        # Safer: build the tables_dict directly from PRAGMA on a setup()-store,
+        # since setup() == 0001-baseline by AC3.  That's always the pre-0002 shape.
+        store = sandesh_db.store_dir("_pre0002fixture")
+        db_path = os.path.join(store, sandesh_db.DB_FILE)
+        import sqlite3
+        con = sqlite3.connect(db_path)
+        con.row_factory = sqlite3.Row
+        tables_dict = {}
+        for table in ("address", "message", "message_recipient", "notifier"):
+            cols = {}
+            for r in con.execute(f"PRAGMA table_info({table})").fetchall():
+                cols[r["name"]] = {
+                    "type": r["type"],
+                    "notnull": r["notnull"],
+                    "pk": r["pk"],
+                    "default": r["dflt_value"],
+                }
+            tables_dict[table] = cols
+        con.close()
+        return tables_dict
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+        if orig is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = orig
+
+
+def _apply_with_two_migrations(project_id, data_home, mig_dir):
+    """Provision a store via sandesh_db.setup() then apply ALL migrations from
+    `mig_dir` (which must contain both 0001 and 0002 at GREEN time).
+
+    Used by rollback tests that need a fully-post-0002 store.
+    """
+    import os
+    from sandesh import sandesh_db, migrate
+    orig = os.environ.get("XDG_DATA_HOME")
+    orig_mdir = os.environ.get("SANDESH_MIGRATIONS_DIR")
+    os.environ["XDG_DATA_HOME"] = data_home
+    if mig_dir is not None:
+        os.environ["SANDESH_MIGRATIONS_DIR"] = mig_dir
+    try:
+        sandesh_db.setup(project_id)
+        migrate.apply(project_id)
+        store = sandesh_db.store_dir(project_id)
+        return os.path.join(store, sandesh_db.DB_FILE)
+    finally:
+        if orig is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = orig
+        if orig_mdir is None:
+            os.environ.pop("SANDESH_MIGRATIONS_DIR", None)
+        else:
+            os.environ["SANDESH_MIGRATIONS_DIR"] = orig_mdir
+
+
+# ---------------------------------------------------------------------------
+# §C6-STRUCT — --rollback CLI structural gate
+#
+# AC6 requires migrate --rollback --project X.  Before it is wired in
+# cli.py's migrate subparser the flag is unrecognised → argparse exits 2.
+# This gate must pass (no exit-2) after GREEN wires the flag.
+# ---------------------------------------------------------------------------
+
+class MigrateRollbackFlagAcceptedTest(unittest.TestCase):
+    """Structural gate: migrate --rollback --project X is accepted by the CLI.
+
+    RED: --rollback is NOT in the migrate subparser → argparse exits 2
+    (unrecognised argument error).
+
+    GREEN criterion: the flag is added to the subparser regardless of whether
+    a migration is present; the actual rollback behaviour is tested below.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c6_rb_struct_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def test_rollback_flag_not_rejected_by_argparse(self):
+        """migrate --rollback --project X must NOT exit 2 (argparse unrecognised).
+
+        RED: --rollback absent from the subparser → argparse exits 2.
+        Exit codes 0 or 1 are both acceptable here; only 2 is the argparse signal
+        for an unrecognised argument.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_rb_struct")
+        _setup_project("RbStruct", data_home)
+        r = _run_cli(["migrate", "--rollback", "--project", "RbStruct"], data_home)
+        self.assertNotEqual(
+            r.returncode,
+            2,
+            "migrate --rollback must not exit 2 (argparse unrecognised-argument error);\n"
+            "this means --rollback is missing from the migrate subparser.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC6 — rollback: after 0002 applied, --rollback restores message.status
+# ---------------------------------------------------------------------------
+
+class MigrateRollbackTest(unittest.TestCase):
+    """AC6: after applying 0001 + 0002, migrate --rollback --project X rolls
+    back 0002 and restores message.status.
+
+    Verified via:
+      (a) PRAGMA table_info(message) shows 'status' column RETURNS after rollback
+      (b) migrate --status --project X shows 0002 as pending again (not applied)
+      (c) migrate --status --project X shows 0001-baseline still applied
+
+    RED failure reasons:
+      1. --rollback flag absent from CLI → argparse exits 2
+      2. migrate.rollback() function absent → AttributeError / not dispatched
+      3. 0002-drop-message-status migration absent → no migration to roll back
+         (nothing to test; 0002 simply doesn't exist yet)
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c6_rollback_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def _apply_0001_and_0002(self, project_id, data_home):
+        """Provision + apply all migrations (0001 + 0002) to project_id.
+
+        Returns (db_path, store).  Uses the packaged migrations dir so the
+        standard yoyo pipeline is exercised (not a custom dir).
+        """
+        import os
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db, migrate
+            sandesh_db.setup(project_id)
+            migrate.apply(project_id)
+            store = sandesh_db.store_dir(project_id)
+            return os.path.join(store, sandesh_db.DB_FILE), store
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+    def _rollback_via_api(self, project_id, data_home):
+        """Call migrate.rollback(project_id) directly (Python API, not CLI).
+
+        Returns whatever rollback() returns (no return value asserted here).
+        """
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import migrate
+            return migrate.rollback(project_id)
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+    def test_rollback_function_callable_on_migrate_module(self):
+        """sandesh.migrate.rollback must be a callable (takes project_id).
+
+        RED: function absent → AttributeError.
+        """
+        from sandesh import migrate
+        self.assertTrue(
+            callable(getattr(migrate, "rollback", None)),
+            "sandesh.migrate.rollback must be a callable; attribute is absent or not callable",
+        )
+
+    def test_rollback_restores_status_column_pragma(self):
+        """After apply(0001+0002) + rollback, PRAGMA table_info(message) must
+        include 'status' again.
+
+        RED:
+          - 0002 absent → after apply() only 0001 is applied; no 0002 to roll
+            back; rollback() may raise or be a no-op; status column state
+            doesn't change (was already present from 0001); but the FOLLOWING
+            test (status shows 0002 pending) will catch the real missing piece.
+          - rollback() absent → AttributeError.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_rb_pragma")
+        db_path, _ = self._apply_0001_and_0002("RbPragma", data_home)
+
+        # Verify 0002 was actually applied (status absent) before rollback
+        col_names_before = [
+            c["name"] for c in _pragma_table_info(db_path, "message")
+        ]
+        self.assertNotIn(
+            "status",
+            col_names_before,
+            "Pre-condition: after applying 0001+0002, message.status must be ABSENT "
+            f"(so the rollback test is meaningful); columns: {col_names_before!r}",
+        )
+
+        # Rollback 0002
+        self._rollback_via_api("RbPragma", data_home)
+
+        col_names_after = [
+            c["name"] for c in _pragma_table_info(db_path, "message")
+        ]
+        self.assertIn(
+            "status",
+            col_names_after,
+            "After rollback of 0002, message.status must be RESTORED in PRAGMA table_info;\n"
+            f"columns found: {col_names_after!r}",
+        )
+
+    def test_rollback_makes_0002_pending_again_via_api(self):
+        """After rollback, migrate.status() must show 0002 as pending (not applied).
+
+        RED: rollback() absent / 0002 absent.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_rb_pending_api")
+        self._apply_0001_and_0002("RbPendApi", data_home)
+        self._rollback_via_api("RbPendApi", data_home)
+
+        applied, pending = _status_api("RbPendApi", data_home)
+        self.assertIn(
+            "0002-drop-message-status",
+            pending,
+            "After rollback, '0002-drop-message-status' must be in the pending set;\n"
+            f"applied={applied!r}, pending={pending!r}",
+        )
+
+    def test_rollback_keeps_0001_applied(self):
+        """After rollback of 0002, 0001-baseline must remain applied (rollback=one step).
+
+        RED: rollback() absent / 0002 absent.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_rb_keeps_0001")
+        self._apply_0001_and_0002("RbKeeps0001", data_home)
+        self._rollback_via_api("RbKeeps0001", data_home)
+
+        applied, pending = _status_api("RbKeeps0001", data_home)
+        self.assertIn(
+            "0001-baseline",
+            applied,
+            "After rollback of 0002, '0001-baseline' must remain applied (one-step rollback);\n"
+            f"applied={applied!r}",
+        )
+
+    def test_rollback_via_cli_makes_status_pending(self):
+        """CLI: migrate --rollback --project X followed by migrate --status must
+        show 0002-drop-message-status as pending.
+
+        RED:
+          1. --rollback not in subparser → argparse exits 2
+          2. even if accepted: rollback not dispatched / 0002 absent
+        """
+        data_home = os.path.join(self._tmpdir, "dh_rb_cli_status")
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db, migrate
+            sandesh_db.setup("RbCliStatus")
+            migrate.apply("RbCliStatus")
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        r_rb = _run_cli(["migrate", "--rollback", "--project", "RbCliStatus"], data_home)
+        self.assertNotEqual(
+            r_rb.returncode, 2,
+            "migrate --rollback must not exit 2 (argparse unrecognised).\n"
+            f"stdout: {r_rb.stdout!r}\nstderr: {r_rb.stderr!r}",
+        )
+        self.assertEqual(
+            r_rb.returncode, 0,
+            "migrate --rollback must exit 0 on success.\n"
+            f"stdout: {r_rb.stdout!r}\nstderr: {r_rb.stderr!r}",
+        )
+
+        r_st = _run_cli(["migrate", "--status", "--project", "RbCliStatus"], data_home)
+        combined = r_st.stdout + r_st.stderr
+        self.assertIn(
+            "0002-drop-message-status",
+            combined,
+            "After --rollback, migrate --status output must mention '0002-drop-message-status';\n"
+            f"stdout: {r_st.stdout!r}\nstderr: {r_st.stderr!r}",
+        )
+        # Must convey it is PENDING (not applied)
+        has_pending = (
+            "pending" in combined.lower()
+        )
+        self.assertTrue(
+            has_pending,
+            "After --rollback, migrate --status output must indicate 0002 is pending;\n"
+            f"stdout: {r_st.stdout!r}\nstderr: {r_st.stderr!r}",
+        )
+
+    def test_rollback_via_cli_restores_status_column(self):
+        """CLI: migrate --rollback restores message.status column (PRAGMA check).
+
+        RED: --rollback absent / 0002 absent.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_rb_cli_pragma")
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db, migrate
+            sandesh_db.setup("RbCliPragma")
+            migrate.apply("RbCliPragma")
+            store = sandesh_db.store_dir("RbCliPragma")
+            db_path = os.path.join(store, sandesh_db.DB_FILE)
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        _run_cli(["migrate", "--rollback", "--project", "RbCliPragma"], data_home)
+
+        col_names = [c["name"] for c in _pragma_table_info(db_path, "message")]
+        self.assertIn(
+            "status",
+            col_names,
+            "After CLI --rollback, message.status must be present in PRAGMA table_info;\n"
+            f"columns: {col_names!r}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC11 — status drop end-to-end
+# ---------------------------------------------------------------------------
+
+class MigrateStatusDropEndToEndTest(unittest.TestCase):
+    """AC11: the headline test — after 0001+0002, message.status is gone from
+    both a migrated store AND a brand-new setup() store; messaging still works.
+
+    Part 1 — Schema shape:
+      (a) Migrated store (0001+0002 applied): message has NO status column
+      (b) New store (sandesh_db.setup()): message has NO status column
+          This is the new≡migrated convergence test.
+
+    Part 2 — Data carried + messaging intact:
+      Seed a store with:
+        - Two top-level messages (to + cc recipients, one with file body)
+        - One threaded reply (in_reply_to set)
+      Apply 0002 (via the adoption path: setup() + apply()).
+      Assert:
+        - All message rows survive with their carried columns intact
+          (id, from_addr, subject, kind, in_reply_to, body_path, created_at)
+        - message_recipient rows survive (per-recipient, role, read_at)
+        - sandesh_db.thread() still works on the threaded reply
+        - sandesh_db.inbox() still returns unread messages
+        - sandesh_db.fetch() still works and marks messages read
+        - No reference to 'status' in any of the above paths
+
+    RED failure reasons:
+      1. 0002 absent → apply() only applies 0001 → migrated store still HAS status
+         → assertNotIn("status", col_names) fails
+      2. _SCHEMA still has status column → new store via setup() still HAS status
+         → assertNotIn("status", col_names) fails
+      3. Even if both schema changes were made: sandesh_db.send/reply/thread/
+         fetch reference status → they raise OperationalError (no such column)
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c6_ac11_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    # ---- Part 1a: migrated store has no status ----
+
+    def test_migrated_store_message_has_no_status_column(self):
+        """After applying 0001+0002, PRAGMA table_info(message) must NOT include 'status'.
+
+        RED: 0002 absent → apply() only applies 0001 → status still present.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac11_mig")
+        db_path = _make_fully_migrated_store("AC11Mig", data_home)
+
+        col_names = [c["name"] for c in _pragma_table_info(db_path, "message")]
+        self.assertNotIn(
+            "status",
+            col_names,
+            "After applying all migrations (0001+0002), message.status must be ABSENT;\n"
+            f"columns present: {col_names!r}",
+        )
+
+    def test_migrated_store_message_has_expected_columns(self):
+        """After 0001+0002, message table has exactly the expected columns
+        (id, from_addr, subject, kind, in_reply_to, body_path, created_at).
+
+        RED: 0002 absent → status still present; count/set mismatch.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac11_cols")
+        db_path = _make_fully_migrated_store("AC11Cols", data_home)
+
+        col_names = sorted(c["name"] for c in _pragma_table_info(db_path, "message"))
+        expected = sorted([
+            "id", "from_addr", "subject", "kind", "in_reply_to", "body_path", "created_at"
+        ])
+        self.assertEqual(
+            col_names,
+            expected,
+            "After 0001+0002, message columns must be exactly "
+            f"{expected!r};\nfound: {col_names!r}",
+        )
+
+    def test_migrated_store_in_reply_to_declared(self):
+        """After 0001+0002 rebuild, message.in_reply_to must still be declared
+        (the 12-step rebuild must carry it — FK declared even though not enforced).
+
+        RED: 0002 absent / rebuild omits in_reply_to.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac11_fk")
+        db_path = _make_fully_migrated_store("AC11FK", data_home)
+
+        col_names = [c["name"] for c in _pragma_table_info(db_path, "message")]
+        self.assertIn(
+            "in_reply_to",
+            col_names,
+            "After 0001+0002 rebuild, message.in_reply_to must still be present;\n"
+            f"columns: {col_names!r}",
+        )
+
+    # ---- Part 1b: new store has no status (new≡migrated convergence) ----
+
+    def test_new_store_via_setup_has_no_status_column(self):
+        """A brand-new store provisioned via sandesh_db.setup() must NOT have
+        message.status (the _SCHEMA must be updated to match post-0002 shape).
+
+        RED: _SCHEMA still has 'status TEXT NOT NULL DEFAULT 'open'' →
+             setup()-provisioned store still has status column.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac11_new")
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db
+            sandesh_db.setup("AC11New")
+            store = sandesh_db.store_dir("AC11New")
+            db_path = os.path.join(store, sandesh_db.DB_FILE)
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        col_names = [c["name"] for c in _pragma_table_info(db_path, "message")]
+        self.assertNotIn(
+            "status",
+            col_names,
+            "A new store via sandesh_db.setup() must NOT have message.status "
+            "(the _SCHEMA must be updated to post-0002 shape);\n"
+            f"columns present: {col_names!r}",
+        )
+
+    def test_new_store_and_migrated_store_message_columns_match(self):
+        """New≡migrated convergence: the message table columns must be identical
+        between a sandesh_db.setup()-provisioned store and a fully-migrated store.
+
+        RED:
+          - If 0002 absent: migrated store has status, new store has status →
+            both have status → they "match" but the assertNotIn tests above fail.
+          - If _SCHEMA updated but 0002 absent: new store has no status, migrated
+            store still has status → mismatch → THIS test fails.
+          - If both updated: should match → passes only on GREEN.
+        """
+        data_home_new = os.path.join(self._tmpdir, "dh_ac11_conv_new")
+        data_home_mig = os.path.join(self._tmpdir, "dh_ac11_conv_mig")
+
+        # New store via setup()
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home_new
+        try:
+            from sandesh import sandesh_db
+            sandesh_db.setup("AC11ConvNew")
+            store_new = sandesh_db.store_dir("AC11ConvNew")
+            db_new = os.path.join(store_new, sandesh_db.DB_FILE)
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        # Migrated store
+        db_mig = _make_fully_migrated_store("AC11ConvMig", data_home_mig)
+
+        cols_new = _pragma_table_info(db_new, "message")
+        cols_mig = _pragma_table_info(db_mig, "message")
+        self.assertEqual(
+            cols_new,
+            cols_mig,
+            "New store (setup) and migrated store must have identical message columns "
+            "(new≡migrated convergence);\n"
+            f"  new store:      {cols_new!r}\n"
+            f"  migrated store: {cols_mig!r}",
+        )
+
+    # ---- Part 2: data carried + messaging intact after 0002 ----
+
+    def _seed_store(self, project_id, data_home):
+        """Seed a store (provisioned via setup()) with messages and return the
+        db_path, store dir, and the seeded message ids.
+
+        Seeds:
+          - Register addresses: Mainline-AC11Data, Track1-AC11Data, Track2-AC11Data
+          - send() msg1: from Track1, to=[Mainline], cc=[Track2], subject="ping",
+            body_text="hello world" (file body)
+          - send() msg2: from Track2, to=[Mainline], subject="fyi" (subject-only)
+          - reply() msg3: from Mainline to Track1, re: msg1, in_reply_to=msg1
+            subject="Re: ping", body_text="ack"
+
+        Returns (db_path, store, msg1_id, msg2_id, msg3_id)
+        """
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db
+            sandesh_db.setup(project_id)
+            store = sandesh_db.store_dir(project_id)
+            db_path = os.path.join(store, sandesh_db.DB_FILE)
+
+            con = sandesh_db.connect(store)
+            # Register addresses (validate=False avoids project_id check in send)
+            sandesh_db.register(con, f"Mainline - {project_id}", kind="mainline",
+                                project=project_id)
+            sandesh_db.register(con, f"Track 1 - {project_id}", kind="track",
+                                project=project_id)
+            sandesh_db.register(con, f"Track 2 - {project_id}", kind="track",
+                                project=project_id)
+
+            mainline = f"Mainline - {project_id}"
+            track1 = f"Track 1 - {project_id}"
+            track2 = f"Track 2 - {project_id}"
+
+            # msg1: from Track1, to=[Mainline], cc=[Track2], with file body
+            mid1 = sandesh_db.send(
+                con, store, track1,
+                to=[mainline], cc=[track2],
+                subject="ping", kind="request",
+                body_text="hello world",
+                project=project_id,
+            )
+            # msg2: from Track2, to=[Mainline], subject-only
+            mid2 = sandesh_db.send(
+                con, store, track2,
+                to=[mainline],
+                subject="fyi", kind="fyi",
+                project=project_id,
+            )
+            # msg3: from Mainline, reply to msg1, to=[Track1], file body
+            mid3 = sandesh_db.reply(
+                con, store, mid1, mainline,
+                body_text="ack",
+                project=project_id,
+            )
+            con.close()
+            return db_path, store, mid1, mid2, mid3
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+    def test_data_rows_survive_0002_message_ids_intact(self):
+        """After seeding + applying 0002, all three message rows must still exist.
+
+        RED: 0002's INSERT…SELECT drops rows (rebuild bug) → count wrong.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac11_data_ids")
+        db_path, store, mid1, mid2, mid3 = self._seed_store("AC11DataIds", data_home)
+
+        # Apply 0002 via the adoption path (setup() already done, apply marks 0001 + runs 0002)
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import migrate
+            migrate.apply("AC11DataIds")
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        con = sqlite3.connect(db_path)
+        con.row_factory = sqlite3.Row
+        rows = con.execute("SELECT id FROM message ORDER BY id").fetchall()
+        con.close()
+        ids = [r["id"] for r in rows]
+        self.assertEqual(
+            sorted(ids),
+            sorted([mid1, mid2, mid3]),
+            f"All three message ids must survive 0002; expected {sorted([mid1, mid2, mid3])!r}, "
+            f"got {sorted(ids)!r}",
+        )
+
+    def test_data_rows_survive_0002_carried_columns_intact(self):
+        """After 0002, carried columns (from_addr, subject, kind, in_reply_to,
+        body_path, created_at) must be intact for all message rows.
+
+        RED: 0002's INSERT…SELECT omits a column or maps it wrong.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac11_data_cols")
+        db_path, store, mid1, mid2, mid3 = self._seed_store("AC11DataCols", data_home)
+
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import migrate
+            migrate.apply("AC11DataCols")
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        con = sqlite3.connect(db_path)
+        con.row_factory = sqlite3.Row
+
+        # msg1: has a body_path (file body)
+        row1 = con.execute("SELECT * FROM message WHERE id=?", (mid1,)).fetchone()
+        self.assertIsNotNone(row1, f"message #{mid1} must survive 0002")
+        self.assertEqual(row1["from_addr"], f"Track 1 - AC11DataCols",
+                         f"msg1 from_addr wrong: {row1['from_addr']!r}")
+        self.assertEqual(row1["subject"], "ping",
+                         f"msg1 subject wrong: {row1['subject']!r}")
+        self.assertEqual(row1["kind"], "request",
+                         f"msg1 kind wrong: {row1['kind']!r}")
+        self.assertIsNone(row1["in_reply_to"],
+                          f"msg1 in_reply_to must be None (top-level): {row1['in_reply_to']!r}")
+        self.assertIsNotNone(row1["body_path"],
+                             "msg1 body_path must not be None (file body was provided)")
+
+        # msg2: subject-only (no body_path)
+        row2 = con.execute("SELECT * FROM message WHERE id=?", (mid2,)).fetchone()
+        self.assertIsNotNone(row2, f"message #{mid2} must survive 0002")
+        self.assertIsNone(row2["body_path"],
+                          f"msg2 body_path must be None (subject-only): {row2['body_path']!r}")
+        self.assertEqual(row2["subject"], "fyi",
+                         f"msg2 subject wrong: {row2['subject']!r}")
+
+        # msg3: reply — in_reply_to must point to msg1
+        row3 = con.execute("SELECT * FROM message WHERE id=?", (mid3,)).fetchone()
+        self.assertIsNotNone(row3, f"message #{mid3} must survive 0002")
+        self.assertEqual(row3["in_reply_to"], mid1,
+                         f"msg3 in_reply_to must be {mid1}; got {row3['in_reply_to']!r}")
+
+        con.close()
+
+    def test_data_rows_no_status_column_after_0002(self):
+        """After 0002, SELECT * FROM message must not include a 'status' key
+        (not in column names, not accessible via row[]).
+
+        RED: 0002 absent → status column still present → keys include 'status'.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac11_no_status_col")
+        db_path, store, mid1, mid2, mid3 = self._seed_store("AC11NoStatusCol", data_home)
+
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import migrate
+            migrate.apply("AC11NoStatusCol")
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        con = sqlite3.connect(db_path)
+        con.row_factory = sqlite3.Row
+        row = con.execute("SELECT * FROM message WHERE id=?", (mid1,)).fetchone()
+        con.close()
+        self.assertIsNotNone(row, f"message #{mid1} must exist")
+        col_keys = list(row.keys())
+        self.assertNotIn(
+            "status",
+            col_keys,
+            "After 0002, message rows must NOT have a 'status' key;\n"
+            f"row keys: {col_keys!r}",
+        )
+
+    def test_recipients_intact_after_0002(self):
+        """After 0002, message_recipient rows must survive (role + read_at intact).
+
+        msg1 was sent to Mainline (to) and cc'd Track2 (cc): both rows must exist.
+        RED: 0002 drops message_recipient rows (shouldn't — only message is rebuilt).
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac11_recips")
+        db_path, store, mid1, mid2, mid3 = self._seed_store("AC11Recips", data_home)
+
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import migrate
+            migrate.apply("AC11Recips")
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        con = sqlite3.connect(db_path)
+        con.row_factory = sqlite3.Row
+        recips = con.execute(
+            "SELECT recipient, role, read_at FROM message_recipient WHERE message_id=? "
+            "ORDER BY recipient",
+            (mid1,),
+        ).fetchall()
+        con.close()
+
+        self.assertEqual(len(recips), 2,
+                         f"msg1 must have exactly 2 recipients; got {len(recips)}: "
+                         f"{[(r['recipient'], r['role']) for r in recips]!r}")
+
+        roles = {r["recipient"].split(" - ")[0]: r["role"] for r in recips}
+        self.assertEqual(roles.get("Mainline"), "to",
+                         f"Mainline must have role='to'; roles: {roles!r}")
+        self.assertEqual(roles.get("Track 2"), "cc",
+                         f"Track 2 must have role='cc'; roles: {roles!r}")
+
+        # Both unread (read_at=None) since no fetch has occurred
+        for r in recips:
+            self.assertIsNone(r["read_at"],
+                              f"{r['recipient']} read_at must be None (unread); got {r['read_at']!r}")
+
+    def test_thread_still_works_after_0002(self):
+        """After 0002, sandesh_db.thread(msg3_id) must still return the chain
+        [msg1, msg3] (ascending by id, from root to reply).
+
+        RED: 0002 absent → sandesh_db.thread() SELECT references m.status → works;
+             but if status removed from sandesh_db without removing the SELECT
+             reference → OperationalError: no such column: m.status.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac11_thread")
+        db_path, store, mid1, mid2, mid3 = self._seed_store("AC11Thread", data_home)
+
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db, migrate
+            migrate.apply("AC11Thread")
+            con = sandesh_db.connect(store)
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        try:
+            chain = sandesh_db.thread(con, mid3)
+        except Exception as exc:
+            self.fail(
+                f"sandesh_db.thread() raised after 0002: {type(exc).__name__}: {exc}\n"
+                "Likely cause: 'status' column reference not removed from thread()/its SELECT."
+            )
+        finally:
+            con.close()
+
+        self.assertEqual(
+            len(chain), 2,
+            f"thread(msg3) must return [msg1, msg3] (2 entries); got {len(chain)!r}",
+        )
+        self.assertEqual(chain[0]["id"], mid1,
+                         f"chain[0] must be msg1 (root); got id={chain[0]['id']!r}")
+        self.assertEqual(chain[1]["id"], mid3,
+                         f"chain[1] must be msg3 (reply); got id={chain[1]['id']!r}")
+
+    def test_inbox_still_works_after_0002(self):
+        """After 0002, sandesh_db.inbox(mainline) must return the unread messages
+        for Mainline (msg1 and msg2 sent to Mainline).
+
+        RED: 'status' reference in inbox() SELECT → OperationalError after 0002.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac11_inbox")
+        db_path, store, mid1, mid2, mid3 = self._seed_store("AC11Inbox", data_home)
+
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db, migrate
+            migrate.apply("AC11Inbox")
+            con = sandesh_db.connect(store)
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        mainline = "Mainline - AC11Inbox"
+        try:
+            rows = sandesh_db.inbox(con, mainline, unread_only=True)
+        except Exception as exc:
+            self.fail(
+                f"sandesh_db.inbox() raised after 0002: {type(exc).__name__}: {exc}\n"
+                "Likely cause: 'status' column reference not removed from inbox() SELECT."
+            )
+        finally:
+            con.close()
+
+        # Mainline is a 'to' recipient of msg1 and msg2
+        inbox_ids = sorted(r["id"] for r in rows)
+        self.assertIn(mid1, inbox_ids,
+                      f"msg1 must be in Mainline's inbox; inbox_ids={inbox_ids!r}")
+        self.assertIn(mid2, inbox_ids,
+                      f"msg2 must be in Mainline's inbox; inbox_ids={inbox_ids!r}")
+        # Exactly 2 unread (msg3 was sent FROM Mainline so Mainline is not a recipient)
+        self.assertEqual(
+            len(rows), 2,
+            f"Mainline must have exactly 2 unread messages (msg1, msg2); "
+            f"got {len(rows)}: {inbox_ids!r}",
+        )
+
+    def test_fetch_still_works_after_0002(self):
+        """After 0002, sandesh_db.fetch(mainline) must return messages and mark them read.
+
+        RED: 'status' reference not removed from fetch() / inbox() SELECT path.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac11_fetch")
+        db_path, store, mid1, mid2, mid3 = self._seed_store("AC11Fetch", data_home)
+
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db, migrate
+            migrate.apply("AC11Fetch")
+            con = sandesh_db.connect(store)
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        mainline = "Mainline - AC11Fetch"
+        try:
+            items = sandesh_db.fetch(con, store, mainline, mark=True)
+        except Exception as exc:
+            self.fail(
+                f"sandesh_db.fetch() raised after 0002: {type(exc).__name__}: {exc}\n"
+                "Likely cause: 'status' column reference not removed."
+            )
+        finally:
+            con.close()
+
+        self.assertEqual(
+            len(items), 2,
+            f"fetch() must return 2 items for Mainline (msg1 + msg2); got {len(items)!r}",
+        )
+        fetched_ids = sorted(it["id"] for it in items)
+        self.assertEqual(fetched_ids, sorted([mid1, mid2]),
+                         f"fetch() items must be msg1+msg2; got {fetched_ids!r}")
+
+        # Verify marked read: inbox should now be empty
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db
+            con2 = sandesh_db.connect(store)
+            remaining = sandesh_db.inbox(con2, mainline, unread_only=True)
+            con2.close()
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        self.assertEqual(
+            len(remaining), 0,
+            f"After fetch(mark=True), inbox must be empty; got {len(remaining)} unread",
+        )
+
+    def test_cc_recipient_stays_unread_after_fetch_by_to(self):
+        """After 0002, a cc recipient (Track 2) stays unread after Mainline fetches msg1.
+
+        Per-recipient read semantics must survive the schema change (read_at on
+        message_recipient, not on message).
+
+        RED: 0002 absent — but if status is also removed from sandesh_db without
+        fixing the SELECT, this raises OperationalError (caught by other tests).
+        At RED time this test fails because 0002 has not been applied.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac11_cc_unread")
+        db_path, store, mid1, mid2, mid3 = self._seed_store("AC11CCUnread", data_home)
+
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db, migrate
+            migrate.apply("AC11CCUnread")
+            con = sandesh_db.connect(store)
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        mainline = "Mainline - AC11CCUnread"
+        track2 = "Track 2 - AC11CCUnread"
+
+        # Mainline fetches (marks its copy read)
+        sandesh_db.fetch(con, store, mainline, mark=True)
+        con.close()
+
+        # Track 2 should still have msg1 unread in its inbox
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db
+            con2 = sandesh_db.connect(store)
+            track2_unread = sandesh_db.inbox(con2, track2, unread_only=True)
+            con2.close()
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        unread_ids = [r["id"] for r in track2_unread]
+        self.assertIn(
+            mid1, unread_ids,
+            "Track 2 (cc recipient) must still have msg1 unread after Mainline (to) fetched it;\n"
+            f"Track 2 unread ids: {unread_ids!r}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC9 — diff reports message.status in 'removed' list
+#
+# Fixture: the "pre-0002" snapshot (a store provisioned only via setup(), which
+# equals 0001-baseline by AC3).  That snapshot HAS status.  The fully-migrated
+# store (0001+0002) does NOT have status.
+#
+# We construct the pre-0002 fixture from a real setup()-provisioned store so
+# the column descriptors are accurate (not hand-wired).
+# ---------------------------------------------------------------------------
+
+class MigrateDiffStatusRemovedTest(unittest.TestCase):
+    """AC9: migrate --diff <pre-0002-snapshot> --json --project X reports
+    message.status in the 'removed' list.
+
+    The pre-0002 snapshot is constructed from a sandesh_db.setup()-provisioned
+    store (which has status by AC3 at this point in time).  The live store is
+    fully migrated (0001+0002) so it lacks status.
+
+    RED failure reasons:
+      1. 0002 absent → fully-migrated store still has status → diff sees no
+         difference between old (with status) and current (with status) → status
+         NOT in 'removed' → assertion fails.
+      2. --diff not accepted (but this was wired in Cycle 5; shouldn't be an issue).
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c6_ac9_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def _write_pre0002_fixture(self, fixture_path):
+        """Write the pre-0002 snapshot (WITH status) to fixture_path.
+
+        The snapshot is derived from a real setup()-provisioned store so the
+        column descriptors (type, notnull, pk, default) are accurate.
+        """
+        tables_dict = _pre0002_snapshot_tables_dict()
+        # Sanity: the pre-0002 snapshot must contain message.status
+        self.assertIn(
+            "status",
+            tables_dict.get("message", {}),
+            "Pre-condition: the pre-0002 snapshot must contain message.status;\n"
+            "This means sandesh_db._SCHEMA still has status (correct at RED time).",
+        )
+        _write_snapshot_fixture(fixture_path, tables_dict)
+
+    def test_diff_status_removed_appears_in_removed_list(self):
+        """migrate --diff <pre-0002-snapshot> --json on a fully-migrated store must
+        include message.status in the 'removed' list.
+
+        RED: 0002 absent → live store still has status → diff sees no removal.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac9_removed")
+        _make_fully_migrated_store("AC9Removed", data_home)
+
+        fixture_path = os.path.join(self._tmpdir, "pre0002_snapshot.json")
+        self._write_pre0002_fixture(fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "AC9Removed"],
+            data_home,
+        )
+        self.assertEqual(
+            r.returncode, 0,
+            f"migrate --diff must exit 0.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+        parsed = _json.loads(r.stdout)
+        removed = parsed.get("removed", [])
+        removed_cols = [
+            (e.get("table"), e.get("column"))
+            for e in removed
+            if isinstance(e, dict)
+        ]
+        self.assertIn(
+            ("message", "status"),
+            removed_cols,
+            "message.status must appear in the 'removed' list when diffing pre-0002 "
+            "snapshot against a fully-migrated (post-0002) store;\n"
+            f"removed list: {removed!r}\nfull JSON: {parsed!r}",
+        )
+
+    def test_diff_status_removed_entry_has_old_descriptor(self):
+        """The 'removed' entry for message.status must include the 'old' descriptor.
+
+        Entry shape: {"table": "message", "column": "status", "old": {type, notnull, pk, default}}
+
+        RED: 0002 absent → status not in 'removed'.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac9_desc")
+        _make_fully_migrated_store("AC9Desc", data_home)
+
+        fixture_path = os.path.join(self._tmpdir, "pre0002_desc.json")
+        self._write_pre0002_fixture(fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "AC9Desc"],
+            data_home,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        parsed = _json.loads(r.stdout)
+        removed = parsed.get("removed", [])
+        status_entries = [
+            e for e in removed
+            if isinstance(e, dict)
+            and e.get("table") == "message"
+            and e.get("column") == "status"
+        ]
+        self.assertEqual(
+            len(status_entries), 1,
+            f"Exactly 1 'removed' entry for (message, status); got {len(status_entries)}: {removed!r}",
+        )
+        entry = status_entries[0]
+        self.assertIn(
+            "old",
+            entry,
+            f"'removed' entry for message.status must have 'old' descriptor; got {entry!r}",
+        )
+        old_desc = entry["old"]
+        self.assertIsInstance(old_desc, dict,
+                              f"'old' descriptor must be a dict; got {type(old_desc)!r}")
+        for key in ("type", "notnull", "pk", "default"):
+            self.assertIn(
+                key, old_desc,
+                f"'old' descriptor must contain '{key}'; got keys: {list(old_desc.keys())!r}",
+            )
+
+    def test_diff_status_type_is_text(self):
+        """The removed message.status must have type='TEXT' in the old descriptor.
+
+        Validates the fixture accurately captures the pre-0002 schema.
+        RED: 0002 absent → not in 'removed' list.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac9_type")
+        _make_fully_migrated_store("AC9Type", data_home)
+        fixture_path = os.path.join(self._tmpdir, "pre0002_type.json")
+        self._write_pre0002_fixture(fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "AC9Type"],
+            data_home,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        parsed = _json.loads(r.stdout)
+        removed = parsed.get("removed", [])
+        status_entry = next(
+            (e for e in removed if isinstance(e, dict)
+             and e.get("table") == "message" and e.get("column") == "status"),
+            None,
+        )
+        self.assertIsNotNone(
+            status_entry,
+            f"message.status must appear in 'removed'; removed={removed!r}",
+        )
+        self.assertEqual(
+            status_entry.get("old", {}).get("type"),
+            "TEXT",
+            f"message.status old type must be 'TEXT'; got {status_entry.get('old', {})!r}",
+        )
+
+    def test_diff_added_and_changed_are_empty_for_pre0002_vs_post0002(self):
+        """When the old snapshot is pre-0002 (only status removed), 'added' and
+        'changed' lists must be empty (only a removal, nothing added or changed).
+
+        RED: 0002 absent → live store still has status → diff shows no difference
+        at all → added=[], removed=[], changed=[] → 'removed' is empty → the
+        above tests fail, but this test would PASS (vacuously) at RED time.
+        This test is therefore a GREEN-guaranteeing assertion: it should pass
+        once 0002 exists AND the snapshot only changed by removing status.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_ac9_add_chg")
+        _make_fully_migrated_store("AC9AddChg", data_home)
+        fixture_path = os.path.join(self._tmpdir, "pre0002_add_chg.json")
+        self._write_pre0002_fixture(fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "AC9AddChg"],
+            data_home,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        parsed = _json.loads(r.stdout)
+        self.assertEqual(
+            parsed.get("added", "MISSING"),
+            [],
+            f"'added' must be empty when old=pre-0002 and current=post-0002; "
+            f"got: {parsed.get('added')!r}",
+        )
+        self.assertEqual(
+            parsed.get("changed", "MISSING"),
+            [],
+            f"'changed' must be empty when only status was removed; "
+            f"got: {parsed.get('changed')!r}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC12 — core stdlib purity preserved
+#
+# The non-migrate test suite must still run under system python3 with no
+# third-party deps installed.  This is a guard that GREEN must keep green.
+# At RED time it PASSES (since nothing has been removed yet); if GREEN's
+# sandesh_db edits accidentally import a third-party dep (or refer to a
+# removed symbol in a way that breaks stdlib-only execution) this test fails.
+# ---------------------------------------------------------------------------
+
+class MigrateCorePurityStdlibTest(unittest.TestCase):
+    """AC12: tests/test_sandesh.py must pass under the SYSTEM python3 (no third-party deps).
+
+    Uses /usr/bin/python3 which has no yoyo, jsonschema, or other project venv deps.
+    The test verifies:
+      (a) the subprocess exits 0 (all tests passed)
+      (b) no 'ERROR' or 'FAIL' in the output (no test errors)
+
+    At RED time this test PASSES (status hasn't been removed from sandesh_db yet).
+    Its job is to fail during GREEN if a removal breaks stdlib compatibility.
+    It's included here as a guard assertion that GREEN must keep green.
+    """
+
+    def test_core_suite_passes_under_system_python3(self):
+        """tests/test_sandesh.py passes under /usr/bin/python3 (no third-party deps).
+
+        RED: this test PASSES at RED time (sandesh_db still has status).
+        GREEN must keep it passing after status removal.
+        If it fails after GREEN, the removal broke stdlib compatibility.
+        """
+        r = subprocess.run(
+            [
+                _SYSTEM_PYTHON,
+                "-m", "unittest", "tests.test_sandesh",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=_REPO_ROOT,
+            env={**os.environ, "PYTHONPATH": _REPO_ROOT},
+        )
+        self.assertEqual(
+            r.returncode,
+            0,
+            "tests/test_sandesh.py must pass under system python3 with no third-party deps.\n"
+            "If this fails after GREEN's status removal, a stdlib-only module was broken.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_core_suite_no_errors_or_failures_under_system_python3(self):
+        """tests/test_sandesh.py output must not contain ERROR or FAIL lines.
+
+        Companion to the exit-code check: catches the case where subprocess
+        exits non-zero due to test errors (which would already be caught above)
+        but provides an explicit message about which failure kind occurred.
+        """
+        r = subprocess.run(
+            [
+                _SYSTEM_PYTHON,
+                "-m", "unittest", "tests.test_sandesh",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=_REPO_ROOT,
+            env={**os.environ, "PYTHONPATH": _REPO_ROOT},
+        )
+        combined = r.stdout + r.stderr
+        # unittest outputs "ERROR:" for test errors and "FAIL:" for assertion failures
+        has_error = "ERROR:" in combined or "\nERROR " in combined
+        has_fail = "FAIL:" in combined or "\nFAIL " in combined
+        self.assertFalse(
+            has_error or has_fail,
+            "tests/test_sandesh.py must have no ERRORs or FAILs under system python3.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
