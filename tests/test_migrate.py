@@ -2340,5 +2340,996 @@ class MigrateTransactionalRollbackTest(unittest.TestCase):
             )
 
 
+# ---------------------------------------------------------------------------
+# Cycle 4 — AC8 (snapshot validity) + AC7 (--check: pending / drift / clean)
+#
+# §S3 defines the snapshot shape: a JSON file at sandesh/schema/current-schema.json
+# whose top-level structure is:
+#
+#   {
+#     "tables": {
+#       "<table_name>": {
+#         "columns": {
+#           "<col_name>": {
+#             "type": "<SQLite type string>",
+#             "notnull": <0 or 1>,
+#             "pk": <0 or 1>,
+#             "default": <string or null>
+#           }
+#         }
+#       }
+#     }
+#   }
+#
+# Column data is derived directly from PRAGMA table_info rows:
+#   name → key in "columns"; type/notnull/pk/dflt_value → inner values.
+#
+# schema.meta.json is a JSON Schema (draft-07) that validates the above shape.
+#
+# current-schema.json represents the post-0001 (pre-0002) schema — four tables
+# with message.status PRESENT.
+#
+# §S5 / AC7 — `migrate --check` checks two things:
+#   1. pending — unapplied yoyo migrations → exit NON-ZERO, list them.
+#   2. drift  — live DB shape ≠ current-schema.json → WARNING in output, exit ZERO.
+#   Fully-migrated + no drift → exit ZERO, no warning.
+#
+# RED failure reasons:
+#   - sandesh/schema/current-schema.json does not exist → FileNotFoundError in AC8 tests
+#   - sandesh/schema/schema.meta.json does not exist → FileNotFoundError in AC8 tests
+#   - --check is not a recognised argument in the migrate subparser → argparse exits 2
+# ---------------------------------------------------------------------------
+
+_SCHEMA_DIR = os.path.join(_REPO_ROOT, "sandesh", "schema")
+_CURRENT_SCHEMA_PATH = os.path.join(_SCHEMA_DIR, "current-schema.json")
+_META_SCHEMA_PATH = os.path.join(_SCHEMA_DIR, "schema.meta.json")
+
+
+# ---------------------------------------------------------------------------
+# AC8 — snapshot file existence + meta-schema validation
+# ---------------------------------------------------------------------------
+
+class MigrateSnapshotExistsTest(unittest.TestCase):
+    """AC8 (partial — file existence): sandesh/schema/current-schema.json and
+    sandesh/schema/schema.meta.json must exist as real files.
+
+    RED: neither file exists yet (only .gitkeep in sandesh/schema/).
+    """
+
+    def test_current_schema_json_exists(self):
+        """sandesh/schema/current-schema.json must exist as a file.
+
+        RED: file absent — only .gitkeep in sandesh/schema/.
+        """
+        self.assertTrue(
+            os.path.isfile(_CURRENT_SCHEMA_PATH),
+            f"sandesh/schema/current-schema.json must exist; "
+            f"not found at {_CURRENT_SCHEMA_PATH!r}.\n"
+            "GREEN must create this file with the post-0001 schema snapshot.",
+        )
+
+    def test_meta_schema_json_exists(self):
+        """sandesh/schema/schema.meta.json must exist as a file.
+
+        RED: file absent.
+        """
+        self.assertTrue(
+            os.path.isfile(_META_SCHEMA_PATH),
+            f"sandesh/schema/schema.meta.json must exist; "
+            f"not found at {_META_SCHEMA_PATH!r}.\n"
+            "GREEN must create this JSON Schema meta-schema file.",
+        )
+
+    def test_current_schema_is_valid_json(self):
+        """current-schema.json must be parseable as JSON (no syntax errors).
+
+        RED: file absent → open() raises FileNotFoundError.
+        """
+        import json
+        try:
+            with open(_CURRENT_SCHEMA_PATH) as fh:
+                data = json.load(fh)
+        except FileNotFoundError:
+            self.fail(
+                f"current-schema.json not found at {_CURRENT_SCHEMA_PATH!r}; "
+                "GREEN must create it."
+            )
+        except json.JSONDecodeError as exc:
+            self.fail(
+                f"current-schema.json is not valid JSON: {exc}\n"
+                f"Path: {_CURRENT_SCHEMA_PATH!r}"
+            )
+        self.assertIsInstance(data, dict, "current-schema.json must be a JSON object (dict)")
+
+    def test_meta_schema_is_valid_json(self):
+        """schema.meta.json must be parseable as JSON.
+
+        RED: file absent → FileNotFoundError.
+        """
+        import json
+        try:
+            with open(_META_SCHEMA_PATH) as fh:
+                data = json.load(fh)
+        except FileNotFoundError:
+            self.fail(
+                f"schema.meta.json not found at {_META_SCHEMA_PATH!r}; "
+                "GREEN must create it."
+            )
+        except json.JSONDecodeError as exc:
+            self.fail(
+                f"schema.meta.json is not valid JSON: {exc}\n"
+                f"Path: {_META_SCHEMA_PATH!r}"
+            )
+        self.assertIsInstance(data, dict, "schema.meta.json must be a JSON object (dict)")
+
+
+class MigrateSnapshotStructureTest(unittest.TestCase):
+    """AC8 — current-schema.json has the expected top-level structure.
+
+    The snapshot format is:
+      {"tables": {"<name>": {"columns": {"<col>": {"type": ..., "notnull": ...,
+                                                    "pk": ..., "default": ...}}}}}
+
+    Tests in this class check structure only (not specific column values);
+    the column-content tests in MigrateSnapshotContentTest go deeper.
+
+    RED: current-schema.json absent → FileNotFoundError on load.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import json
+        cls._schema_path = _CURRENT_SCHEMA_PATH
+        if not os.path.isfile(cls._schema_path):
+            # Skip all structure tests cleanly — the existence tests above
+            # already capture the RED; we don't want noisy AttributeErrors here.
+            raise unittest.SkipTest(
+                f"current-schema.json not found at {cls._schema_path!r}; "
+                "skipping structure tests (existence test already RED)."
+            )
+        with open(cls._schema_path) as fh:
+            cls.snapshot = json.load(fh)
+
+    def test_snapshot_has_tables_key(self):
+        """current-schema.json must have a top-level 'tables' key.
+
+        RED: file absent (SkipTest above); or file present but structure wrong.
+        """
+        self.assertIn(
+            "tables", self.snapshot,
+            f"current-schema.json must have a top-level 'tables' key; "
+            f"keys found: {list(self.snapshot.keys())!r}",
+        )
+
+    def test_snapshot_tables_is_dict(self):
+        """current-schema.json['tables'] must be a dict (table_name → column_map).
+
+        RED: file absent (SkipTest); or tables not a dict.
+        """
+        tables = self.snapshot.get("tables", None)
+        self.assertIsInstance(
+            tables, dict,
+            f"current-schema.json['tables'] must be a dict; got {type(tables)!r}",
+        )
+
+    def test_snapshot_contains_all_four_tables(self):
+        """current-schema.json must include all four core tables:
+        address, message, message_recipient, notifier.
+
+        RED: file absent (SkipTest); or tables missing.
+        """
+        tables = self.snapshot.get("tables", {})
+        for tbl in ("address", "message", "message_recipient", "notifier"):
+            self.assertIn(
+                tbl, tables,
+                f"current-schema.json must include table '{tbl}'; "
+                f"tables found: {list(tables.keys())!r}",
+            )
+
+    def test_snapshot_each_table_has_columns_key(self):
+        """Each table entry in current-schema.json must have a 'columns' key.
+
+        RED: file absent (SkipTest); or columns key missing.
+        """
+        tables = self.snapshot.get("tables", {})
+        for tbl_name, tbl_data in tables.items():
+            self.assertIn(
+                "columns", tbl_data,
+                f"Table '{tbl_name}' in current-schema.json must have a 'columns' key; "
+                f"keys found: {list(tbl_data.keys())!r}",
+            )
+
+    def test_snapshot_columns_are_dicts(self):
+        """Each column entry must be a dict (not a list or scalar).
+
+        RED: file absent (SkipTest); or wrong column representation.
+        """
+        tables = self.snapshot.get("tables", {})
+        for tbl_name, tbl_data in tables.items():
+            columns = tbl_data.get("columns", {})
+            self.assertIsInstance(
+                columns, dict,
+                f"Table '{tbl_name}'.columns must be a dict; got {type(columns)!r}",
+            )
+            for col_name, col_data in columns.items():
+                self.assertIsInstance(
+                    col_data, dict,
+                    f"Table '{tbl_name}' column '{col_name}' must be a dict; "
+                    f"got {type(col_data)!r}",
+                )
+
+    def test_snapshot_column_entries_have_required_keys(self):
+        """Each column dict must have the four required keys: type, notnull, pk, default.
+
+        RED: file absent (SkipTest); or missing keys.
+        """
+        required_keys = {"type", "notnull", "pk", "default"}
+        tables = self.snapshot.get("tables", {})
+        for tbl_name, tbl_data in tables.items():
+            for col_name, col_data in tbl_data.get("columns", {}).items():
+                for k in required_keys:
+                    self.assertIn(
+                        k, col_data,
+                        f"Column '{tbl_name}.{col_name}' must have key '{k}'; "
+                        f"keys found: {list(col_data.keys())!r}",
+                    )
+
+    def test_snapshot_column_type_is_string(self):
+        """The 'type' field in each column dict must be a string.
+
+        RED: file absent (SkipTest); or type field wrong shape.
+        """
+        tables = self.snapshot.get("tables", {})
+        for tbl_name, tbl_data in tables.items():
+            for col_name, col_data in tbl_data.get("columns", {}).items():
+                self.assertIsInstance(
+                    col_data.get("type"), str,
+                    f"Column '{tbl_name}.{col_name}'.type must be a string; "
+                    f"got {type(col_data.get('type'))!r}",
+                )
+
+    def test_snapshot_column_notnull_is_integer(self):
+        """The 'notnull' field in each column dict must be an int (0 or 1).
+
+        RED: file absent (SkipTest); or notnull field wrong shape.
+        """
+        tables = self.snapshot.get("tables", {})
+        for tbl_name, tbl_data in tables.items():
+            for col_name, col_data in tbl_data.get("columns", {}).items():
+                val = col_data.get("notnull")
+                self.assertIsInstance(
+                    val, int,
+                    f"Column '{tbl_name}.{col_name}'.notnull must be an int (0/1); "
+                    f"got {type(val)!r}: {val!r}",
+                )
+
+    def test_snapshot_column_pk_is_integer(self):
+        """The 'pk' field in each column dict must be an int (0 or 1).
+
+        RED: file absent (SkipTest); or pk field wrong shape.
+        """
+        tables = self.snapshot.get("tables", {})
+        for tbl_name, tbl_data in tables.items():
+            for col_name, col_data in tbl_data.get("columns", {}).items():
+                val = col_data.get("pk")
+                self.assertIsInstance(
+                    val, int,
+                    f"Column '{tbl_name}.{col_name}'.pk must be an int (0/1); "
+                    f"got {type(val)!r}: {val!r}",
+                )
+
+    def test_snapshot_column_default_is_string_or_null(self):
+        """The 'default' field in each column dict must be a string or null/None.
+
+        RED: file absent (SkipTest); or default field wrong type.
+        """
+        tables = self.snapshot.get("tables", {})
+        for tbl_name, tbl_data in tables.items():
+            for col_name, col_data in tbl_data.get("columns", {}).items():
+                val = col_data.get("default")
+                self.assertTrue(
+                    val is None or isinstance(val, str),
+                    f"Column '{tbl_name}.{col_name}'.default must be a string or null; "
+                    f"got {type(val)!r}: {val!r}",
+                )
+
+
+class MigrateSnapshotContentTest(unittest.TestCase):
+    """AC8 — current-schema.json content: the post-0001 snapshot must contain
+    the columns defined by sandesh_db._SCHEMA.
+
+    Spot-checks on specific columns that are load-bearing for --check:
+      - message.status must be PRESENT (this is pre-0002)
+      - address.address must be the primary key (pk=1)
+      - message.id must be pk=1 and NOT NULL
+      - message_recipient PK columns: message_id + recipient
+      - notifier.tombstone must be NOT NULL (notnull=1)
+
+    RED: current-schema.json absent (SkipTest); or columns missing/wrong.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import json
+        if not os.path.isfile(_CURRENT_SCHEMA_PATH):
+            raise unittest.SkipTest(
+                f"current-schema.json not found; skipping content tests."
+            )
+        with open(_CURRENT_SCHEMA_PATH) as fh:
+            cls.snapshot = json.load(fh)
+        cls.tables = cls.snapshot.get("tables", {})
+
+    def _col(self, table, column):
+        """Return the column dict for table.column, or None if missing."""
+        return self.tables.get(table, {}).get("columns", {}).get(column)
+
+    def test_message_status_column_present_pre_0002(self):
+        """message.status must be present in the snapshot (this is the pre-0002 snapshot).
+
+        RED: file absent (SkipTest); or status column missing from snapshot.
+        """
+        col = self._col("message", "status")
+        self.assertIsNotNone(
+            col,
+            "current-schema.json must include message.status (pre-0002 snapshot; "
+            "0002 drops it in a later cycle).\n"
+            f"message columns: {list(self.tables.get('message', {}).get('columns', {}).keys())!r}",
+        )
+
+    def test_message_status_is_not_null(self):
+        """message.status has notnull=1 (NOT NULL DEFAULT 'open' in _SCHEMA).
+
+        RED: file absent (SkipTest); or notnull wrong.
+        """
+        col = self._col("message", "status")
+        if col is None:
+            self.skipTest("message.status absent — covered by test_message_status_column_present_pre_0002")
+        self.assertEqual(
+            col.get("notnull"), 1,
+            f"message.status must have notnull=1; got {col!r}",
+        )
+
+    def test_address_address_is_primary_key(self):
+        """address.address must have pk=1 (TEXT PRIMARY KEY in _SCHEMA).
+
+        RED: file absent (SkipTest); or pk wrong.
+        """
+        col = self._col("address", "address")
+        self.assertIsNotNone(
+            col,
+            "current-schema.json must include address.address column; "
+            f"address columns: {list(self.tables.get('address', {}).get('columns', {}).keys())!r}",
+        )
+        self.assertEqual(
+            col.get("pk"), 1,
+            f"address.address must have pk=1 (PRIMARY KEY); got {col!r}",
+        )
+
+    def test_message_id_is_primary_key(self):
+        """message.id must have pk=1 (INTEGER PRIMARY KEY AUTOINCREMENT in _SCHEMA).
+
+        RED: file absent (SkipTest); or pk wrong.
+        """
+        col = self._col("message", "id")
+        self.assertIsNotNone(
+            col,
+            "current-schema.json must include message.id column.",
+        )
+        self.assertEqual(
+            col.get("pk"), 1,
+            f"message.id must have pk=1; got {col!r}",
+        )
+
+    def test_notifier_tombstone_is_not_null(self):
+        """notifier.tombstone must have notnull=1 (BOOLEAN NOT NULL DEFAULT FALSE in _SCHEMA).
+
+        RED: file absent (SkipTest); or notnull wrong.
+        """
+        col = self._col("notifier", "tombstone")
+        self.assertIsNotNone(
+            col,
+            "current-schema.json must include notifier.tombstone column.",
+        )
+        self.assertEqual(
+            col.get("notnull"), 1,
+            f"notifier.tombstone must have notnull=1; got {col!r}",
+        )
+
+    def test_message_recipient_has_message_id_column(self):
+        """message_recipient.message_id must be present in the snapshot.
+
+        RED: file absent (SkipTest); or column missing.
+        """
+        col = self._col("message_recipient", "message_id")
+        self.assertIsNotNone(
+            col,
+            "current-schema.json must include message_recipient.message_id; "
+            f"columns: {list(self.tables.get('message_recipient', {}).get('columns', {}).keys())!r}",
+        )
+
+    def test_message_recipient_has_recipient_column(self):
+        """message_recipient.recipient must be present in the snapshot.
+
+        RED: file absent (SkipTest); or column missing.
+        """
+        col = self._col("message_recipient", "recipient")
+        self.assertIsNotNone(
+            col,
+            "current-schema.json must include message_recipient.recipient; "
+            f"columns: {list(self.tables.get('message_recipient', {}).get('columns', {}).keys())!r}",
+        )
+
+    def test_exactly_four_tables_in_snapshot(self):
+        """The snapshot must describe exactly 4 tables (pre-0002).
+
+        RED: file absent (SkipTest); or wrong table count.
+        """
+        self.assertEqual(
+            len(self.tables), 4,
+            f"current-schema.json must have exactly 4 tables; "
+            f"found {len(self.tables)}: {list(self.tables.keys())!r}",
+        )
+
+
+class MigrateMetaSchemaValidatesSnapshotTest(unittest.TestCase):
+    """AC8 — the snapshot validates against the meta-schema.
+
+    Loads both files and calls jsonschema.validate(instance=snapshot, schema=meta).
+    If it raises ValidationError, the test fails.
+
+    This is the core AC8 assertion. The companion tests above verify file
+    existence; this test verifies the meta-schema is internally consistent and
+    current-schema.json satisfies it.
+
+    RED: either file absent → FileNotFoundError (or SkipTest from setUpClass);
+         or meta-schema doesn't accept the snapshot → jsonschema.ValidationError.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import json
+        missing = []
+        if not os.path.isfile(_CURRENT_SCHEMA_PATH):
+            missing.append("current-schema.json")
+        if not os.path.isfile(_META_SCHEMA_PATH):
+            missing.append("schema.meta.json")
+        if missing:
+            raise unittest.SkipTest(
+                f"Skipping meta-schema validation — file(s) absent: {missing!r}"
+            )
+        with open(_CURRENT_SCHEMA_PATH) as fh:
+            cls.snapshot = json.load(fh)
+        with open(_META_SCHEMA_PATH) as fh:
+            cls.meta_schema = json.load(fh)
+
+    def test_snapshot_validates_against_meta_schema(self):
+        """jsonschema.validate(current-schema.json, schema.meta.json) must not raise.
+
+        Uses jsonschema from the venv's [migrate] extra.
+
+        RED: either file absent (SkipTest); or the snapshot doesn't satisfy the
+        meta-schema (jsonschema.ValidationError).
+        """
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest(
+                "jsonschema not installed — run under the [migrate] venv interpreter"
+            )
+        try:
+            jsonschema.validate(instance=self.snapshot, schema=self.meta_schema)
+        except jsonschema.ValidationError as exc:
+            self.fail(
+                f"current-schema.json does NOT validate against schema.meta.json:\n"
+                f"  ValidationError: {exc.message}\n"
+                f"  Path: {list(exc.absolute_path)}\n"
+                f"  Schema path: {list(exc.absolute_schema_path)}"
+            )
+        except jsonschema.SchemaError as exc:
+            self.fail(
+                f"schema.meta.json itself is not a valid JSON Schema:\n"
+                f"  SchemaError: {exc.message}"
+            )
+
+    def test_meta_schema_rejects_empty_object(self):
+        """The meta-schema must reject an empty {} (not a valid snapshot).
+
+        This guards that the meta-schema is actually constraining, not trivially
+        accepting everything.
+
+        RED: file absent (SkipTest); or meta-schema is too permissive.
+        """
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest("jsonschema not installed")
+        with self.assertRaises(
+            jsonschema.ValidationError,
+            msg="schema.meta.json must reject {} (an empty object is not a valid snapshot)",
+        ):
+            jsonschema.validate(instance={}, schema=self.meta_schema)
+
+    def test_meta_schema_rejects_snapshot_without_tables_key(self):
+        """The meta-schema must reject a snapshot that lacks the 'tables' key.
+
+        RED: file absent (SkipTest); or meta-schema too permissive.
+        """
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest("jsonschema not installed")
+        with self.assertRaises(
+            jsonschema.ValidationError,
+            msg="schema.meta.json must reject a snapshot with no 'tables' key",
+        ):
+            jsonschema.validate(
+                instance={"not_tables": {}},
+                schema=self.meta_schema,
+            )
+
+    def test_meta_schema_rejects_column_with_missing_type(self):
+        """The meta-schema must reject a column entry that lacks the 'type' field.
+
+        RED: file absent (SkipTest); or meta-schema too permissive.
+        """
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest("jsonschema not installed")
+        bad_snapshot = {
+            "tables": {
+                "some_table": {
+                    "columns": {
+                        "some_col": {
+                            # 'type' deliberately absent
+                            "notnull": 0,
+                            "pk": 0,
+                            "default": None,
+                        }
+                    }
+                }
+            }
+        }
+        with self.assertRaises(
+            jsonschema.ValidationError,
+            msg="schema.meta.json must reject a column missing the 'type' field",
+        ):
+            jsonschema.validate(instance=bad_snapshot, schema=self.meta_schema)
+
+
+# ---------------------------------------------------------------------------
+# AC7 — `migrate --check` CLI: pending=non-zero, clean=zero, drift=warning+zero
+# ---------------------------------------------------------------------------
+
+class MigrateCheckCliInterfaceTest(unittest.TestCase):
+    """Structural gate: `--check` must be a recognised argument in the migrate
+    subparser and `migrate.check(project_id)` must be a callable on the module.
+
+    RED: `--check` is not in the migrate subparser → argparse exits 2 with an
+    'unrecognised arguments: --check' error.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c4_check_iface_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+        # Set up a minimal project store so --check has something to work with
+        data_home = os.path.join(self._tmpdir, "dh_iface")
+        _setup_project("CheckIface", data_home)
+        self._data_home = data_home
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def test_check_flag_recognised_by_parser(self):
+        """--check must not cause an 'unrecognised arguments' argparse error (exit 2).
+
+        RED: --check is not wired into the migrate subparser → argparse exits 2.
+        """
+        r = _run_cli(["migrate", "--check", "--project", "CheckIface"], self._data_home)
+        self.assertNotEqual(
+            r.returncode, 2,
+            f"migrate --check must not exit 2 (argparse unrecognised-argument error).\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}\n"
+            "GREEN must add --check to the migrate subparser.",
+        )
+
+    def test_check_callable_exists_on_module(self):
+        """sandesh.migrate.check must be a callable (takes project_id).
+
+        RED: attribute absent on the module.
+        """
+        from sandesh import migrate
+        self.assertTrue(
+            callable(getattr(migrate, "check", None)),
+            "sandesh.migrate.check must be a callable; attribute is absent or not callable.\n"
+            "GREEN must add a check(project_id) function to migrate.py.",
+        )
+
+
+class MigrateCheckPendingExitsNonZeroTest(unittest.TestCase):
+    """AC7 — pending store: `migrate --check --project X` exits NON-ZERO and
+    names the pending migration(s) in its output.
+
+    A 'pending' store is one where yoyo has not yet been applied — e.g. a store
+    provisioned by sandesh_db.setup() (four tables, no _yoyo_migration).
+
+    RED: --check not recognised → argparse exits 2; OR --check not dispatched
+    correctly → exits 0 (wrong).
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c4_pending_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def _make_unmigrated_store(self, project_id, data_home):
+        """Provision a store via sandesh_db.setup() — tables exist, no _yoyo_migration."""
+        _setup_project(project_id, data_home)
+
+    def test_check_on_pending_store_exits_nonzero(self):
+        """--check on a store with pending migrations must exit NON-ZERO.
+
+        The store is provisioned by sandesh_db.setup() (tables present, 0001-baseline
+        NOT recorded in _yoyo_migration) → 0001-baseline is pending.
+
+        RED: --check not wired → argparse exits 2 (also non-zero, but wrong reason);
+             OR if wired but incorrectly → might exit 0.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_pending_exit")
+        self._make_unmigrated_store("CheckPendingExit", data_home)
+        r = _run_cli(["migrate", "--check", "--project", "CheckPendingExit"], data_home)
+        self.assertNotEqual(
+            r.returncode, 0,
+            f"migrate --check must exit NON-ZERO when there are pending migrations; "
+            f"got returncode={r.returncode}.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_check_on_pending_store_output_names_pending_migration(self):
+        """--check on a pending store must name the pending migration(s) in its output.
+
+        0001-baseline is the pending migration in this cycle.
+
+        RED: --check not wired → argparse error output (no migration names);
+             OR wired but output doesn't name the migration.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_pending_output")
+        self._make_unmigrated_store("CheckPendingOutput", data_home)
+        r = _run_cli(["migrate", "--check", "--project", "CheckPendingOutput"], data_home)
+        combined = r.stdout + r.stderr
+        self.assertIn(
+            "0001-baseline", combined,
+            f"--check output must name the pending migration '0001-baseline'; "
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_check_on_pending_store_is_nondestructive(self):
+        """--check must be read-only: the store must still be un-migrated after --check.
+
+        RED: --check not wired → store state unchanged anyway (argparse exits early).
+        This test is the GREEN correctness guard.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_pending_ro")
+        self._make_unmigrated_store("CheckPendingRO", data_home)
+        # Run --check
+        _run_cli(["migrate", "--check", "--project", "CheckPendingRO"], data_home)
+        # The store must still be un-migrated (0001-baseline still pending)
+        applied, pending = _status_api("CheckPendingRO", data_home)
+        self.assertNotIn(
+            "0001-baseline", applied,
+            f"--check must not apply migrations; 0001-baseline must remain NOT applied; "
+            f"got applied={applied!r}",
+        )
+        self.assertIn(
+            "0001-baseline", pending,
+            f"After --check (read-only), 0001-baseline must still be pending; "
+            f"got pending={pending!r}",
+        )
+
+    def test_check_on_pending_store_project_before_subcommand(self):
+        """--project before `migrate --check` (SUPPRESS pattern) must also exit non-zero.
+
+        sandesh --project X migrate --check → non-zero (pending).
+
+        RED: --check not wired → argparse exits 2.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_pending_pos")
+        self._make_unmigrated_store("CheckPendingPos", data_home)
+        # --project before migrate
+        r = _run_cli(["--project", "CheckPendingPos", "migrate", "--check"], data_home)
+        self.assertNotEqual(
+            r.returncode, 0,
+            f"--project before subcommand: migrate --check must exit non-zero on pending store; "
+            f"got returncode={r.returncode}.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+
+class MigrateCheckCleanExitsZeroTest(unittest.TestCase):
+    """AC7 — fully-migrated store whose live shape MATCHES current-schema.json:
+    `migrate --check --project X` must exit ZERO (no pending, no drift).
+
+    RED: --check not wired → argparse exits 2 (non-zero for wrong reason);
+         OR if wired: might not exit 0 on a clean store.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c4_clean_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def _make_fully_migrated_store(self, project_id, data_home):
+        """Provision via sandesh_db.setup() then apply migrations → fully migrated."""
+        _setup_project(project_id, data_home)
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import migrate
+            migrate.apply(project_id)
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+    def test_check_on_fully_migrated_store_exits_zero(self):
+        """--check on a fully-migrated store whose live shape matches the snapshot
+        must exit ZERO.
+
+        If current-schema.json is absent, --check may exit non-zero for the right
+        reason (can't load snapshot) — but the test itself will fail because we
+        assert exit 0. This is intentional: if the snapshot doesn't exist, GREEN
+        is not complete.
+
+        RED: --check not wired → argparse exits 2 (non-zero).
+        """
+        data_home = os.path.join(self._tmpdir, "dh_clean_exit")
+        self._make_fully_migrated_store("CheckCleanExit", data_home)
+        r = _run_cli(["migrate", "--check", "--project", "CheckCleanExit"], data_home)
+        self.assertEqual(
+            r.returncode, 0,
+            f"migrate --check must exit 0 on a fully-migrated store with no drift; "
+            f"got returncode={r.returncode}.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_check_on_fully_migrated_store_no_pending_in_output(self):
+        """--check output must NOT indicate any pending migrations on a clean store.
+
+        RED: --check not wired → no meaningful output.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_clean_output")
+        self._make_fully_migrated_store("CheckCleanOutput", data_home)
+        r = _run_cli(["migrate", "--check", "--project", "CheckCleanOutput"], data_home)
+        combined = r.stdout + r.stderr
+        # Must not warn about pending migrations
+        self.assertNotIn(
+            "pending", combined.lower(),
+            f"--check output must not mention 'pending' on a fully-migrated clean store; "
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_check_on_fully_migrated_store_no_drift_warning_in_output(self):
+        """--check output must NOT contain a drift warning on a shape-matching store.
+
+        RED: --check not wired → no output → this passes vacuously, but the
+        exit-code test above is the real RED gate.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_clean_nodrift")
+        self._make_fully_migrated_store("CheckCleanNoDrift", data_home)
+        r = _run_cli(["migrate", "--check", "--project", "CheckCleanNoDrift"], data_home)
+        combined = r.stdout + r.stderr
+        self.assertNotIn(
+            "drift", combined.lower(),
+            f"--check output must not mention 'drift' on a clean matching store; "
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_check_is_read_only_on_clean_store(self):
+        """--check must not change the migration state of a fully-migrated store.
+
+        RED: --check not wired → state unchanged (vacuously OK), exit-code test fails.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_clean_ro")
+        self._make_fully_migrated_store("CheckCleanRO", data_home)
+        # State before
+        applied_before, pending_before = _status_api("CheckCleanRO", data_home)
+        # Run --check
+        _run_cli(["migrate", "--check", "--project", "CheckCleanRO"], data_home)
+        # State after — must be identical
+        applied_after, pending_after = _status_api("CheckCleanRO", data_home)
+        self.assertEqual(
+            applied_before, applied_after,
+            f"--check must not change applied set; before={applied_before!r}, after={applied_after!r}",
+        )
+        self.assertEqual(
+            pending_before, pending_after,
+            f"--check must not change pending set; before={pending_before!r}, after={pending_after!r}",
+        )
+
+
+class MigrateCheckDriftWarningTest(unittest.TestCase):
+    """AC7 — drift: when the live DB shape differs from current-schema.json,
+    `migrate --check` must print a WARNING naming the drift but exit ZERO.
+
+    This is the user-decided strictness from the gap-analysis:
+      pending = error (non-zero); drift = warning (non-fatal, exit zero).
+
+    Drift injection: after fully migrating a store, add an extra column to
+    `message` via raw SQL (ALTER TABLE message ADD COLUMN extra_col TEXT).
+    The live shape now differs from the snapshot → drift.
+
+    RED: --check not wired → argparse exits 2; OR wired but exits non-zero on
+    drift (wrong strictness) / doesn't print a warning.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c4_drift_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def _db_path(self, project_id, data_home):
+        return os.path.join(
+            data_home, "sandesh", "projects", project_id, "sandesh.db"
+        )
+
+    def _make_drifted_store(self, project_id, data_home):
+        """Fully migrate a store, then add an extra column to introduce drift."""
+        _setup_project(project_id, data_home)
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import migrate
+            migrate.apply(project_id)
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+        # Inject drift: add an extra column that is NOT in current-schema.json
+        import sqlite3
+        db_path = self._db_path(project_id, data_home)
+        con = sqlite3.connect(db_path)
+        con.execute("ALTER TABLE message ADD COLUMN extra_drift_col TEXT")
+        con.commit()
+        con.close()
+        return db_path
+
+    def test_check_on_drifted_store_exits_zero(self):
+        """--check on a drifted store must exit ZERO (drift is a warning, not an error).
+
+        User-decided strictness: drift = warning (exit 0). Only pending = error.
+
+        RED: --check not wired → argparse exits 2 (non-zero);
+             OR wired but treats drift as error → exits non-zero (wrong).
+        """
+        data_home = os.path.join(self._tmpdir, "dh_drift_exit")
+        self._make_drifted_store("CheckDriftExit", data_home)
+        r = _run_cli(["migrate", "--check", "--project", "CheckDriftExit"], data_home)
+        self.assertEqual(
+            r.returncode, 0,
+            f"migrate --check must exit 0 when there is drift (drift = warning, not error); "
+            f"got returncode={r.returncode}.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}\n"
+            "Per the gap-analysis decision: pending=error (non-zero), drift=warning (zero).",
+        )
+
+    def test_check_on_drifted_store_prints_drift_warning(self):
+        """--check on a drifted store must print a WARNING message naming the drift.
+
+        The output must contain the word 'drift' or 'warning' (case-insensitive)
+        AND must name the drifted table ('message') or the extra column
+        ('extra_drift_col').
+
+        RED: --check not wired → no output; OR wired but no warning emitted.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_drift_warn")
+        self._make_drifted_store("CheckDriftWarn", data_home)
+        r = _run_cli(["migrate", "--check", "--project", "CheckDriftWarn"], data_home)
+        combined = r.stdout + r.stderr
+        has_warning_keyword = (
+            "drift" in combined.lower()
+            or "warning" in combined.lower()
+            or "warn" in combined.lower()
+        )
+        self.assertTrue(
+            has_warning_keyword,
+            f"--check must print a drift warning (containing 'drift' or 'warning'); "
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_check_on_drifted_store_names_the_drift(self):
+        """--check drift warning must name the drifting table or column.
+
+        The injected drift is 'extra_drift_col' on table 'message'.
+        The output must name at least one of: 'message', 'extra_drift_col'.
+
+        RED: --check not wired → no output; OR wired but drift details absent.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_drift_name")
+        self._make_drifted_store("CheckDriftName", data_home)
+        r = _run_cli(["migrate", "--check", "--project", "CheckDriftName"], data_home)
+        combined = r.stdout + r.stderr
+        names_drift = (
+            "extra_drift_col" in combined
+            or "message" in combined
+        )
+        self.assertTrue(
+            names_drift,
+            f"--check drift output must name the drifted table/column "
+            f"(expected 'extra_drift_col' or 'message'); "
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_check_on_drifted_store_is_read_only(self):
+        """--check on a drifted store must not alter the migration state.
+
+        The extra column introduced as drift must still be there after --check
+        (no ALTER TABLE / DROP to 'fix' the drift — --check is read-only).
+
+        RED: --check not wired → state unchanged (vacuously); exit-code test is real RED.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_drift_ro")
+        db_path = self._make_drifted_store("CheckDriftRO", data_home)
+        # --check must not modify the DB
+        _run_cli(["migrate", "--check", "--project", "CheckDriftRO"], data_home)
+        # The extra column must still exist (--check is read-only)
+        import sqlite3
+        con = sqlite3.connect(db_path)
+        cols = [row[1] for row in con.execute("PRAGMA table_info(message)").fetchall()]
+        con.close()
+        self.assertIn(
+            "extra_drift_col", cols,
+            f"--check must be read-only; 'extra_drift_col' must still exist after --check; "
+            f"found columns: {cols!r}",
+        )
+
+    def test_check_drift_does_not_affect_pending_check(self):
+        """Drift does not make --check exit non-zero; only pending does.
+
+        Contrast: a drifted + fully-migrated store → exit 0 (drift is warning).
+        A pending store → exit non-zero.
+
+        This test asserts the combination: fully-migrated + drifted → still exit 0.
+
+        RED: --check not wired → argparse exits 2.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_drift_combo")
+        self._make_drifted_store("CheckDriftCombo", data_home)
+        r = _run_cli(["migrate", "--check", "--project", "CheckDriftCombo"], data_home)
+        self.assertEqual(
+            r.returncode, 0,
+            f"Drifted + fully-migrated store: --check must exit 0 (drift is not an error); "
+            f"got returncode={r.returncode}.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
