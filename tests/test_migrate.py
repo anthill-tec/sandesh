@@ -1847,5 +1847,498 @@ class MigrateCliProjectPositionTest(unittest.TestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# AC10 (addendum) — --all fail-fast + transactional per-migration rollback
+#
+# These tests were added in CR-SAN-017 Cycle 3 RED+ (after the failure policy
+# was decided: transactional + fail-fast, per §S4 + AC10 updated 2026-06-09).
+#
+# Testability hook required by GREEN:
+#   The transactional rollback test needs to point the engine at a CUSTOM
+#   migrations dir (a temp dir containing a deliberately-failing migration).
+#   Without this hook the only way to inject a bad migration is to mutate the
+#   packaged sandesh/migrations/ dir — unacceptable in tests.
+#
+#   Required hook: `SANDESH_MIGRATIONS_DIR` environment variable.
+#   When set, `migrate.migrations_dir()` returns its value instead of the
+#   packaged dir, AND `apply(project_id)` / `status(project_id)` use it.
+#   This follows the existing XDG_DATA_HOME / SANDESH_POLL_SECONDS env-override
+#   pattern in the codebase.
+#
+#   Alternative: add an optional `migrations_dir` keyword argument to
+#   `migrate.apply()` and `migrate.status()`.  Either form is acceptable;
+#   the tests below use `SANDESH_MIGRATIONS_DIR` since it works through the
+#   CLI subprocess path without modifying the Python API surface.
+#
+# Ordering assumption for fail-fast:
+#   `sandesh_db.list_projects()` returns sorted project ids.  Tests that
+#   depend on processing order use project ids where the failing store
+#   sorts BEFORE the healthy store alphabetically (e.g. 'FailAlpha' before
+#   'FailZeta') — so the implementation's natural iteration order triggers
+#   fail-fast before touching the healthy store.
+# ---------------------------------------------------------------------------
+
+
+def _make_temp_migrations_dir(base_dir, migrations_sql):
+    """Write a temporary migrations dir containing exactly the supplied SQL files.
+
+    `migrations_sql` is a dict of {filename: sql_text}.
+    Returns the path to the temp migrations dir.
+    """
+    import os
+    mdir = os.path.join(base_dir, "migrations")
+    os.makedirs(mdir, exist_ok=True)
+    for fname, sql in migrations_sql.items():
+        with open(os.path.join(mdir, fname), "w") as fh:
+            fh.write(sql)
+    return mdir
+
+
+# ---------------------------------------------------------------------------
+# 1. Fail-fast on --all
+# ---------------------------------------------------------------------------
+
+class MigrateCliAllFailFastTest(unittest.TestCase):
+    """AC10 (fail-fast): when one store errors during --all, the whole run
+    exits non-zero and stores ordered AFTER the failing one are left un-migrated.
+
+    Failure injection: after setup, replace the failing store's sandesh.db
+    with a garbage (non-SQLite) file so yoyo / sqlite3 raises when it tries
+    to open it. The failing store ('FailAlpha') sorts before the healthy one
+    ('FailZeta') — list_projects() returns sorted order — so the implementation
+    processes FailAlpha first, hits the error, and must abort before touching
+    FailZeta.
+
+    RED: --all is not yet implemented (cmd_migrate() returns 0 without doing
+    anything), so the fail-fast assertions fail:
+      - the non-zero exit assertion fails (cmd_migrate returns 0)
+      - the un-migrated assertion fails OR errors because --all isn't dispatched
+    """
+
+    _FAIL_PROJ = "FailAlpha"   # sorts first — will error
+    _SAFE_PROJ = "FailZeta"    # sorts last — must be untouched after fail-fast
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c3_failfast_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def _data_home(self):
+        return os.path.join(self._tmpdir, "dh_failfast")
+
+    def _db_path(self, project_id, data_home):
+        return os.path.join(
+            data_home, "sandesh", "projects", project_id, "sandesh.db"
+        )
+
+    def _prime_with_failure(self):
+        """Set up two stores; corrupt FailAlpha's DB to force an error on apply."""
+        data_home = self._data_home()
+        # 1. Setup both stores (creates the directory layout and sandesh.db)
+        _setup_project(self._FAIL_PROJ, data_home)
+        _setup_project(self._SAFE_PROJ, data_home)
+
+        # 2. Verify ordering — list_projects must return FailAlpha before FailZeta
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import sandesh_db
+            projects = sandesh_db.list_projects()
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        fail_idx = projects.index(self._FAIL_PROJ) if self._FAIL_PROJ in projects else -1
+        safe_idx = projects.index(self._SAFE_PROJ) if self._SAFE_PROJ in projects else -1
+        self.assertIn(self._FAIL_PROJ, projects,
+                      f"list_projects() did not include {self._FAIL_PROJ!r}: {projects!r}")
+        self.assertIn(self._SAFE_PROJ, projects,
+                      f"list_projects() did not include {self._SAFE_PROJ!r}: {projects!r}")
+        self.assertLess(
+            fail_idx, safe_idx,
+            f"list_projects() must return {self._FAIL_PROJ!r} before {self._SAFE_PROJ!r} "
+            f"(alphabetical); got order: {projects!r}",
+        )
+
+        # 3. Corrupt FailAlpha's DB (overwrite with garbage so sqlite3.connect raises)
+        fail_db = self._db_path(self._FAIL_PROJ, data_home)
+        self.assertTrue(os.path.isfile(fail_db),
+                        f"Expected {fail_db!r} to exist after setup")
+        with open(fail_db, "wb") as fh:
+            fh.write(b"THIS IS NOT A SQLITE DATABASE -- garbage bytes to force an error")
+
+        return data_home
+
+    def test_all_exits_nonzero_when_store_errors(self):
+        """--all must exit non-zero when any store fails to migrate.
+
+        RED: cmd_migrate() returns 0 without dispatching --all, so no error
+        is detected and the exit code is 0 — assertion fails.
+        """
+        data_home = self._prime_with_failure()
+        r = _run_cli(["migrate", "--all"], data_home)
+        self.assertNotEqual(
+            r.returncode, 0,
+            "migrate --all must exit non-zero when a store errors during apply; "
+            f"got returncode=0.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_all_failfast_leaves_subsequent_store_unmigrated(self):
+        """After --all aborts on FailAlpha, FailZeta must be left un-migrated
+        (0001-baseline pending, not applied).
+
+        RED: cmd_migrate() returns 0 without dispatching --all; FailZeta's
+        store is never touched by the CLI path, but the test independently
+        checks FailZeta's state via the Python API and asserts it is un-migrated.
+        Since --all is not dispatched at all, FailZeta stays un-migrated
+        BUT the exit-code assertion in the sibling test already catches the real
+        RED — this test additionally verifies the un-migrated invariant.
+        """
+        data_home = self._prime_with_failure()
+        _run_cli(["migrate", "--all"], data_home)  # expected non-zero, but we check state
+
+        # FailZeta was never migrated (either because --all aborted fail-fast,
+        # or because --all was never dispatched). Either way it must be pending.
+        applied, pending = _status_api(self._SAFE_PROJ, data_home)
+        self.assertNotIn(
+            "0001-baseline", applied,
+            f"{self._SAFE_PROJ}: 0001-baseline must NOT be applied after a fail-fast "
+            f"--all run (store after the failing one must be untouched); "
+            f"got applied={applied!r}",
+        )
+        self.assertIn(
+            "0001-baseline", pending,
+            f"{self._SAFE_PROJ}: 0001-baseline must be PENDING after fail-fast --all; "
+            f"got pending={pending!r}",
+        )
+
+    def test_all_failfast_mentions_failing_project_in_output(self):
+        """--all error output must mention the failing project id so the user
+        can diagnose which store failed.
+
+        RED: cmd_migrate() returns 0 silently; no output mentions FailAlpha.
+        """
+        data_home = self._prime_with_failure()
+        r = _run_cli(["migrate", "--all"], data_home)
+        combined = r.stdout + r.stderr
+        self.assertIn(
+            self._FAIL_PROJ, combined,
+            f"--all error output must mention the failing project ('{self._FAIL_PROJ}'); "
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_all_failfast_corrupt_db_is_not_silently_skipped(self):
+        """A store with a corrupt (non-SQLite) DB must cause --all to abort,
+        not silently continue as if nothing happened.
+
+        Verifies: exit non-zero AND FailZeta un-migrated in a single assertion
+        pair (belt-and-suspenders for the central fail-fast invariant).
+
+        RED: --all not dispatched → exit 0 (first assertion fails).
+        """
+        data_home = self._prime_with_failure()
+        r = _run_cli(["migrate", "--all"], data_home)
+
+        # The run must have failed
+        self.assertNotEqual(
+            r.returncode, 0,
+            "migrate --all must not silently succeed when a store DB is corrupt.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+        # The store that came after the failure must still be un-migrated
+        applied, pending = _status_api(self._SAFE_PROJ, data_home)
+        self.assertEqual(
+            len(applied), 0,
+            f"After fail-fast, {self._SAFE_PROJ} must have 0 applied migrations "
+            f"(it was skipped due to fail-fast); got applied={applied!r}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# 2. Transactional per-migration rollback (partial-failure leaves no artifact)
+# ---------------------------------------------------------------------------
+
+class MigrateTransactionalRollbackTest(unittest.TestCase):
+    """AC10 (transactional): a migration that fails mid-way must leave the store
+    at its PRIOR applied state — no partial tables or schema changes.
+
+    Failure injection: a custom migrations dir (controlled via
+    SANDESH_MIGRATIONS_DIR env var — see module docstring above) containing:
+      - 0001-baseline.sql: the real baseline (so the store can be provisioned)
+      - 0002-partial-fail.sql: a migration with a VALID first statement
+        (CREATE TABLE good_tbl ...) followed by an INVALID second statement
+        (deliberate SQL syntax error), all in a single migration file that
+        yoyo treats atomically.
+
+    After apply() fails on 0002, the store must NOT contain 'good_tbl' —
+    the whole migration rolled back, store left at the 0001 state.
+
+    Testability hook: tests use SANDESH_MIGRATIONS_DIR to point both the
+    CLI and the Python API at the temp migrations dir.  GREEN must honour
+    this env var in migrate.migrations_dir() (and therefore in apply/status).
+
+    RED reasons:
+      1. SANDESH_MIGRATIONS_DIR is not yet honoured → migrations_dir() returns
+         the packaged dir → 0002-partial-fail is never seen → the test that
+         asserts apply() raises / exits non-zero fails (it applies cleanly
+         with only 0001 visible).
+      2. Even if the env var were honoured, the transactional rollback is not
+         yet tested — this is the first test covering it.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c3_txn_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+        self._orig_mdir = os.environ.get("SANDESH_MIGRATIONS_DIR")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+        if self._orig_mdir is None:
+            os.environ.pop("SANDESH_MIGRATIONS_DIR", None)
+        else:
+            os.environ["SANDESH_MIGRATIONS_DIR"] = self._orig_mdir
+
+    def _build_custom_migrations_dir(self):
+        """Return a temp migrations dir with:
+          - 0001-baseline.sql (copy of the real baseline SQL — needed to
+            provision the store via the custom dir)
+          - 0002-partial-fail.sql (valid CREATE TABLE followed by deliberate
+            syntax error — yoyo must roll back the whole file atomically)
+        """
+        import shutil
+
+        mdir = os.path.join(self._tmpdir, "custom_migrations")
+        os.makedirs(mdir, exist_ok=True)
+
+        # Copy the real 0001-baseline so the store can be bootstrapped.
+        real_baseline = os.path.join(
+            _REPO_ROOT, "sandesh", "migrations", "0001-baseline.sql"
+        )
+        shutil.copy2(real_baseline, os.path.join(mdir, "0001-baseline.sql"))
+
+        # 0002-partial-fail: valid DDL followed by an invalid statement.
+        # SQLite wraps this in a transaction via yoyo — the whole migration
+        # must roll back, leaving 'good_tbl' absent.
+        partial_fail_sql = (
+            "-- 0002-partial-fail — deliberately fails mid-migration to test rollback\n"
+            "CREATE TABLE good_tbl (id INTEGER PRIMARY KEY, val TEXT);\n"
+            "THIS IS NOT VALID SQL AND SHOULD CAUSE A PARSE/EXEC ERROR;\n"
+        )
+        with open(os.path.join(mdir, "0002-partial-fail.sql"), "w") as fh:
+            fh.write(partial_fail_sql)
+
+        return mdir
+
+    def _db_path_for(self, project_id, data_home):
+        return os.path.join(
+            data_home, "sandesh", "projects", project_id, "sandesh.db"
+        )
+
+    def _table_exists(self, db_path, table_name):
+        import sqlite3
+        con = sqlite3.connect(db_path)
+        rows = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchall()
+        con.close()
+        return len(rows) > 0
+
+    def test_sandesh_migrations_dir_env_is_honoured(self):
+        """SANDESH_MIGRATIONS_DIR must be honoured by migrate.migrations_dir().
+
+        This is the testability-hook gate: if migrations_dir() ignores the env
+        var, all downstream transactional tests are meaningless (they'd use the
+        real packaged migrations, not the injected failing one).
+
+        RED: migrations_dir() always returns the packaged dir regardless of
+        SANDESH_MIGRATIONS_DIR → the assertion that the returned path matches
+        the env var value fails.
+        """
+        custom_dir = os.path.join(self._tmpdir, "probe_dir")
+        os.makedirs(custom_dir, exist_ok=True)
+
+        os.environ["SANDESH_MIGRATIONS_DIR"] = custom_dir
+        from sandesh import migrate
+        returned = migrate.migrations_dir()
+        self.assertEqual(
+            returned, custom_dir,
+            f"migrations_dir() must return SANDESH_MIGRATIONS_DIR={custom_dir!r} "
+            f"when the env var is set; got {returned!r}.\n"
+            "GREEN must honour SANDESH_MIGRATIONS_DIR in migrate.migrations_dir().",
+        )
+
+    def test_partial_fail_migration_exits_nonzero(self):
+        """Applying a migration that fails mid-way must exit non-zero.
+
+        Uses SANDESH_MIGRATIONS_DIR to point the CLI at the custom migrations
+        dir (0001-baseline + 0002-partial-fail).  After 0001 is applied, the
+        CLI attempts 0002 which fails → must exit non-zero.
+
+        RED: SANDESH_MIGRATIONS_DIR not honoured → CLI uses packaged dir →
+        only 0001 is visible → apply succeeds (exit 0) → assertion fails.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_txn_nonzero")
+        _setup_project("TxnNonZero", data_home)
+
+        custom_mdir = self._build_custom_migrations_dir()
+
+        # Prime 0001 first (via real baseline to avoid applying through the custom dir
+        # where 0001 also exists — apply 0001 then run again to attempt 0002)
+        r_first = _run_cli(
+            ["migrate", "--project", "TxnNonZero"],
+            data_home,
+            extra_env={"SANDESH_MIGRATIONS_DIR": custom_mdir},
+        )
+        # The first run applies 0001 (succeeds) then tries 0002 (fails)
+        # OR just fails on 0002 immediately. Either way a non-zero exit is expected.
+        # Note: if SANDESH_MIGRATIONS_DIR is not honoured, only 0001 runs → exit 0.
+        self.assertNotEqual(
+            r_first.returncode, 0,
+            f"migrate with a partial-fail migration must exit non-zero; "
+            f"got returncode={r_first.returncode}.\n"
+            f"stdout: {r_first.stdout!r}\nstderr: {r_first.stderr!r}\n"
+            "If SANDESH_MIGRATIONS_DIR is not being honoured, GREEN must implement it.",
+        )
+
+    def test_partial_fail_migration_good_tbl_is_absent(self):
+        """After a failed 0002 apply, 'good_tbl' must NOT exist in the store.
+
+        Rationale: if yoyo's per-migration transaction rolls back correctly,
+        the CREATE TABLE good_tbl statement (which precedes the failing statement
+        within the same migration file) must be undone.  The store is left at
+        its prior state (0001 applied only, no good_tbl).
+
+        RED: SANDESH_MIGRATIONS_DIR not honoured → only 0001 applies → good_tbl
+        is never created anyway, but for the wrong reason.  The companion test
+        (test_partial_fail_migration_exits_nonzero) is the real RED gate.
+        This test adds the explicit absence assertion for the GREEN correctness check.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_txn_absent")
+        _setup_project("TxnAbsent", data_home)
+
+        custom_mdir = self._build_custom_migrations_dir()
+        db_path = self._db_path_for("TxnAbsent", data_home)
+
+        # Attempt apply with the custom (failing) migrations dir
+        _run_cli(
+            ["migrate", "--project", "TxnAbsent"],
+            data_home,
+            extra_env={"SANDESH_MIGRATIONS_DIR": custom_mdir},
+        )
+
+        # good_tbl must NOT exist — the migration rolled back
+        self.assertFalse(
+            self._table_exists(db_path, "good_tbl"),
+            f"'good_tbl' must NOT exist after a rolled-back migration; "
+            f"if it does, the migration was only partially applied (not transactional).\n"
+            f"DB path: {db_path!r}",
+        )
+
+    def test_partial_fail_migration_store_left_at_prior_state(self):
+        """After 0002 fails and rolls back, the store must still show 0001 applied
+        and 0002 as pending (i.e. not partially-applied and not corrupted).
+
+        This tests the 'store left at prior applied state' invariant from AC10.
+
+        RED: SANDESH_MIGRATIONS_DIR not honoured → only 0001 is visible → status
+        shows 0001 applied + 0 pending (no 0002) → the assertIn('0002-partial-fail', pending)
+        assertion fails, correctly flagging that the env var is not honoured.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_txn_prior")
+        _setup_project("TxnPrior", data_home)
+
+        custom_mdir = self._build_custom_migrations_dir()
+
+        # Attempt apply; expect it to fail on 0002
+        _run_cli(
+            ["migrate", "--project", "TxnPrior"],
+            data_home,
+            extra_env={"SANDESH_MIGRATIONS_DIR": custom_mdir},
+        )
+
+        # Check state via Python API with the same custom dir override
+        orig_mdir = os.environ.get("SANDESH_MIGRATIONS_DIR")
+        orig_xdg = os.environ.get("XDG_DATA_HOME")
+        os.environ["SANDESH_MIGRATIONS_DIR"] = custom_mdir
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import migrate
+            applied, pending = migrate.status("TxnPrior")
+        finally:
+            if orig_mdir is None:
+                os.environ.pop("SANDESH_MIGRATIONS_DIR", None)
+            else:
+                os.environ["SANDESH_MIGRATIONS_DIR"] = orig_mdir
+            if orig_xdg is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig_xdg
+
+        # 0001-baseline must still be applied (the prior state)
+        self.assertIn(
+            "0001-baseline", applied,
+            f"After failed 0002, 0001-baseline must still be applied (prior state); "
+            f"got applied={applied!r}",
+        )
+        # 0002-partial-fail must be PENDING (not recorded as applied, since it failed)
+        self.assertIn(
+            "0002-partial-fail", pending,
+            f"After failed 0002, '0002-partial-fail' must be in pending (rolled back, "
+            f"not applied); got pending={pending!r}.\n"
+            "If SANDESH_MIGRATIONS_DIR is not honoured, pending shows only real migrations.",
+        )
+        # 0002 must NOT be in applied (it failed and rolled back)
+        self.assertNotIn(
+            "0002-partial-fail", applied,
+            f"'0002-partial-fail' must NOT be in applied after it failed; "
+            f"got applied={applied!r}",
+        )
+
+    def test_partial_fail_migration_four_core_tables_intact(self):
+        """After a failed 0002, the four core tables must still be intact
+        (the failure of 0002 must not damage the 0001 schema).
+
+        RED: SANDESH_MIGRATIONS_DIR not honoured → test still passes vacuously
+        (0001 was applied via packaged dir, core tables present). This test
+        adds integrity insurance for the GREEN path.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_txn_intact")
+        _setup_project("TxnIntact", data_home)
+
+        custom_mdir = self._build_custom_migrations_dir()
+        db_path = self._db_path_for("TxnIntact", data_home)
+
+        _run_cli(
+            ["migrate", "--project", "TxnIntact"],
+            data_home,
+            extra_env={"SANDESH_MIGRATIONS_DIR": custom_mdir},
+        )
+
+        tables = _list_user_tables(db_path)
+        for t in _FOUR_TABLES:
+            self.assertIn(
+                t, tables,
+                f"Core table '{t}' must still exist after a failed 0002 migration; "
+                f"found tables: {tables!r}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
