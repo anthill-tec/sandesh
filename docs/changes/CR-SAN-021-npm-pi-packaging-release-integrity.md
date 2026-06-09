@@ -138,6 +138,13 @@ into Scope/ACs (DRIFT-1 typescript devDep; DRIFT-2 version-sync vs no-tags); all
 - **Note on the freshness of this analysis:** per the orchestrator preference (re-validate immediately
   before implementation), if CR-SAN-019 (which edits `integrations/pi/src/index.ts`) ships before this
   CR, re-confirm DRIFT-1/the test placement against the changed `src/` before the RED phase.
+- **Re-validation 2026-06-09 (post-CR-019 + CR-020 merged): verdict HOLDS.** Re-checked against current
+  `develop`: `typescript` still absent from devDependencies, `tsc` still not in `node_modules/.bin`,
+  `prepublishOnly`/`engines` still absent (DRIFT-1 stands). All three version fields still `0.1.0` and
+  in sync (Arm A target). Still zero git tags — `git describe --tags` errors (DRIFT-2 / Arm split stands).
+  peerDependencies (3×`"*"`), `publishConfig.access:public`, and the `files` allowlist intact (AC5/AC6).
+  CR-019 added only behavior tests (`smoke.test.ts`, `unregister.test.ts`) — no packaging overlap, so the
+  `src/package.test.ts` home for Arm A is unaffected. No spec change required.
 
 ## Estimated size
 Small–medium: one new CI workflow + two `package.json` additions (`prepublishOnly`, `engines`) + a
