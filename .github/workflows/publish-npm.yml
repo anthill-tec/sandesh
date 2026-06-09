@@ -1,0 +1,113 @@
+name: Publish Pi extension to npm
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:        # manual dry-run path
+  pull_request:             # build-check only (no publish)
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+jobs:
+  build-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Install dependencies
+        working-directory: integrations/pi
+        run: bun install
+      - name: Type-check
+        working-directory: integrations/pi
+        run: bunx tsc --noEmit
+      - name: Test
+        working-directory: integrations/pi
+        run: bun test
+      - name: Pack check
+        working-directory: integrations/pi
+        run: npm pack --dry-run
+
+  publish-npm:
+    needs: build-check
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write          # OIDC trusted publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Install dependencies
+        working-directory: integrations/pi
+        run: bun install
+      - name: Verify release tag matches package versions (Arm B)
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Release tag version: $VERSION"
+          PKG_VERSION=$(node -p "require('./integrations/pi/package.json').version")
+          SERVER_VERSION=$(node -p "require('./integrations/pi/server.json').version")
+          SERVER_PKG_VERSION=$(node -p "require('./integrations/pi/server.json').packages[0].version")
+          echo "package.json: $PKG_VERSION"
+          echo "server.json .version: $SERVER_VERSION"
+          echo "server.json .packages[0].version: $SERVER_PKG_VERSION"
+          if [ "$VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) != release tag ($VERSION)"
+            exit 1
+          fi
+          if [ "$VERSION" != "$SERVER_VERSION" ]; then
+            echo "::error::server.json .version ($SERVER_VERSION) != release tag ($VERSION)"
+            exit 1
+          fi
+          if [ "$VERSION" != "$SERVER_PKG_VERSION" ]; then
+            echo "::error::server.json .packages[0].version ($SERVER_PKG_VERSION) != release tag ($VERSION)"
+            exit 1
+          fi
+      - name: Upgrade npm (>= 11.5.1 for OIDC trusted publishing)
+        run: npm install -g npm@latest
+      - name: Publish to npm
+        working-directory: integrations/pi
+        run: npm publish --access public
+        # no token secret — OIDC trusted publishing only (provenance auto)
+
+  dry-run:
+    needs: build-check
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Install dependencies
+        working-directory: integrations/pi
+        run: bun install
+      - name: Type-check
+        working-directory: integrations/pi
+        run: bunx tsc --noEmit
+      - name: Test
+        working-directory: integrations/pi
+        run: bun test
+      - name: Pack check
+        working-directory: integrations/pi
+        run: npm pack --dry-run
+      - name: Publish dry-run
+        working-directory: integrations/pi
+        run: npm publish --dry-run --access public
