@@ -74,6 +74,12 @@ Wire `migrate` into `cli.py` (heavy imports stay lazy in `migrate.py`). Subcomma
 - `sandesh migrate --project <id>` — apply pending migrations to that store (idempotent; yoyo skips
   applied steps).
 - `--all` — iterate **every** `projects/<id>/sandesh.db` under the data home and apply to each.
+  **Failure policy (user-decided 2026-06-09): transactional + fail-fast.** Each migration runs inside
+  yoyo's per-migration transaction (verified: `apply_one` → `self.copy()` ctx; SQLite has transactional
+  DDL), so a migration that errors **rolls back** automatically — the store is left at its last-good
+  applied state, never half-applied. On `--all`, the **first** store that errors **aborts the whole run**
+  (fail-fast) with a **non-zero** exit; stores after it are left untouched. The erroring store reports
+  which migration failed.
 - `--status` — report applied vs pending (from yoyo's `_yoyo_migration`), no writes.
 - `--rollback` — roll back the most recent applied step (one step), per project.
 - `--check` — §S5 (no writes).
@@ -147,8 +153,12 @@ Two checks, no writes:
 - [ ] **AC9 — diff.** `migrate --diff <old> --json` between the pre-`0002` snapshot and the current
       dump reports `message.status` as a **removed column** on `message` (asserted on the structured
       output).
-- [ ] **AC10 — `--all`.** With ≥2 project stores present, `migrate --all` applies to **each** and
-      `--status --all` reports both fully applied (asserted).
+- [ ] **AC10 — `--all` (incl. transactional + fail-fast).** With ≥2 project stores present, `migrate
+      --all` applies to **each** and `--status --all` reports both fully applied (asserted). **Fail-fast:**
+      with a store that errors ahead of a healthy one, `--all` exits **non-zero** and the store(s) AFTER
+      the failure are left **un-migrated** (asserted). **Transactional:** a migration that fails mid-way
+      leaves its store at the **prior** applied state (no half-applied tables) — yoyo's per-migration
+      transaction (asserted with a deliberately-failing migration fixture).
 - [ ] **AC11 — status drop end-to-end.** After `0002`, a NEW store (`sandesh_db.setup`) and a MIGRATED
       store both **lack** `message.status`; sending/replying/fetching still work (the messaging suite
       stays green); no core code references the removed column (`grep` clean / tests green).
