@@ -368,4 +368,31 @@ describe("publish-npm.yml — AC4 Arm B: release-tag version check (AC4)", () =>
       "Expected the version-check step to reference server.json alongside the release tag",
     ).toBe(true);
   });
+
+  test("the version-check step reads server.json from the repo root (not integrations/pi/server.json)", () => {
+    expect(fileExists).toBe(true);
+    // server.json lives ONLY at the repo root. GitHub Actions `run:` steps execute
+    // from GITHUB_WORKSPACE (the repo root) by default, so the read MUST be
+    // `require('./server.json')`, NOT `require('./integrations/pi/server.json')`.
+    expect(
+      wfText.includes("require('./server.json')") ||
+        wfText.includes('require("./server.json")'),
+      "Expected the Arm B step to read server.json from the repo root: require('./server.json')",
+    ).toBe(true);
+    expect(
+      wfText.includes("integrations/pi/server.json"),
+      "Arm B must NOT reference integrations/pi/server.json — that file does not exist (server.json is at the repo root)",
+    ).toBe(false);
+  });
+
+  test("the version-check step reads package.json from integrations/pi", () => {
+    expect(fileExists).toBe(true);
+    // package.json DOES live under integrations/pi, so the package.json read stays
+    // `require('./integrations/pi/package.json')`.
+    expect(
+      wfText.includes("require('./integrations/pi/package.json')") ||
+        wfText.includes('require("./integrations/pi/package.json")'),
+      "Expected the Arm B step to read package.json from integrations/pi: require('./integrations/pi/package.json')",
+    ).toBe(true);
+  });
 });

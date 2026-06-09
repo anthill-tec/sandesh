@@ -61,8 +61,8 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           echo "Release tag version: $VERSION"
           PKG_VERSION=$(node -p "require('./integrations/pi/package.json').version")
-          SERVER_VERSION=$(node -p "require('./integrations/pi/server.json').version")
-          SERVER_PKG_VERSION=$(node -p "require('./integrations/pi/server.json').packages[0].version")
+          SERVER_VERSION=$(node -p "require('./server.json').version")
+          SERVER_PKG_VERSION=$(node -p "require('./server.json').packages[0].version")
           echo "package.json: $PKG_VERSION"
           echo "server.json .version: $SERVER_VERSION"
           echo "server.json .packages[0].version: $SERVER_PKG_VERSION"
