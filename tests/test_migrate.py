@@ -3331,5 +3331,1126 @@ class MigrateCheckDriftWarningTest(unittest.TestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# Cycle 5 — AC8 (remaining half: --dump-schema) + --diff mechanics (AC9 machinery)
+#
+# §S6 defines two read-only authoring aids:
+#
+#   --dump-schema
+#       Emits the live DB shape as JSON to stdout in the §S3 snapshot format:
+#         {"tables": {"<table>": {"columns": {"<col>": {"type":…,"notnull":…,
+#                                                        "pk":…,"default":…}}}}}
+#       The emitted JSON must EQUAL current-schema.json (modulo key ordering)
+#       when run against a fully-migrated store.  Read-only; exit 0.
+#
+#   --diff <old-snapshot-file> [--json]
+#       Compares the OLD snapshot file against the freshly-dumped CURRENT live
+#       shape of the given project store.  Reports:
+#         added   — column present in current but absent in old
+#         removed — column present in old but absent in current
+#         changed — column present in both but with different type/notnull/pk/default
+#       With --json, the output is machine-parseable JSON.
+#       Read-only; exit 0 (it is a reporting aid, not a gate).
+#
+# --diff interface decision:
+#   `--diff <old-snapshot-file>` REQUIRES `--project` to identify the live store
+#   to dump for comparison.  Rationale: AC9 says "the current dump" (live DB),
+#   and the gap-analysis confirms §S6 spec intent ("freshly-dumped current state
+#   of store X").  Tests are written for the live-store interpretation.
+#
+#   INTERFACE-FLAG for orchestrator: the `--diff` flag takes ONE positional value
+#   (the path to the old snapshot JSON file) and optionally `--json`.  It needs
+#   `--project` to know which live store to compare against.
+#
+# RED failure reasons:
+#   - `--dump-schema` is not a recognised argument → argparse exits 2
+#   - `--diff` is not a recognised argument → argparse exits 2
+#   - Even if wired, functions not implemented → assertion failures on output
+# ---------------------------------------------------------------------------
+
+import json as _json
+
+
+def _make_fully_migrated_store(project_id, data_home):
+    """Provision a fresh project store and apply all migrations.
+
+    Returns the absolute db_path.
+    """
+    orig = os.environ.get("XDG_DATA_HOME")
+    os.environ["XDG_DATA_HOME"] = data_home
+    try:
+        from sandesh import sandesh_db, migrate
+        sandesh_db.setup(project_id)
+        migrate.apply(project_id)
+        store = sandesh_db.store_dir(project_id)
+        return os.path.join(store, sandesh_db.DB_FILE)
+    finally:
+        if orig is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = orig
+
+
+# ---------------------------------------------------------------------------
+# AC8 (remaining half) — --dump-schema: emits JSON equal to current-schema.json
+# ---------------------------------------------------------------------------
+
+class MigrateDumpSchemaTest(unittest.TestCase):
+    """AC8 (--dump-schema): `migrate --dump-schema --project X` on a fully-migrated
+    store emits JSON to stdout that equals the committed current-schema.json (modulo
+    key ordering).  Exit 0.  Read-only (store state unchanged).
+
+    RED: --dump-schema is not wired in the CLI migrate subparser → argparse exits 2
+    with an unrecognised-argument error.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c5_dump_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def test_dump_schema_exits_zero(self):
+        """--dump-schema on a fully-migrated store must exit 0.
+
+        RED: --dump-schema not wired → argparse exits 2 (unrecognised argument).
+        """
+        data_home = os.path.join(self._tmpdir, "dh_dump_exit")
+        _make_fully_migrated_store("DumpExit", data_home)
+        r = _run_cli(
+            ["migrate", "--dump-schema", "--project", "DumpExit"],
+            data_home,
+        )
+        self.assertEqual(
+            r.returncode,
+            0,
+            f"migrate --dump-schema must exit 0.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_dump_schema_stdout_is_valid_json(self):
+        """--dump-schema stdout must be parseable as JSON.
+
+        RED: --dump-schema not wired → no JSON output (argparse error on stderr).
+        """
+        data_home = os.path.join(self._tmpdir, "dh_dump_json")
+        _make_fully_migrated_store("DumpJson", data_home)
+        r = _run_cli(
+            ["migrate", "--dump-schema", "--project", "DumpJson"],
+            data_home,
+        )
+        self.assertEqual(
+            r.returncode, 0,
+            f"migrate --dump-schema must exit 0 before JSON check.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+        try:
+            parsed = _json.loads(r.stdout)
+        except _json.JSONDecodeError as exc:
+            self.fail(
+                f"--dump-schema stdout is not valid JSON: {exc}\n"
+                f"stdout: {r.stdout!r}",
+            )
+        self.assertIsInstance(
+            parsed,
+            dict,
+            f"--dump-schema stdout must be a JSON object; got {type(parsed)!r}",
+        )
+
+    def test_dump_schema_has_tables_key(self):
+        """--dump-schema output JSON must have a top-level 'tables' key.
+
+        RED: --dump-schema not wired → no output.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_dump_tables_key")
+        _make_fully_migrated_store("DumpTablesKey", data_home)
+        r = _run_cli(
+            ["migrate", "--dump-schema", "--project", "DumpTablesKey"],
+            data_home,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        parsed = _json.loads(r.stdout)
+        self.assertIn(
+            "tables",
+            parsed,
+            f"--dump-schema output must have a top-level 'tables' key; got keys: {list(parsed.keys())!r}",
+        )
+
+    def test_dump_schema_equals_current_schema_json(self):
+        """--dump-schema output, parsed as dict, must equal current-schema.json parsed as dict.
+
+        Comparison is key-order-independent (both parsed as Python dicts).
+
+        RED: --dump-schema not wired → argparse error; no JSON to compare.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_dump_equals")
+        _make_fully_migrated_store("DumpEquals", data_home)
+        r = _run_cli(
+            ["migrate", "--dump-schema", "--project", "DumpEquals"],
+            data_home,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        dumped = _json.loads(r.stdout)
+
+        with open(_CURRENT_SCHEMA_PATH) as fh:
+            committed = _json.load(fh)
+
+        self.assertEqual(
+            dumped,
+            committed,
+            f"--dump-schema output must equal current-schema.json (modulo key ordering).\n"
+            f"DIFF — keys in dumped but not committed: "
+            f"{set(str(k) for k in dumped.get('tables', {}).keys()) - set(str(k) for k in committed.get('tables', {}).keys())}\n"
+            f"keys in committed but not dumped: "
+            f"{set(str(k) for k in committed.get('tables', {}).keys()) - set(str(k) for k in dumped.get('tables', {}).keys())}",
+        )
+
+    def test_dump_schema_contains_all_four_tables(self):
+        """--dump-schema output must contain all four core tables.
+
+        RED: --dump-schema not wired.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_dump_four_tables")
+        _make_fully_migrated_store("DumpFourTables", data_home)
+        r = _run_cli(
+            ["migrate", "--dump-schema", "--project", "DumpFourTables"],
+            data_home,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        parsed = _json.loads(r.stdout)
+        tables = parsed.get("tables", {})
+        for t in _FOUR_TABLES:
+            self.assertIn(
+                t,
+                tables,
+                f"--dump-schema output must include table '{t}'; "
+                f"found tables: {list(tables.keys())!r}",
+            )
+
+    def test_dump_schema_message_has_status_column_pre_0002(self):
+        """In this cycle (before 0002), --dump-schema must include message.status.
+
+        RED: --dump-schema not wired.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_dump_status_pre0002")
+        _make_fully_migrated_store("DumpStatusPre0002", data_home)
+        r = _run_cli(
+            ["migrate", "--dump-schema", "--project", "DumpStatusPre0002"],
+            data_home,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        parsed = _json.loads(r.stdout)
+        msg_cols = parsed.get("tables", {}).get("message", {}).get("columns", {})
+        self.assertIn(
+            "status",
+            msg_cols,
+            f"--dump-schema must include message.status in this pre-0002 cycle; "
+            f"message columns: {list(msg_cols.keys())!r}",
+        )
+
+    def test_dump_schema_is_read_only(self):
+        """--dump-schema must not alter migration state (applied/pending unchanged).
+
+        RED: --dump-schema not wired (trivially read-only when not wired, but we
+        assert the state is unchanged relative to the post-apply baseline).
+        """
+        data_home = os.path.join(self._tmpdir, "dh_dump_readonly")
+        _make_fully_migrated_store("DumpReadOnly", data_home)
+
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import migrate
+            applied_before, pending_before = migrate.status("DumpReadOnly")
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        _run_cli(["migrate", "--dump-schema", "--project", "DumpReadOnly"], data_home)
+
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import migrate
+            applied_after, pending_after = migrate.status("DumpReadOnly")
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        self.assertEqual(
+            applied_before,
+            applied_after,
+            f"--dump-schema must not alter applied set; "
+            f"before={applied_before!r}, after={applied_after!r}",
+        )
+        self.assertEqual(
+            pending_before,
+            pending_after,
+            f"--dump-schema must not alter pending set; "
+            f"before={pending_before!r}, after={pending_after!r}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# --diff mechanics — AC9 machinery tested with synthetic snapshot fixtures
+#
+# Fixture format (same as current-schema.json):
+#   {"tables": {"<table>": {"columns": {"<col>": {"type":…,"notnull":…,
+#                                                  "pk":…,"default":…}}}}}
+#
+# Diff report format (JSON with --json flag):
+#   {
+#     "added":   [{"table": "<t>", "column": "<c>", "current": {…}}],
+#     "removed": [{"table": "<t>", "column": "<c>", "old": {…}}],
+#     "changed": [{"table": "<t>", "column": "<c>", "old": {…}, "current": {…}}]
+#   }
+#
+# RED failure reasons:
+#   - --diff not wired → argparse exits 2 (unrecognised argument)
+#   - even if wired, diff logic not implemented → assertion failures on the
+#     JSON output structure / content
+# ---------------------------------------------------------------------------
+
+def _write_snapshot_fixture(path, tables_dict):
+    """Write a snapshot fixture file to `path`.
+
+    ``tables_dict`` must be in the §S3 format:
+      {table_name: {col_name: {type, notnull, pk, default}}}
+    The function wraps it into the full snapshot structure
+      {"tables": {table: {"columns": {col: {…}}}}}
+    and writes it as JSON.
+    """
+    snapshot = {
+        "tables": {
+            table: {"columns": cols}
+            for table, cols in tables_dict.items()
+        }
+    }
+    with open(path, "w") as fh:
+        _json.dump(snapshot, fh, indent=2)
+
+
+def _current_snapshot_as_tables_dict():
+    """Load current-schema.json and return its tables as a flat tables_dict.
+
+    Returns: {table_name: {col_name: {type, notnull, pk, default}}}
+    This is convenient for building synthetic fixtures derived from the
+    current committed snapshot.
+    """
+    with open(_CURRENT_SCHEMA_PATH) as fh:
+        data = _json.load(fh)
+    tables_dict = {}
+    for table, table_data in data.get("tables", {}).items():
+        tables_dict[table] = dict(table_data.get("columns", {}))
+    return tables_dict
+
+
+class MigrateDiffStructuralTest(unittest.TestCase):
+    """Structural gate: --diff is accepted by the CLI migrate subparser.
+
+    RED: --diff not wired → argparse exits 2 with 'unrecognised arguments'.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c5_diff_struct_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def _write_current_snapshot_fixture(self):
+        """Write a fixture identical to current-schema.json to a temp file.
+        Returns the path.
+        """
+        fixture_path = os.path.join(self._tmpdir, "old_snapshot.json")
+        import shutil
+        shutil.copy2(_CURRENT_SCHEMA_PATH, fixture_path)
+        return fixture_path
+
+    def test_diff_flag_accepted_by_cli(self):
+        """migrate --diff <file> --project X must be accepted (not exit 2).
+
+        RED: --diff not wired → argparse exits 2.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_diff_accept")
+        _make_fully_migrated_store("DiffAccept", data_home)
+        fixture_path = self._write_current_snapshot_fixture()
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--project", "DiffAccept"],
+            data_home,
+        )
+        # Exit code 0 or any non-2 value is acceptable; argparse exits 2 for
+        # unrecognised args. The real gate is returncode != 2.
+        self.assertNotEqual(
+            r.returncode,
+            2,
+            f"migrate --diff must be accepted by the CLI (not exit 2 for unrecognised arg).\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_diff_json_flag_accepted_by_cli(self):
+        """migrate --diff <file> --json --project X must be accepted (not exit 2).
+
+        RED: --diff/--json not wired → argparse exits 2.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_diff_json_accept")
+        _make_fully_migrated_store("DiffJsonAccept", data_home)
+        fixture_path = self._write_current_snapshot_fixture()
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffJsonAccept"],
+            data_home,
+        )
+        self.assertNotEqual(
+            r.returncode,
+            2,
+            f"migrate --diff --json must be accepted by the CLI (not exit 2).\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+
+class MigrateDiffNoDifferenceTest(unittest.TestCase):
+    """--diff against an identical snapshot (old == current) must report no differences.
+
+    When old-snapshot = current-schema.json and the live store is also at that
+    state, the diff must report: added=[], removed=[], changed=[].
+
+    RED: --diff not wired → argparse exits 2.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c5_diff_nodiff_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def _run_diff_json(self, project_id, data_home, old_snapshot_path):
+        """Run migrate --diff <old> --json --project X; return the CompletedProcess."""
+        return _run_cli(
+            ["migrate", "--diff", old_snapshot_path, "--json", "--project", project_id],
+            data_home,
+        )
+
+    def test_diff_no_difference_exits_zero(self):
+        """--diff with identical old and current must exit 0.
+
+        RED: --diff not wired → argparse exits 2.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_no_diff_exit")
+        _make_fully_migrated_store("NoDiffExit", data_home)
+        fixture_path = os.path.join(self._tmpdir, "same_snapshot.json")
+        import shutil
+        shutil.copy2(_CURRENT_SCHEMA_PATH, fixture_path)
+
+        r = self._run_diff_json("NoDiffExit", data_home, fixture_path)
+        self.assertEqual(
+            r.returncode,
+            0,
+            f"--diff against identical snapshot must exit 0.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_diff_no_difference_json_has_empty_lists(self):
+        """--diff --json against identical old/current must return added=[], removed=[], changed=[].
+
+        RED: --diff not wired → no JSON output.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_no_diff_json")
+        _make_fully_migrated_store("NoDiffJson", data_home)
+        fixture_path = os.path.join(self._tmpdir, "same_snapshot2.json")
+        import shutil
+        shutil.copy2(_CURRENT_SCHEMA_PATH, fixture_path)
+
+        r = self._run_diff_json("NoDiffJson", data_home, fixture_path)
+        self.assertEqual(r.returncode, 0,
+                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        parsed = _json.loads(r.stdout)
+        self.assertEqual(
+            parsed.get("added", "MISSING"),
+            [],
+            f"No added columns expected (identical snapshots); got: {parsed.get('added')!r}",
+        )
+        self.assertEqual(
+            parsed.get("removed", "MISSING"),
+            [],
+            f"No removed columns expected (identical snapshots); got: {parsed.get('removed')!r}",
+        )
+        self.assertEqual(
+            parsed.get("changed", "MISSING"),
+            [],
+            f"No changed columns expected (identical snapshots); got: {parsed.get('changed')!r}",
+        )
+
+
+class MigrateDiffRemovedColumnTest(unittest.TestCase):
+    """--diff: a column present in OLD but absent in current → reported as 'removed'.
+
+    Fixture: old_snapshot has message.legacy_flag (a synthetic column NOT in the
+    live DB).  The live DB has no legacy_flag → diff should report it removed.
+
+    This tests the machinery AC9 uses: in Cycle 6, message.status will be the
+    'removed' column when diffing the pre-0002 snapshot against the post-0002 dump.
+
+    RED: --diff not wired → argparse exits 2.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c5_diff_rm_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def _make_old_snapshot_with_extra_col(self, fixture_path):
+        """Write an old snapshot that includes message.legacy_flag (extra vs current live)."""
+        tables_dict = _current_snapshot_as_tables_dict()
+        # Add a column that doesn't exist in the live DB
+        tables_dict["message"]["legacy_flag"] = {
+            "type": "INTEGER",
+            "notnull": 0,
+            "pk": 0,
+            "default": None,
+        }
+        _write_snapshot_fixture(fixture_path, tables_dict)
+
+    def test_removed_col_diff_exits_zero(self):
+        """--diff with a removed column must exit 0 (diff is a reporting aid, not a gate).
+
+        RED: --diff not wired → argparse exits 2.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_rm_exit")
+        _make_fully_migrated_store("DiffRmExit", data_home)
+        fixture_path = os.path.join(self._tmpdir, "old_rm.json")
+        self._make_old_snapshot_with_extra_col(fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffRmExit"],
+            data_home,
+        )
+        self.assertEqual(
+            r.returncode,
+            0,
+            f"--diff with removed column must exit 0 (reporting aid).\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_removed_col_appears_in_json_removed_list(self):
+        """message.legacy_flag (in old, absent in current) must appear in JSON 'removed' list.
+
+        RED: --diff not wired → no JSON output.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_rm_json")
+        _make_fully_migrated_store("DiffRmJson", data_home)
+        fixture_path = os.path.join(self._tmpdir, "old_rm2.json")
+        self._make_old_snapshot_with_extra_col(fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffRmJson"],
+            data_home,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        parsed = _json.loads(r.stdout)
+        removed = parsed.get("removed", [])
+        removed_cols = [
+            (e.get("table"), e.get("column"))
+            for e in removed
+            if isinstance(e, dict)
+        ]
+        self.assertIn(
+            ("message", "legacy_flag"),
+            removed_cols,
+            f"message.legacy_flag (in old, absent in current) must appear in 'removed'.\n"
+            f"removed list: {removed!r}\nfull JSON: {parsed!r}",
+        )
+
+    def test_removed_col_not_in_added_or_changed(self):
+        """message.legacy_flag (removed) must NOT appear in 'added' or 'changed'.
+
+        RED: --diff not wired → no JSON output.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_rm_not_in_other")
+        _make_fully_migrated_store("DiffRmNotOther", data_home)
+        fixture_path = os.path.join(self._tmpdir, "old_rm3.json")
+        self._make_old_snapshot_with_extra_col(fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffRmNotOther"],
+            data_home,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        parsed = _json.loads(r.stdout)
+        added_cols = [
+            (e.get("table"), e.get("column"))
+            for e in parsed.get("added", [])
+            if isinstance(e, dict)
+        ]
+        changed_cols = [
+            (e.get("table"), e.get("column"))
+            for e in parsed.get("changed", [])
+            if isinstance(e, dict)
+        ]
+        self.assertNotIn(
+            ("message", "legacy_flag"),
+            added_cols,
+            f"message.legacy_flag must NOT appear in 'added' (it was removed); "
+            f"added: {added_cols!r}",
+        )
+        self.assertNotIn(
+            ("message", "legacy_flag"),
+            changed_cols,
+            f"message.legacy_flag must NOT appear in 'changed' (it was removed); "
+            f"changed: {changed_cols!r}",
+        )
+
+    def test_removed_col_added_list_is_empty(self):
+        """When old has one extra column vs current, 'added' list must be empty.
+
+        The live store is the same as current-schema.json; the only difference
+        is the old snapshot has one extra column.  Nothing was added to current.
+
+        RED: --diff not wired.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_rm_added_empty")
+        _make_fully_migrated_store("DiffRmAddedEmpty", data_home)
+        fixture_path = os.path.join(self._tmpdir, "old_rm4.json")
+        self._make_old_snapshot_with_extra_col(fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffRmAddedEmpty"],
+            data_home,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        parsed = _json.loads(r.stdout)
+        self.assertEqual(
+            parsed.get("added", "MISSING"),
+            [],
+            f"'added' must be empty when only old has an extra col; got: {parsed.get('added')!r}",
+        )
+
+
+class MigrateDiffAddedColumnTest(unittest.TestCase):
+    """--diff: a column present in current but absent in OLD → reported as 'added'.
+
+    Fixture: old_snapshot is missing notifier.host (present in the live DB).
+    The diff must report notifier.host as 'added'.
+
+    This models the case where a migration added a column that wasn't in the
+    old snapshot — the developer sees what's new.
+
+    RED: --diff not wired → argparse exits 2.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c5_diff_add_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def _make_old_snapshot_missing_col(self, fixture_path):
+        """Write an old snapshot that OMITS notifier.host (present in live DB)."""
+        tables_dict = _current_snapshot_as_tables_dict()
+        # Remove notifier.host from the old snapshot
+        tables_dict["notifier"].pop("host", None)
+        _write_snapshot_fixture(fixture_path, tables_dict)
+
+    def test_added_col_appears_in_json_added_list(self):
+        """notifier.host (absent in old, present in current) must appear in 'added'.
+
+        RED: --diff not wired → argparse exits 2, no JSON.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_add_json")
+        _make_fully_migrated_store("DiffAddJson", data_home)
+        fixture_path = os.path.join(self._tmpdir, "old_add.json")
+        self._make_old_snapshot_missing_col(fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffAddJson"],
+            data_home,
+        )
+        self.assertEqual(
+            r.returncode, 0,
+            f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+        parsed = _json.loads(r.stdout)
+        added = parsed.get("added", [])
+        added_cols = [
+            (e.get("table"), e.get("column"))
+            for e in added
+            if isinstance(e, dict)
+        ]
+        self.assertIn(
+            ("notifier", "host"),
+            added_cols,
+            f"notifier.host (absent in old, present in current) must appear in 'added'.\n"
+            f"added list: {added!r}\nfull JSON: {parsed!r}",
+        )
+
+    def test_added_col_entry_contains_current_descriptor(self):
+        """The 'added' entry for notifier.host must include the current column descriptor.
+
+        The entry shape must be at minimum {"table": "notifier", "column": "host",
+        "current": {…column descriptor…}}.
+
+        RED: --diff not wired.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_add_descriptor")
+        _make_fully_migrated_store("DiffAddDesc", data_home)
+        fixture_path = os.path.join(self._tmpdir, "old_add2.json")
+        self._make_old_snapshot_missing_col(fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffAddDesc"],
+            data_home,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        parsed = _json.loads(r.stdout)
+        added = parsed.get("added", [])
+        host_entries = [
+            e for e in added
+            if isinstance(e, dict)
+            and e.get("table") == "notifier"
+            and e.get("column") == "host"
+        ]
+        self.assertEqual(
+            len(host_entries),
+            1,
+            f"Exactly 1 'added' entry for (notifier, host); got {len(host_entries)}: {added!r}",
+        )
+        entry = host_entries[0]
+        self.assertIn(
+            "current",
+            entry,
+            f"'added' entry must have a 'current' key with the column descriptor; got {entry!r}",
+        )
+        current_desc = entry["current"]
+        self.assertIsInstance(
+            current_desc,
+            dict,
+            f"'current' in added entry must be a dict; got {type(current_desc)!r}",
+        )
+        # Must contain the standard column descriptor keys
+        for key in ("type", "notnull", "pk", "default"):
+            self.assertIn(
+                key,
+                current_desc,
+                f"'current' descriptor must contain '{key}'; got keys: {list(current_desc.keys())!r}",
+            )
+
+    def test_added_col_removed_list_is_empty(self):
+        """When old is missing one column vs current, 'removed' list must be empty.
+
+        RED: --diff not wired.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_add_removed_empty")
+        _make_fully_migrated_store("DiffAddRmEmpty", data_home)
+        fixture_path = os.path.join(self._tmpdir, "old_add3.json")
+        self._make_old_snapshot_missing_col(fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffAddRmEmpty"],
+            data_home,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        parsed = _json.loads(r.stdout)
+        self.assertEqual(
+            parsed.get("removed", "MISSING"),
+            [],
+            f"'removed' must be empty when only old is missing a col; got: {parsed.get('removed')!r}",
+        )
+
+
+class MigrateDiffChangedColumnTest(unittest.TestCase):
+    """--diff: a column present in both old and current but with different descriptor
+    → reported as 'changed'.
+
+    Fixture: old_snapshot has message.subject with notnull=0 (the live DB has
+    notnull=1, matching current-schema.json).  Diff must report message.subject changed.
+
+    Also tests a type change: old has notifier.pid as TEXT (live has INTEGER).
+
+    RED: --diff not wired → argparse exits 2.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c5_diff_chg_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def _make_old_snapshot_notnull_change(self, fixture_path):
+        """Old snapshot: message.subject has notnull=0 (live has notnull=1)."""
+        tables_dict = _current_snapshot_as_tables_dict()
+        # Change notnull on message.subject
+        tables_dict["message"]["subject"] = dict(
+            tables_dict["message"]["subject"]
+        )
+        tables_dict["message"]["subject"]["notnull"] = 0
+        _write_snapshot_fixture(fixture_path, tables_dict)
+
+    def _make_old_snapshot_type_change(self, fixture_path):
+        """Old snapshot: notifier.pid has type='TEXT' (live has type='INTEGER')."""
+        tables_dict = _current_snapshot_as_tables_dict()
+        tables_dict["notifier"]["pid"] = dict(tables_dict["notifier"]["pid"])
+        tables_dict["notifier"]["pid"]["type"] = "TEXT"
+        _write_snapshot_fixture(fixture_path, tables_dict)
+
+    def test_changed_col_notnull_appears_in_changed_list(self):
+        """message.subject with different notnull must appear in JSON 'changed'.
+
+        RED: --diff not wired → argparse exits 2.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_chg_notnull")
+        _make_fully_migrated_store("DiffChgNotnull", data_home)
+        fixture_path = os.path.join(self._tmpdir, "old_chg_notnull.json")
+        self._make_old_snapshot_notnull_change(fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffChgNotnull"],
+            data_home,
+        )
+        self.assertEqual(
+            r.returncode, 0,
+            f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+        parsed = _json.loads(r.stdout)
+        changed = parsed.get("changed", [])
+        changed_cols = [
+            (e.get("table"), e.get("column"))
+            for e in changed
+            if isinstance(e, dict)
+        ]
+        self.assertIn(
+            ("message", "subject"),
+            changed_cols,
+            f"message.subject (notnull differs: old=0, current=1) must appear in 'changed'.\n"
+            f"changed list: {changed!r}\nfull JSON: {parsed!r}",
+        )
+
+    def test_changed_col_entry_has_old_and_current(self):
+        """'changed' entry must include both 'old' and 'current' column descriptors.
+
+        RED: --diff not wired.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_chg_entry")
+        _make_fully_migrated_store("DiffChgEntry", data_home)
+        fixture_path = os.path.join(self._tmpdir, "old_chg_entry.json")
+        self._make_old_snapshot_notnull_change(fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffChgEntry"],
+            data_home,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        parsed = _json.loads(r.stdout)
+        changed = parsed.get("changed", [])
+        subject_entries = [
+            e for e in changed
+            if isinstance(e, dict)
+            and e.get("table") == "message"
+            and e.get("column") == "subject"
+        ]
+        self.assertEqual(
+            len(subject_entries),
+            1,
+            f"Exactly 1 'changed' entry for (message, subject); got {len(subject_entries)}: {changed!r}",
+        )
+        entry = subject_entries[0]
+        self.assertIn(
+            "old",
+            entry,
+            f"'changed' entry must have 'old' key; got keys: {list(entry.keys())!r}",
+        )
+        self.assertIn(
+            "current",
+            entry,
+            f"'changed' entry must have 'current' key; got keys: {list(entry.keys())!r}",
+        )
+        # The old descriptor has notnull=0; current has notnull=1
+        self.assertEqual(
+            entry["old"].get("notnull"),
+            0,
+            f"'old' descriptor for message.subject must have notnull=0; got {entry['old']!r}",
+        )
+        self.assertEqual(
+            entry["current"].get("notnull"),
+            1,
+            f"'current' descriptor for message.subject must have notnull=1; got {entry['current']!r}",
+        )
+
+    def test_changed_col_type_diff_appears_in_changed_list(self):
+        """notifier.pid with different type (old=TEXT vs current=INTEGER) must appear in 'changed'.
+
+        RED: --diff not wired.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_chg_type")
+        _make_fully_migrated_store("DiffChgType", data_home)
+        fixture_path = os.path.join(self._tmpdir, "old_chg_type.json")
+        self._make_old_snapshot_type_change(fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffChgType"],
+            data_home,
+        )
+        self.assertEqual(
+            r.returncode, 0,
+            f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+        parsed = _json.loads(r.stdout)
+        changed = parsed.get("changed", [])
+        changed_cols = [
+            (e.get("table"), e.get("column"))
+            for e in changed
+            if isinstance(e, dict)
+        ]
+        self.assertIn(
+            ("notifier", "pid"),
+            changed_cols,
+            f"notifier.pid (type: old=TEXT, current=INTEGER) must appear in 'changed'.\n"
+            f"changed list: {changed!r}\nfull JSON: {parsed!r}",
+        )
+
+    def test_changed_col_others_unchanged(self):
+        """When only one column has a notnull difference, no other column appears in 'changed'.
+
+        RED: --diff not wired.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_chg_only_one")
+        _make_fully_migrated_store("DiffChgOnlyOne", data_home)
+        fixture_path = os.path.join(self._tmpdir, "old_chg_only.json")
+        self._make_old_snapshot_notnull_change(fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffChgOnlyOne"],
+            data_home,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
+        parsed = _json.loads(r.stdout)
+        changed = parsed.get("changed", [])
+        changed_cols = [
+            (e.get("table"), e.get("column"))
+            for e in changed
+            if isinstance(e, dict)
+        ]
+        # Only (message, subject) should appear; no other column should show as changed
+        self.assertEqual(
+            len(changed_cols),
+            1,
+            f"Only (message, subject) should be in 'changed' (one notnull diff); "
+            f"got {len(changed_cols)}: {changed_cols!r}",
+        )
+        self.assertEqual(
+            changed_cols[0],
+            ("message", "subject"),
+            f"The single 'changed' entry must be (message, subject); got {changed_cols[0]!r}",
+        )
+
+
+class MigrateDiffReadOnlyTest(unittest.TestCase):
+    """--diff must be read-only: store state (applied/pending) unchanged after call.
+
+    RED: --diff not wired → argparse exits 2 (trivially read-only; but the exit-code
+    assertion in the structural test is the real RED here).
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c5_diff_ro_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def test_diff_is_read_only(self):
+        """--diff must not alter migration state.
+
+        RED: --diff not wired.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_diff_ro")
+        _make_fully_migrated_store("DiffReadOnly", data_home)
+
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import migrate
+            applied_before, pending_before = migrate.status("DiffReadOnly")
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        # Write an old snapshot with one difference to exercise the diff path
+        fixture_path = os.path.join(self._tmpdir, "old_ro.json")
+        tables_dict = _current_snapshot_as_tables_dict()
+        tables_dict["message"]["legacy_flag_ro"] = {
+            "type": "INTEGER",
+            "notnull": 0,
+            "pk": 0,
+            "default": None,
+        }
+        _write_snapshot_fixture(fixture_path, tables_dict)
+
+        _run_cli(
+            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffReadOnly"],
+            data_home,
+        )
+
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import migrate
+            applied_after, pending_after = migrate.status("DiffReadOnly")
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
+
+        self.assertEqual(
+            applied_before,
+            applied_after,
+            f"--diff must not alter applied set; "
+            f"before={applied_before!r}, after={applied_after!r}",
+        )
+        self.assertEqual(
+            pending_before,
+            pending_after,
+            f"--diff must not alter pending set; "
+            f"before={pending_before!r}, after={pending_after!r}",
+        )
+
+
+class MigrateDiffHumanReadableTest(unittest.TestCase):
+    """--diff without --json must produce human-readable text output (not JSON).
+
+    The text output must mention the differing table/column names, giving the
+    developer enough context to hand-write the next migration step.
+
+    RED: --diff not wired → argparse exits 2.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c5_diff_human_")
+        self._orig_xdg = os.environ.get("XDG_DATA_HOME")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._orig_xdg
+
+    def test_diff_human_output_mentions_removed_column(self):
+        """Without --json, removed column name must appear in text output.
+
+        RED: --diff not wired.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_human_rm")
+        _make_fully_migrated_store("DiffHumanRm", data_home)
+
+        fixture_path = os.path.join(self._tmpdir, "old_human_rm.json")
+        tables_dict = _current_snapshot_as_tables_dict()
+        tables_dict["message"]["legacy_human"] = {
+            "type": "TEXT",
+            "notnull": 0,
+            "pk": 0,
+            "default": None,
+        }
+        _write_snapshot_fixture(fixture_path, tables_dict)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--project", "DiffHumanRm"],
+            data_home,
+        )
+        self.assertEqual(
+            r.returncode, 0,
+            f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+        combined = r.stdout + r.stderr
+        self.assertIn(
+            "legacy_human",
+            combined,
+            f"Human-readable --diff output must mention 'legacy_human' (the removed column).\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+    def test_diff_human_output_exits_zero(self):
+        """--diff (no --json) must exit 0.
+
+        RED: --diff not wired → argparse exits 2.
+        """
+        data_home = os.path.join(self._tmpdir, "dh_human_exit")
+        _make_fully_migrated_store("DiffHumanExit", data_home)
+        fixture_path = os.path.join(self._tmpdir, "old_human_exit.json")
+        import shutil
+        shutil.copy2(_CURRENT_SCHEMA_PATH, fixture_path)
+
+        r = _run_cli(
+            ["migrate", "--diff", fixture_path, "--project", "DiffHumanExit"],
+            data_home,
+        )
+        self.assertEqual(
+            r.returncode,
+            0,
+            f"--diff (no --json) must exit 0.\n"
+            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
