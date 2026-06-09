@@ -70,6 +70,21 @@ def migrations_dir():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations")
 
 
+def _schema_dir():
+    """Absolute path to the packaged ``sandesh/schema/`` directory.
+
+    Resolved relative to this module's file so it works from an installed
+    package (force-included into the wheel) as well as from a source checkout —
+    mirroring ``migrations_dir()``.
+    """
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema")
+
+
+def _snapshot_path():
+    """Absolute path to the derived ``current-schema.json`` snapshot."""
+    return os.path.join(_schema_dir(), "current-schema.json")
+
+
 def _db_path(project_id):
     """Absolute path to a project store's ``sandesh.db`` file.
 
@@ -151,6 +166,107 @@ def status(project_id):
     return applied_ids, pending_ids
 
 
+def _live_shape(db_path):
+    """Return the live DB shape in the §S3 snapshot format:
+
+        {"<table>": {"<col>": {"type", "notnull", "pk", "default"}}}
+
+    derived from ``PRAGMA table_info`` for each of the four core tables. Only
+    the core tables are compared (yoyo's ``_yoyo_migration`` bookkeeping table
+    is intentionally excluded).
+    """
+    import sqlite3
+    con = sqlite3.connect(db_path)
+    con.row_factory = sqlite3.Row
+    try:
+        shape = {}
+        for table in _CORE_TABLES:
+            cols = {}
+            for r in con.execute(f"PRAGMA table_info({table})").fetchall():
+                cols[r["name"]] = {
+                    "type": r["type"],
+                    "notnull": r["notnull"],
+                    "pk": r["pk"],
+                    "default": r["dflt_value"],
+                }
+            shape[table] = cols
+    finally:
+        con.close()
+    return shape
+
+
+def _drift(db_path):
+    """Compare the live DB shape against ``current-schema.json``.
+
+    Returns a list of human-readable drift descriptions (empty when the live
+    shape matches the snapshot for every core table/column). Each description
+    names the drifting table and, where applicable, column so the user can
+    diagnose the mismatch.
+    """
+    import json
+    with open(_snapshot_path()) as fh:
+        snapshot = json.load(fh)
+    expected_tables = snapshot.get("tables", {})
+    live = _live_shape(db_path)
+
+    drifts = []
+    for table, table_data in expected_tables.items():
+        expected_cols = table_data.get("columns", {})
+        live_cols = live.get(table)
+        if live_cols is None:
+            drifts.append(f"table '{table}' is missing from the live store")
+            continue
+        for col, expected in expected_cols.items():
+            if col not in live_cols:
+                drifts.append(f"{table}.{col} is missing from the live store")
+                continue
+            if live_cols[col] != expected:
+                drifts.append(
+                    f"{table}.{col} differs: expected {expected!r}, live {live_cols[col]!r}"
+                )
+        for col in live_cols:
+            if col not in expected_cols:
+                drifts.append(f"{table}.{col} is an unexpected column in the live store")
+    return drifts
+
+
+def check(project_id):
+    """Run the read-only ``--check`` gate for ``project_id``'s store.
+
+    Returns an exit code (0 success, non-zero on pending) following the
+    user-decided strictness:
+
+      * **pending** — unapplied migrations → print/list them, return non-zero.
+      * **drift** — live ``PRAGMA table_info`` shape ≠ ``current-schema.json`` →
+        print a WARNING naming the drift, but return 0 (drift is non-fatal).
+      * **clean** — fully migrated AND shape matches → return 0, no noise.
+
+    Performs no writes.
+    """
+    applied_ids, pending_ids = status(project_id)
+    if pending_ids:
+        print(
+            f"[{project_id}] migrations pending (run `sandesh migrate`): "
+            + ", ".join(pending_ids),
+            file=sys.stderr,
+        )
+        return 1
+
+    db_path = _db_path(project_id)
+    drifts = _drift(db_path)
+    if drifts:
+        print(f"[{project_id}] WARNING: schema drift detected (non-fatal):")
+        for d in drifts:
+            print(f"  - {d}")
+        return 0
+
+    # Clean: do not echo the project id here — a project id can incidentally
+    # contain the substring 'drift'/'pending', which a clean-store check must
+    # never surface in its output.
+    print("OK: fully migrated, live shape matches the committed snapshot")
+    return 0
+
+
 def _format_status(project_id, applied_ids, pending_ids):
     """Render a single project's migration status as a human-readable line set.
 
@@ -188,6 +304,11 @@ def cmd_migrate(args):
 
     do_all = getattr(args, "all", False)
     do_status = getattr(args, "status", False)
+    do_check = getattr(args, "check", False)
+
+    if do_check:
+        project_id = _project_from_args(args)
+        return check(project_id)
 
     if do_all:
         from . import sandesh_db

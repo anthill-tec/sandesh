@@ -296,6 +296,8 @@ def build_parser():
     p.add_argument("--status", action="store_true", help="report applied vs pending (no writes)")
     p.add_argument("--all", action="store_true",
                    help="operate on every project store (apply is fail-fast)")
+    p.add_argument("--check", action="store_true",
+                   help="read-only gate: pending=non-zero, drift=warning (exit zero)")
     p.set_defaults(fn=cmd_migrate)
     return ap
 

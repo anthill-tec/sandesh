@@ -1,0 +1,170 @@
+{
+  "tables": {
+    "address": {
+      "columns": {
+        "active": {
+          "default": "TRUE",
+          "notnull": 1,
+          "pk": 0,
+          "type": "BOOLEAN"
+        },
+        "address": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "TEXT"
+        },
+        "display_name": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "kind": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "registered_at": {
+          "default": "datetime('now')",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "registered_by": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        }
+      }
+    },
+    "message": {
+      "columns": {
+        "body_path": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "created_at": {
+          "default": "datetime('now')",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "from_addr": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "id": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "INTEGER"
+        },
+        "in_reply_to": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "INTEGER"
+        },
+        "kind": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "status": {
+          "default": "'open'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "subject": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        }
+      }
+    },
+    "message_recipient": {
+      "columns": {
+        "message_id": {
+          "default": null,
+          "notnull": 1,
+          "pk": 1,
+          "type": "INTEGER"
+        },
+        "read_at": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "recipient": {
+          "default": null,
+          "notnull": 1,
+          "pk": 2,
+          "type": "TEXT"
+        },
+        "role": {
+          "default": "'to'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        }
+      }
+    },
+    "notifier": {
+      "columns": {
+        "heartbeat_at": {
+          "default": "datetime('now')",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "host": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "pid": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "INTEGER"
+        },
+        "recipient": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "TEXT"
+        },
+        "started_at": {
+          "default": "datetime('now')",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "token": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "tombstone": {
+          "default": "FALSE",
+          "notnull": 1,
+          "pk": 0,
+          "type": "BOOLEAN"
+        }
+      }
+    }
+  }
+}
