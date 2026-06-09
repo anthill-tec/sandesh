@@ -48,6 +48,11 @@ interface PackageJson {
     extensions?: string[];
   };
   peerDependencies?: Record<string, string>;
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  scripts?: Record<string, string>;
+  engines?: Record<string, string>;
+  exports?: unknown;
   [key: string]: unknown;
 }
 
@@ -205,5 +210,54 @@ describe("npm pack --dry-run contents (AC3)", () => {
   test("packed tarball contains no *.test.ts files (no stray test files)", () => {
     const testFiles = packedFiles.filter((p) => p.endsWith(".test.ts"));
     expect(testFiles).toEqual([]);
+  });
+});
+
+// CR-SAN-021 Cycle A — AC2 (prepublishOnly + typescript devDep) + AC3 (engines floor) + AC5 guards
+
+describe("package.json — prepublishOnly safety gate (AC2)", () => {
+  test('scripts.prepublishOnly is exactly "tsc --noEmit && bun test"', () => {
+    expect(pkg.scripts?.prepublishOnly).toBe("tsc --noEmit && bun test");
+  });
+
+  test("devDependencies.typescript is present and non-empty (required for tsc --noEmit to resolve)", () => {
+    expect(typeof pkg.devDependencies?.typescript).toBe("string");
+    expect((pkg.devDependencies?.typescript ?? "").length).toBeGreaterThan(0);
+  });
+});
+
+describe("package.json — engines floor (AC3)", () => {
+  test('engines.node is exactly ">=22.19.0"', () => {
+    expect(pkg.engines?.node).toBe(">=22.19.0");
+  });
+});
+
+describe("package.json — bundled-core rejects intact (AC5 guards)", () => {
+  test('@earendil-works/pi-coding-agent peerDependency is "*"', () => {
+    expect(pkg.peerDependencies?.["@earendil-works/pi-coding-agent"]).toBe("*");
+  });
+
+  test('@earendil-works/pi-ai peerDependency is "*"', () => {
+    expect(pkg.peerDependencies?.["@earendil-works/pi-ai"]).toBe("*");
+  });
+
+  test('typebox peerDependency is "*"', () => {
+    expect(pkg.peerDependencies?.["typebox"]).toBe("*");
+  });
+
+  test("@earendil-works/pi-coding-agent is NOT in dependencies", () => {
+    expect(pkg.dependencies?.["@earendil-works/pi-coding-agent"]).toBeUndefined();
+  });
+
+  test("@earendil-works/pi-ai is NOT in dependencies", () => {
+    expect(pkg.dependencies?.["@earendil-works/pi-ai"]).toBeUndefined();
+  });
+
+  test("typebox is NOT in dependencies", () => {
+    expect(pkg.dependencies?.["typebox"]).toBeUndefined();
+  });
+
+  test("pkg has no top-level exports field (Pi loads via pi.extensions manifest, not Node exports)", () => {
+    expect(pkg.exports).toBeUndefined();
   });
 });
