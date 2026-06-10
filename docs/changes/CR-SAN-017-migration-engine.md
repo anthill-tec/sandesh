@@ -1,6 +1,6 @@
 # CR-SAN-017 — DB schema migration engine + first real migration (proving case)
 
-**Status:** PENDING
+**Status:** COMPLETED (2026-06-10)
 **Priority:** High (unblocks every future schema change; the `message.status` retirement is blocked on it)
 **Depends on:** CR-SAN-008 (the `pyproject.toml` extras mechanism), Python core (`sandesh_db`/`cli`)
 **Labels:** wave-5, migration, python, cli
@@ -126,49 +126,78 @@ Two checks, no writes:
 
 ## Acceptance criteria
 
-- [ ] **AC1 — extra isolation.** Importing `sandesh.sandesh_db`, `sandesh.cli` (base parse), `sandesh.notify`,
+- [x] **AC1 — extra isolation.** Importing `sandesh.sandesh_db`, `sandesh.cli` (base parse), `sandesh.notify`,
       and `sandesh.mcp_server` does **not** import `yoyo` or `jsonschema` (asserted, e.g. via
       `sys.modules` after a fresh import, or an import-linter style check). `sandesh/migrate.py` imports
       them only inside function bodies.
-- [ ] **AC2 — friendly absence.** With the `[migrate]` deps uninstalled, `sandesh migrate --status
+- [x] **AC2 — friendly absence.** With the `[migrate]` deps uninstalled, `sandesh migrate --status
       --project X` exits **non-zero** and prints a message naming the `[migrate]` extra (asserted by
       simulating ImportError / a subprocess without the deps).
-- [ ] **AC3 — baseline = current schema.** A store provisioned by applying migrations from empty
+- [x] **AC3 — baseline = current schema.** A store provisioned by applying migrations from empty
       (`0001`) has the **same tables/columns** as one created by `sandesh_db.setup` *before* `0002`
       (asserted by comparing `PRAGMA table_info` for all four tables) — i.e. `0001-baseline` faithfully
       reproduces `_SCHEMA`.
-- [ ] **AC4 — baseline adoption.** Given a pre-yoyo store (four tables present, no `_yoyo_migration`),
+- [x] **AC4 — baseline adoption.** Given a pre-yoyo store (four tables present, no `_yoyo_migration`),
       `migrate --project X` records `0001-baseline` as **applied without re-running it** (no "table
       already exists" error) and then applies `0002` (asserted: a store seeded via raw `sandesh_db.setup`
       migrates cleanly).
-- [ ] **AC5 — apply + status + idempotency.** `migrate --project X` applies pending steps; a second run
+- [x] **AC5 — apply + status + idempotency.** `migrate --project X` applies pending steps; a second run
       is a no-op; `migrate --status` reports the applied set (incl. `0001`,`0002`) and **0 pending**
       (asserted from yoyo's applied list).
-- [ ] **AC6 — rollback.** After applying `0002`, `migrate --rollback --project X` restores the
+- [x] **AC6 — rollback.** After applying `0002`, `migrate --rollback --project X` restores the
       `message.status` column (asserted via `PRAGMA table_info` showing the column returns), and `--status`
       shows `0002` pending again.
-- [ ] **AC7 — check.** `migrate --check` on a store with pending migrations exits **non-zero** and lists
+- [x] **AC7 — check.** `migrate --check` on a store with pending migrations exits **non-zero** and lists
       them; on a fully-migrated store whose shape matches `current-schema.json` it exits **zero**
       (asserted both directions). Drift handling per the gap-analysis decision is asserted to its chosen
       strictness.
-- [ ] **AC8 — snapshot validity.** `current-schema.json` validates against `schema.meta.json` via
+- [x] **AC8 — snapshot validity.** `current-schema.json` validates against `schema.meta.json` via
       `jsonschema` (asserted); and `--dump-schema` on a fully-migrated store produces JSON that **equals**
       the committed `current-schema.json` (modulo ordering) (asserted).
-- [ ] **AC9 — diff.** `migrate --diff <old> --json` between the pre-`0002` snapshot and the current
+- [x] **AC9 — diff.** `migrate --diff <old> --json` between the pre-`0002` snapshot and the current
       dump reports `message.status` as a **removed column** on `message` (asserted on the structured
       output).
-- [ ] **AC10 — `--all` (incl. transactional + fail-fast).** With ≥2 project stores present, `migrate
+- [x] **AC10 — `--all` (incl. transactional + fail-fast).** With ≥2 project stores present, `migrate
       --all` applies to **each** and `--status --all` reports both fully applied (asserted). **Fail-fast:**
       with a store that errors ahead of a healthy one, `--all` exits **non-zero** and the store(s) AFTER
       the failure are left **un-migrated** (asserted). **Transactional:** a migration that fails mid-way
       leaves its store at the **prior** applied state (no half-applied tables) — yoyo's per-migration
       transaction (asserted with a deliberately-failing migration fixture).
-- [ ] **AC11 — status drop end-to-end.** After `0002`, a NEW store (`sandesh_db.setup`) and a MIGRATED
+- [x] **AC11 — status drop end-to-end.** After `0002`, a NEW store (`sandesh_db.setup`) and a MIGRATED
       store both **lack** `message.status`; sending/replying/fetching still work (the messaging suite
       stays green); no core code references the removed column (`grep` clean / tests green).
-- [ ] **AC12 — core stdlib purity preserved.** The non-migrate test suite still runs under **system
+- [x] **AC12 — core stdlib purity preserved.** The non-migrate test suite still runs under **system
       `python3`** with no third-party deps (`python3 tests/test_sandesh.py` green); the migration tests
       run under the `[migrate]`-provisioned interpreter.
+
+## Close-out
+_Completed 2026-06-10 (orchestrator: vidushi-sandesh). 6 cycles + VERIFY + FIX._
+- **C1** `ce6a1a3`/`6c9d6e0` — `[migrate]` extra (`yoyo-migrations>=9,<10`, `jsonschema>=4.26`) + `migrate.py`
+  lazy guard + cli wiring (AC1/AC2).
+- **C2** `18caecd`/`c17080b` — engine `apply`/`status`/`migrations_dir` + `0001-baseline.sql` + adoption via
+  `mark_migrations` (AC3/AC4).
+- **C3** `de84271`/`176436f`/`98a65a9` — CLI apply/`--status`/`--all` (transactional + fail-fast,
+  user-decided) + `SANDESH_MIGRATIONS_DIR` test hook (AC5/AC10).
+- **C4** `5420cb7`/`906d26c` — `current-schema.json` + `schema.meta.json` + `--check` (pending=err,
+  drift=warn, user-decided) (AC7/AC8).
+- **C5** `1012441`/`8e43c4f` — `--dump-schema` + `--diff` (added/removed/changed) (AC8/AC9).
+- **C6** `65ae43b`/`2a6597c` — `0002-drop-message-status` 12-step rebuild + `--rollback` + core
+  `message.status` removal (`set_status`/`actioned`/`--resolves`/queries) + `current-schema.json` bump +
+  **CLAUDE.md** (DRIFT-1) (AC6/AC9/AC11/AC12). Test-fix pass retired 3 obsolete pre-0002 guards, updated
+  3 applied-count assertions (→0001+0002), froze the AC9 pre-0002 fixture.
+- **VERIFY** (python-verify-agent) — PASS on all 12 ACs; 1 blocker (no real built-layout packaging test).
+- **FIX** `4960587` (doc consistency: dropped retired `sandesh_actioned` from CLAUDE.md; docstring) +
+  `8066dd4` (**DRIFT-2 corrected**: the mandated `force-include` for `sandesh/migrations`+`sandesh/schema`
+  *double-added* files already bundled by `packages=["sandesh"]` → wheel build FAILED; removed the two
+  lines (user-approved) + added `MigrateWheelLayoutTest` that builds the wheel and asserts the 5 data files
+  ship). Spec DRIFT-2 corrected in `a480f1b`.
+- **Independent verification (orchestrator):** wheel builds (all 5 migration/schema data files present);
+  `migrate` suite green; **core `tests.test_sandesh` green under system python3** (AC12); AC1 purity CLEAN;
+  no live `message.status`/`set_status`/`resolves=` refs; new≡migrated convergence (neither has status).
+- **Pre-merge gate:** `python-crucible.py pre-merge-gate` → **406 passed / 0 failed**, `py_compile` clean,
+  `ok=True`, coverage 52.3% lines / 58.4% funcs (`--cov-source sandesh`).
+- **Follow-on:** CR-SAN-018 wires the installer (`migrate --all`) + the `--check` CI gate + README/RELEASING
+  docs (the installer integration this CR explicitly left out, PRD D7/§5).
 
 ## Gap-analysis findings
 _Completed 2026-06-09 (orchestrator: vidushi-sandesh; gap-analysis skill). Verdict: **READY** — the two
