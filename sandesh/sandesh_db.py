@@ -20,7 +20,7 @@ Semantics:
   - To wakes / Cc silent     notify fires only on role='to'; fetch pulls to+cc.
   - all-tracks broadcast      expands to active addresses minus the sender.
   - per-recipient read         read_at lives on message_recipient, not the message.
-  - keep history + actioned    nothing deleted; message.status open|actioned|closed.
+  - keep history              nothing deleted; read_at (per recipient) is the only "seen" signal.
   - subject-only               body_path NULL → the subject IS the content.
   - reply threading            message.in_reply_to links a reply to its parent.
   - crash-safe liveness        notifier reaped via dead-pid / stale-heartbeat.
@@ -52,7 +52,6 @@ CREATE TABLE IF NOT EXISTS message (
     from_addr   TEXT NOT NULL,
     subject     TEXT NOT NULL,                      -- always present (the minimal content)
     kind        TEXT,                               -- request | directive | fyi | reply
-    status      TEXT NOT NULL DEFAULT 'open',       -- open | actioned | closed
     in_reply_to INTEGER REFERENCES message(id),     -- thread link (NULL = top-level)
     body_path   TEXT,                               -- NULL = subject-only; else FULL path to messages/msg-<id>.md
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
@@ -254,10 +253,10 @@ def send(con, store, from_addr, to=None, cc=None, subject="", kind=None,
 
 
 def reply(con, store, parent_id, from_addr, subject=None, body_text=None,
-          reply_all=False, resolves=False, kind="reply", project=None):
+          reply_all=False, kind="reply", project=None):
     """Reply to message <parent_id>: `to` defaults to the parent's sender, subject to
     'Re: …', in_reply_to links the thread. `reply_all` cc's the parent's other
-    recipients; `resolves` marks the parent actioned."""
+    recipients."""
     parent = con.execute("SELECT * FROM message WHERE id=?", (parent_id,)).fetchone()
     if parent is None:
         raise ValueError(f"no such message #{parent_id}")
@@ -270,25 +269,15 @@ def reply(con, store, parent_id, from_addr, subject=None, body_text=None,
     if not subject:
         s = parent["subject"]
         subject = s if s.lower().startswith("re:") else f"Re: {s}"
-    mid = send(con, store, from_addr, to, cc, subject, kind, body_text,
-               in_reply_to=parent_id, project=project)
-    if resolves:
-        set_status(con, parent_id, "actioned")
-    return mid
-
-
-def set_status(con, msg_id, status):
-    if status not in ("open", "actioned", "closed"):
-        raise ValueError(f"bad status {status!r}")
-    con.execute("UPDATE message SET status=? WHERE id=?", (status, msg_id))
-    con.commit()
+    return send(con, store, from_addr, to, cc, subject, kind, body_text,
+                in_reply_to=parent_id, project=project)
 
 
 # --------------------------------------------------------------------------- #
 # receiving
 
 def inbox(con, recipient, unread_only=True):
-    q = ("SELECT m.id, m.from_addr, m.subject, m.kind, m.status, m.in_reply_to, "
+    q = ("SELECT m.id, m.from_addr, m.subject, m.kind, m.in_reply_to, "
          "m.body_path, m.created_at, r.role, r.read_at "
          "FROM message m JOIN message_recipient r ON r.message_id = m.id "
          "WHERE r.recipient = ? ")

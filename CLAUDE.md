@@ -98,7 +98,7 @@ daemon has no CWD). The CLI accepts `--project` (before *or* after the subcomman
 | table | holds |
 |---|---|
 | `address` | the **addressbook** — durable identities, PK `address` (rejects dupes), `active` soft-delete |
-| `message` | the **envelope** — `subject` (NOT NULL), `kind`, `status` (open/actioned/closed), `in_reply_to`, `body_path` (NULL = subject-only; else a FULL absolute path) |
+| `message` | the **envelope** — `subject` (NOT NULL), `kind`, `in_reply_to`, `body_path` (NULL = subject-only; else a FULL absolute path) |
 | `message_recipient` | **per-message addressees** — (`message_id`, `recipient`, `role` to/cc, `read_at`); PK `(message_id, recipient)` |
 | `notifier` | **per-session watcher liveness** — PK `recipient`, `pid`, `token` (uuid/launch), `heartbeat_at`, `tombstone` |
 
@@ -128,12 +128,16 @@ daemon has no CWD). The CLI accepts `--project` (before *or* after the subcomman
 4. **Subject-only ⟷ file-body.** `subject` is mandatory (the minimal content). No
    `--body`/`--body-file` ⇒ `body_path` NULL, **no file written**. With a body, it's an
    md file under `messages/`, and the DB stores its **full absolute path**.
-5. **Keep history + `actioned`.** Nothing is deleted. `read_at` (per recipient) is
-   "seen"; `message.status` (open→actioned→closed) is disposition (e.g. a request is
-   *read* by Mainline yet *open* until resolved). `reply --resolves` actions the parent.
+5. **Keep history; read=seen is the only signal.** Nothing is deleted. `read_at`
+   (per recipient, on `message_recipient`) is the sole "seen" signal — there is no
+   `message.status` disposition machine (no open/actioned/closed). A request stays
+   visible in history; whether it has been *acted on* is conveyed by replies, not a
+   status column. (CR-SAN-017 0002 dropped `message.status`; new≡migrated stores have
+   no status column.)
 6. **Reply threading.** `message.in_reply_to` links a reply to its parent; `reply`
    defaults `to`=parent's sender and subject=`Re: …` (no `Re: Re:`). `thread` walks the
-   chain. `fetch` shows `↳ re #N "<parent subject>"`.
+   chain. `fetch` shows `↳ re #N "<parent subject>"`. (`reply` has no `--resolves`
+   flag — see #5.)
 7. **Crash-safe liveness.** `notifier_live()` treats a row as dead if its `pid` is gone
    OR `heartbeat_at` is older than `HEARTBEAT_STALE_SECS` (60). A clean exit removes the
    row (token-guarded); a SIGKILL leaves a stale row the next `notifier_acquire()` reaps.
@@ -221,7 +225,7 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
    dependency — decide stdio vs HTTP transport).
 2. `app/mcp_server.py` exposing tools: `sandesh_setup`, `sandesh_register`,
    `sandesh_unregister`, `sandesh_addressbook`, `sandesh_send`, `sandesh_reply`,
-   `sandesh_inbox`, `sandesh_fetch`, `sandesh_thread`, `sandesh_actioned` — **each takes
+   `sandesh_inbox`, `sandesh_fetch`, `sandesh_thread` — **each takes
    `project_id`**. They call `sandesh_db.*` directly (the server is a thin adapter).
 3. **Do NOT** put the wake in MCP. `notify` stays a background process.
 4. Add the MCP dep to `install.sh` (or document a venv); keep the CLI working unchanged.
