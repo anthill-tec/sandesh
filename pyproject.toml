@@ -43,5 +43,3 @@ packages = ["sandesh"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "sandesh/data/usage-scenarios.md" = "sandesh/data/usage-scenarios.md"
-"sandesh/migrations" = "sandesh/migrations"
-"sandesh/schema" = "sandesh/schema"

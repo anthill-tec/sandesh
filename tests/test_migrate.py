@@ -420,114 +420,15 @@ class MigrateOptionalDependencyTest(unittest.TestCase):
         )
 
 
-class MigrateForceIncludeTest(unittest.TestCase):
-    """DRIFT-2 / §S1: hatchling must force-include sandesh/migrations/ and sandesh/schema/
-    in the wheel — otherwise an installed sandesh-relay[migrate] can't find its migrations.
-
-    RED: neither force-include entry exists yet in pyproject.toml.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        if not os.path.isfile(_PYPROJECT_PATH):
-            raise unittest.SkipTest(f"pyproject.toml missing at {_PYPROJECT_PATH}")
-        cls.data = _load_pyproject()
-        # [tool.hatch.build.targets.wheel.force-include]
-        cls.force_include = (
-            cls.data
-            .get("tool", {})
-            .get("hatch", {})
-            .get("build", {})
-            .get("targets", {})
-            .get("wheel", {})
-            .get("force-include", {})
-        )
-
-    def test_force_include_section_exists(self):
-        """[tool.hatch.build.targets.wheel.force-include] section must exist.
-
-        RED: section absent (no migrations/schema entries yet).
-        """
-        self.assertIsInstance(
-            self.force_include,
-            dict,
-            "[tool.hatch.build.targets.wheel.force-include] must be a dict; "
-            f"got {type(self.force_include)!r}",
-        )
-
-    def test_force_include_covers_migrations_dir(self):
-        """sandesh/migrations/ must appear as a source key in force-include.
-
-        RED: entry absent.
-        """
-        keys = list(self.force_include.keys())
-        has_migrations = any(
-            "sandesh/migrations" in k or "sandesh\\migrations" in k
-            for k in keys
-        )
-        self.assertTrue(
-            has_migrations,
-            "force-include must have an entry covering 'sandesh/migrations/'; "
-            f"current keys: {keys!r}",
-        )
-
-    def test_force_include_covers_schema_dir(self):
-        """sandesh/schema/ must appear as a source key in force-include.
-
-        RED: entry absent.
-        """
-        keys = list(self.force_include.keys())
-        has_schema = any(
-            "sandesh/schema" in k or "sandesh\\schema" in k
-            for k in keys
-        )
-        self.assertTrue(
-            has_schema,
-            "force-include must have an entry covering 'sandesh/schema/'; "
-            f"current keys: {keys!r}",
-        )
-
-    def test_force_include_migrations_maps_to_package_path(self):
-        """The sandesh/migrations/ force-include value must map to the correct wheel path.
-
-        RED: entry absent.
-        """
-        # Find the migrations entry (key contains 'sandesh/migrations').
-        migrations_entry = {
-            k: v for k, v in self.force_include.items()
-            if "sandesh/migrations" in k or "sandesh\\migrations" in k
-        }
-        self.assertTrue(
-            len(migrations_entry) >= 1,
-            f"No sandesh/migrations entry in force-include; keys: {list(self.force_include.keys())!r}",
-        )
-        # The wheel destination must also be under sandesh/migrations.
-        for src, dst in migrations_entry.items():
-            self.assertIn(
-                "sandesh/migrations",
-                dst,
-                f"force-include destination for '{src}' must map to 'sandesh/migrations/...'; got {dst!r}",
-            )
-
-    def test_force_include_schema_maps_to_package_path(self):
-        """The sandesh/schema/ force-include value must map to the correct wheel path.
-
-        RED: entry absent.
-        """
-        schema_entry = {
-            k: v for k, v in self.force_include.items()
-            if "sandesh/schema" in k or "sandesh\\schema" in k
-        }
-        self.assertTrue(
-            len(schema_entry) >= 1,
-            f"No sandesh/schema entry in force-include; keys: {list(self.force_include.keys())!r}",
-        )
-        for src, dst in schema_entry.items():
-            self.assertIn(
-                "sandesh/schema",
-                dst,
-                f"force-include destination for '{src}' must map to 'sandesh/schema/...'; got {dst!r}",
-            )
+# NOTE (DRIFT-2 correction, user-approved 2026-06-10): the former
+# MigrateForceIncludeTest asserted that pyproject.toml force-include
+# 'sandesh/migrations' and 'sandesh/schema' into the wheel. That premise was
+# WRONG — `packages = ["sandesh"]` already bundles those subdirectories, so the
+# force-include double-added them and the wheel build FAILED on a duplicate path.
+# The corrected CR spec (§S1 / DRIFT-2) mandates NO force-include for those dirs
+# and a real wheel-build test instead. MigrateForceIncludeTest is therefore
+# removed and superseded by MigrateWheelLayoutTest below, which builds an actual
+# wheel and inspects that the migration + schema data files are packaged.
 
 
 # ---------------------------------------------------------------------------
@@ -5701,6 +5602,132 @@ class MigrateCorePurityStdlibTest(unittest.TestCase):
             has_error or has_fail,
             "tests/test_sandesh.py must have no ERRORs or FAILs under system python3.\n"
             f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
+        )
+
+
+class MigrateWheelLayoutTest(unittest.TestCase):
+    """DRIFT-2 / §S1: the built (installed) wheel layout must actually contain the
+    migration data dirs — not only the source tree.
+
+    The other DRIFT-2 tests (MigrateForceIncludeTest) only parse pyproject.toml
+    keys; they never build a wheel, so a malformed packaging rule would pass them
+    while producing a wheel that ships no migrations. This test closes that gap:
+    it builds a real wheel from the repo with the .venv build toolchain
+    (build + hatchling + hatch-vcs, all present in .venv) and inspects the
+    produced .whl (a zip) to assert the packaged layout.
+
+    Skips ONLY if the build backend is genuinely unavailable (the deps are
+    expected to be present in .venv; under the crucible, sys.executable IS the
+    .venv interpreter).
+    """
+
+    # Data files that MUST be packaged inside the wheel for an installed
+    # sandesh-relay[migrate] to find its migrations + schema snapshot at runtime.
+    _REQUIRED_WHEEL_MEMBERS = (
+        "sandesh/migrations/0001-baseline.sql",
+        "sandesh/migrations/0002-drop-message-status.sql",
+        "sandesh/migrations/0002-drop-message-status.rollback.sql",
+        "sandesh/schema/current-schema.json",
+        "sandesh/schema/schema.meta.json",
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        # The build frontend must be importable by the interpreter that will run
+        # the build (sys.executable == .venv under the crucible). If it is not,
+        # the build backend is genuinely unavailable -> skip with a clear message.
+        try:
+            import build  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest(
+                "build frontend unavailable in this interpreter "
+                f"({sys.executable}); cannot exercise the built wheel layout. "
+                "Install the '[migrate]'/build toolchain (build + hatchling + "
+                "hatch-vcs) to run this packaging test."
+            )
+
+        cls._tmpdir = tempfile.mkdtemp(prefix="sandesh-wheel-")
+        # Build a wheel into the temp dir using the repo's build toolchain.
+        # --no-isolation: reuse the already-installed hatchling/hatch-vcs in
+        #   .venv (fast, and avoids network); the repo is a git checkout so
+        #   hatch-vcs can resolve the version.
+        proc = subprocess.run(
+            [
+                sys.executable, "-m", "build",
+                "--wheel", "--no-isolation",
+                "--outdir", cls._tmpdir,
+                _REPO_ROOT,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        cls._build_proc = proc
+        cls._wheels = [
+            os.path.join(cls._tmpdir, f)
+            for f in os.listdir(cls._tmpdir)
+            if f.endswith(".whl")
+        ]
+
+    @classmethod
+    def tearDownClass(cls):
+        tmp = getattr(cls, "_tmpdir", None)
+        if tmp and os.path.isdir(tmp):
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_wheel_builds_successfully(self):
+        """`python -m build --wheel` must succeed and emit exactly one .whl.
+
+        A non-zero exit (e.g. a force-include rule that duplicates files already
+        bundled by `packages = ["sandesh"]`, colliding in the wheel archive) fails
+        here with the backend's stderr surfaced.
+        """
+        proc = self._build_proc
+        self.assertEqual(
+            proc.returncode,
+            0,
+            "wheel build (`python -m build --wheel --no-isolation`) must succeed.\n"
+            f"  exit: {proc.returncode}\n"
+            f"  stdout: {proc.stdout}\n"
+            f"  stderr: {proc.stderr}",
+        )
+        self.assertEqual(
+            len(self._wheels),
+            1,
+            f"expected exactly one built wheel; got: {self._wheels!r}\n"
+            f"build stdout: {proc.stdout}\nbuild stderr: {proc.stderr}",
+        )
+
+    def test_wheel_packages_migration_and_schema_data(self):
+        """The built wheel (a zip) must contain BOTH migration step files
+        (incl. the .rollback.sql) AND the schema snapshot + meta JSON.
+
+        This proves the force-include / packaging actually ships the non-`.py`
+        data under the package — a malformed rule that omitted (or duplicated)
+        these would fail here, not silently produce a broken installed package.
+        """
+        import zipfile
+
+        self.assertEqual(
+            len(self._wheels),
+            1,
+            "no single wheel was built; cannot inspect packaged layout.\n"
+            f"build stdout: {self._build_proc.stdout}\n"
+            f"build stderr: {self._build_proc.stderr}",
+        )
+        wheel_path = self._wheels[0]
+        with zipfile.ZipFile(wheel_path) as zf:
+            members = set(zf.namelist())
+
+        missing = [m for m in self._REQUIRED_WHEEL_MEMBERS if m not in members]
+        self.assertEqual(
+            missing,
+            [],
+            "built wheel is missing required packaged data members "
+            f"(wheel={os.path.basename(wheel_path)}):\n"
+            f"  missing: {missing}\n"
+            f"  present (sandesh/migrations|schema): "
+            f"{sorted(m for m in members if m.startswith(('sandesh/migrations', 'sandesh/schema')))}",
         )
 
 
