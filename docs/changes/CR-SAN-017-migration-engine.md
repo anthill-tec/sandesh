@@ -40,14 +40,18 @@ surface is the **`[migrate]` extra** and is **CLI/installer only — never MCP/P
 - When the extra is absent, `sandesh migrate …` prints a friendly "install the `[migrate]` extra
   (`pip install 'sandesh-relay[migrate]'`)" message and exits **non-zero** (the
   `sandesh-mcp`-without-`[mcp]` pattern).
-- **Package the migration data dirs (gap-analysis DRIFT-2 — required).** hatchling does NOT auto-bundle
-  non-`.py` files under the package (the existing `pyproject.toml` `force-include` for
-  `sandesh/data/usage-scenarios.md` proves it). Add `force-include` (or an equivalent wheel-include rule)
-  for **`sandesh/migrations/`** (the `.sql`/`.py` steps) and **`sandesh/schema/`** (`current-schema.json`
-  + `schema.meta.json`), else an installed `sandesh-relay[migrate]` can't find its migrations at runtime.
-  `migrate.py` locates them via the installed package dir (`importlib.resources` / `__file__`-relative),
-  and **at least one test exercises the built/installed layout** (not only the source tree) so the
-  packaging is actually verified.
+- **Package the migration data dirs (gap-analysis DRIFT-2).** The migration/schema data files
+  (`sandesh/migrations/*.sql`, `sandesh/schema/*.json`) MUST ship in the wheel so an installed
+  `sandesh-relay[migrate]` finds them at runtime; `migrate.py` locates them via the installed package dir
+  (`importlib.resources` / `__file__`-relative). **CORRECTION (2026-06-10, found at VERIFY — the original
+  DRIFT-2 premise was WRONG):** hatchling's `packages = ["sandesh"]` ALREADY bundles every file under the
+  package — including the `migrations/` and `schema/` SUBDIRECTORIES. Adding `force-include` for those
+  dirs adds them a **second** time → the wheel build **fails** on a duplicate path (`A second file is
+  being added … sandesh/migrations/.gitkeep`). So **do NOT add `force-include` for `sandesh/migrations`
+  or `sandesh/schema`** — `packages = ["sandesh"]` is sufficient (proven: build succeeds, all five data
+  files present in the wheel). The earlier `usage-scenarios.md` precedent was a red herring (`sandesh/data`
+  is the same situation). **A real built/installed-layout test** (build the wheel, assert the data files
+  are inside it) — not just a `pyproject.toml` key-parse check — is REQUIRED, and is what caught this.
 
 ### §S2 — `sandesh/migrate.py` (the engine) + yoyo wiring
 - New module `sandesh/migrate.py` holding all yoyo/jsonschema use. It resolves a project store's DB
@@ -215,12 +219,16 @@ MCP/Pi). Installer wiring + `--check` CI gate are correctly deferred to **CR-SAN
   `0001-baseline` reproduces just those four tables verbatim (the spec's "indexes/PKs" = PK constraints
   only; there are no separate indexes). `message.id` is `AUTOINCREMENT` (the harmless `sqlite_sequence`
   appears — CLAUDE.md gotcha).
-- **DRIFT-2 (packaging) — SPEC_UPDATE (folded):** hatchling does **not** auto-bundle non-`.py` files under
-  the package — proven by the existing `force-include` for `sandesh/data/usage-scenarios.md`
-  (`pyproject.toml:42-44`). Therefore `sandesh/migrations/**` (`.sql`/`.py` steps) and `sandesh/schema/*.json`
-  **must be explicitly packaged**, or an installed `sandesh-relay[migrate]` can't find its migrations at
-  runtime. Added to §S1. `migrate.py` must locate them via the installed package dir (`__file__`-relative
-  / `importlib.resources`), tested against the built/installed layout, not just the source tree.
+- **DRIFT-2 (packaging) — SPEC_UPDATE (folded), then CORRECTED at VERIFY (2026-06-10):** the data files
+  (`sandesh/migrations/**`, `sandesh/schema/*.json`) must ship in the wheel; `migrate.py` locates them via
+  the installed package dir (`__file__`-relative / `importlib.resources`), and a **built/installed-layout
+  test** (build the wheel, assert the files inside) is required. **The original premise was WRONG:** I
+  claimed hatchling does not auto-bundle non-`.py` files and mandated `force-include` for `sandesh/migrations`
+  + `sandesh/schema`. In fact `packages = ["sandesh"]` already bundles those subdirectories, so the
+  `force-include` adds them twice and the wheel build **fails** (duplicate `…/.gitkeep`). Fix (user-approved
+  2026-06-10): **no `force-include` for those dirs** — `packages = ["sandesh"]` alone ships them (proven by
+  the wheel-layout test). Caught precisely because the VERIFY blocker forced a real build test rather than a
+  `pyproject` key-parse check — the lesson: packaging ACs need a build, not a static parse.
 
 ### Dimension 3 (Code vs PRD)
 - **DRIFT-1 (design-doc divergence) — SPEC_UPDATE (folded):** dropping `message.status` contradicts
@@ -241,7 +249,7 @@ MCP/Pi). Installer wiring + `--check` CI gate are correctly deferred to **CR-SAN
 | # | Dim | Finding | Fix scope | Blocking? |
 |---|-----|---------|-----------|-----------|
 | DRIFT-1 | 3 | `CLAUDE.md` locked-semantic #5 / tables row / reply semantics document `message.status`; not in 017's or 018's update scope | SPEC_UPDATE (folded into §S7) | Yes (doc↔code divergence) |
-| DRIFT-2 | 2 | `migrations/**` + `schema/*.json` not auto-bundled by hatchling (force-include precedent) | SPEC_UPDATE (folded into §S1) | Yes (installed `[migrate]` can't find migrations) |
+| DRIFT-2 | 2 | data files must ship in the wheel — but premise was WRONG: `packages=["sandesh"]` already bundles the subdirs; `force-include` double-adds them → build fails. Fix: NO force-include (user-approved 2026-06-10) + a real wheel-build test | SPEC_UPDATE (corrected at VERIFY) | Yes (wheel build broken) |
 | — | 1 | PRD §7 open questions (yoyo API, baseline adoption, `--check` strictness) | RESOLVED above | — |
 
 ## Estimated size
