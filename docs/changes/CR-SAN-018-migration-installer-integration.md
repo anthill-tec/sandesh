@@ -1,6 +1,6 @@
 # CR-SAN-018 — Migration installer & CI integration
 
-**Status:** PENDING
+**Status:** COMPLETED (2026-06-10)
 **Priority:** Medium (makes the engine actually run on update; without it migrations exist but never fire)
 **Depends on:** CR-SAN-017 (the migration engine + `sandesh migrate` CLI)
 **Labels:** wave-5, migration, install, ci, docs
@@ -58,27 +58,47 @@ a release/CI never ships with a store schema out of step with the committed migr
 
 ## Acceptance criteria
 
-- [ ] **AC1 — installer migrates existing stores.** After `install.sh` on a data home containing a
+- [x] **AC1 — installer migrates existing stores.** After `install.sh` on a data home containing a
       pre-migration store, that store is at the latest schema (asserted: `migrate --status` shows 0
       pending / the post-`0002` shape present). (Tested via a temp `$XDG_DATA_HOME`.)
-- [ ] **AC2 — installer tolerates missing extra.** With the `[migrate]` deps absent, `install.sh`
+- [x] **AC2 — installer tolerates missing extra.** With the `[migrate]` deps absent, `install.sh`
       **completes successfully** (non-zero from `migrate` does not abort the install) and prints the
       "migrations skipped — install `[migrate]`" notice (asserted by running the installer path without
       the deps and checking exit 0 + the notice).
-- [ ] **AC3 — fresh install no-op.** On an empty data home (no project stores), the installer's migrate
+- [x] **AC3 — fresh install no-op.** On an empty data home (no project stores), the installer's migrate
       step is a clean no-op (no error; asserted).
-- [ ] **AC4 — snapshot-sync release gate wired (DEC-1).** `.github/workflows/publish-pypi.yml` has a step
+- [x] **AC4 — snapshot-sync release gate wired (DEC-1).** `.github/workflows/publish-pypi.yml` has a step
       (on `release`/`pull_request`/`push: develop`) that seeds a temp store, `migrate --all`, and asserts
       `migrate --dump-schema` **equals** the committed `current-schema.json`, **failing non-zero on
       mismatch** (asserted by parsing the workflow YAML for the step + its commands). A unit-level test
       may additionally prove the equality holds for the current committed snapshot (a stale-snapshot guard
       runnable outside CI).
-- [ ] **AC5 — docs present.** `README.md`, `RELEASING.md`, and `CLAUDE.md` document the migration
+- [x] **AC5 — docs present.** `README.md`, `RELEASING.md`, and `CLAUDE.md` document the migration
       subsystem, the `[migrate]` extra, the installer auto-migrate, and the `--check` gate (asserted by
       content checks / grep markers).
-- [ ] **AC6 — boundary intact.** No migration call is added to the message hot path, the messaging MCP
+- [x] **AC6 — boundary intact.** No migration call is added to the message hot path, the messaging MCP
       server, or the Pi extension (asserted: `sandesh_db`/`mcp_server`/`integrations/pi` reference no
       `migrate` apply; the only new caller is the installer/CLI).
+
+## Close-out
+_Completed 2026-06-10 (orchestrator: vidushi-sandesh). 3 cycles + VERIFY. Closes Wave 5._
+- **C1** `26b701b`/`6435e1f` — `install.sh`: `EXTRAS` default → `[mcp,migrate]` (DEC-2); after console-script
+  symlinks, venv-probe (`import yoyo,jsonschema`) → run `migrate --all` under `set -e` (real error aborts,
+  DEC-3) else print the "migrations skipped — install `[migrate]`" notice + complete (AC2). AC1/AC2/AC3.
+- **C2** `e7b1dad`/`de63fcb` — `publish-pypi.yml` **snapshot-sync gate** in the un-gated `build` job
+  (install `.[migrate]`, seed temp store, `migrate --all`, `migrate --dump-schema` **==** committed
+  `current-schema.json` via a python dict-`==` compare, non-zero on mismatch). AC4 (DEC-1).
+- **C3** `d6c3a4a`/`a5baf17` — README/RELEASING/CLAUDE schema-migration sections (CLAUDE additive, DRIFT-B)
+  + AC6 boundary guard. AC5/AC6.
+- **VERIFY** (python-verify-agent) — PASS on all 6 ACs + DEC-3 + scope; the gate independently confirmed
+  to currently pass (committed snapshot genuinely in sync). One should-fix is a **pre-existing**
+  `ResourceWarning` in `test_install.py` (CR-SAN-008 scope — unclosed subprocess pipes), noted for a future
+  cleanup, not folded (scope).
+- **Independent verification (orchestrator):** the CI gate logic run locally → committed `current-schema.json`
+  matches a freshly-migrated dump (exit 0); install/gate/docs suites green; AC6 boundary clean.
+- **Pre-merge gate:** `python-crucible.py pre-merge-gate` → **458 passed / 0 failed**, `py_compile` clean,
+  `ok=True`, coverage 52.1% lines / 58.4% funcs (`--cov-source sandesh`).
+- **Wave 5 complete** — CR-SAN-017 (engine) + CR-SAN-018 (installer/CI/docs) shipped.
 
 ## Gap-analysis findings
 _Completed 2026-06-10 (orchestrator: vidushi-sandesh; gap-analysis skill). Verdict: **READY** — the open
