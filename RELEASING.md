@@ -102,6 +102,31 @@ active and creates the PyPI project.
 
 ---
 
+## Schema-migration release steps (before tagging)
+
+Sandesh's schema is versioned by the migration subsystem (`sandesh migrate` + the `migrations/`
+directory), with a committed snapshot of the fully-migrated schema at
+**`sandesh/schema/current-schema.json`**. Before you tag a release, ensure that snapshot and the
+`migrations/` directory are **in sync**:
+
+1. If this release added a migration, regenerate the snapshot and commit it:
+   ```bash
+   pip install -e '.[migrate]'                                  # the migrate extra (yoyo + jsonschema)
+   sandesh setup --project rel && sandesh migrate --all --project rel
+   sandesh migrate --dump-schema --project rel > sandesh/schema/current-schema.json
+   git add sandesh/schema/current-schema.json && git commit -m "chore: refresh schema snapshot"
+   ```
+2. The **snapshot-sync** gate in `.github/workflows/publish-pypi.yml` enforces this in CI: it seeds a
+   temp store, runs `migrate --all`, and asserts `migrate --dump-schema` **equals** the committed
+   `current-schema.json` — a mismatch fails the job, so a migration added without refreshing the
+   snapshot blocks the release. Keep the two in sync and the gate stays green.
+
+Note that the installer **migrates** existing stores on update (`install.sh` runs
+`sandesh migrate --all`), so a released update brings users' stores to the latest schema
+automatically.
+
+---
+
 ## Listing on the official MCP Registry (after the PyPI publish)
 
 Sandesh ships a [`server.json`](server.json) (`io.github.anthill-tec/sandesh`) for the official MCP

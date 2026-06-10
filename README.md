@@ -139,6 +139,31 @@ sandesh --project Nai addressbook
 `$SANDESH_PROJECT` and `$SANDESH_ADDRESS` default `--project` and the caller's own
 address. `$SANDESH_POLL_SECONDS` sets the watcher cadence (default 10, floor 3).
 
+## Schema migrations
+
+`sandesh migrate` is the schema-migration command — it brings an existing store up to the
+latest schema. It needs the optional **`[migrate]`** extra (which pulls in `yoyo` +
+`jsonschema`):
+
+```bash
+pip install 'sandesh-relay[migrate]'      # or: uv tool install 'sandesh-relay[migrate]'
+```
+
+Updates **auto-migrate**: `install.sh` runs `sandesh migrate --all` on update, so every
+existing project store is migrated to the latest schema as part of the install. (If the
+`[migrate]` extra is absent the installer prints a notice and continues — the migration is
+simply skipped, not fatal.) A fresh install with no stores is a clean no-op.
+
+The flags:
+
+```bash
+sandesh migrate --project <id>            # apply pending migrations to one store
+sandesh migrate --all                     # apply to every project store (what the installer runs)
+sandesh migrate --status --project <id>   # show applied / pending migrations
+sandesh migrate --rollback --project <id> # roll back one migration step
+sandesh migrate --check --project <id>    # pending ⇒ non-zero (error); schema drift ⇒ warning
+```
+
 ## MCP server
 
 The verbs are also exposed as an **MCP server** (stdio) so an agent can call them as tools

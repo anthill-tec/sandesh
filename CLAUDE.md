@@ -216,6 +216,13 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
   harmless.
 - **The launcher** resolves its own real path via `readlink -f`, so it works through the
   `~/.local/bin/sandesh` symlink. Don't hardcode the install path.
+- **Schema changes ship via the migration subsystem.** Don't hand-evolve a store's schema —
+  add a migration. The `sandesh migrate` CLI command (gated behind the optional **`[migrate]`**
+  extra — `yoyo` + `jsonschema`) applies pending migrations; `--status`/`--rollback`/`--check`
+  inspect and reverse them. On update the installer **auto-migrates** existing stores
+  (`install.sh` runs `sandesh migrate --all`), and the committed
+  `sandesh/schema/current-schema.json` snapshot must stay in sync with `migrations/` — the CI
+  gate in `publish-pypi.yml` asserts `migrate --dump-schema` equals that snapshot.
 
 ---
 
