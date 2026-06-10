@@ -17,27 +17,44 @@ a release/CI never ships with a store schema out of step with the committed migr
 ## Scope
 
 ### §S1 — installer runs `migrate --all`
-- `install.sh` (and/or the documented post-install step) invokes `sandesh migrate --all` after copying
-  the code, so every existing `projects/<id>/sandesh.db` is brought up to the latest schema on update.
-- The `[migrate]` extra must be available to the install-time interpreter for this to run; if it is
-  **absent**, the installer **must not hard-fail the install** — it prints a clear notice that migrations
-  were skipped and how to run them later (`pip install 'sandesh-relay[migrate]' && sandesh migrate --all`).
-  (A fresh install with no existing stores has nothing to migrate.)
+- **Default extras → `[mcp,migrate]` (user-decided DEC-2).** `install.sh` `EXTRAS` default becomes
+  `[mcp,migrate]` so its own venv gets `yoyo`+`jsonschema` and `migrate --all` auto-runs on update
+  out-of-the-box. (`$SANDESH_INSTALL_EXTRAS` still overrides; the existing best-effort install-extra /
+  fall-back-to-base block is unchanged.)
+- After the venv install + console-script symlinks, the installer invokes `"$VENV/bin/sandesh" migrate
+  --all` so every existing `projects/<id>/sandesh.db` is brought to the latest schema. (A fresh install
+  with no stores is a clean no-op — `migrate --all` over zero stores exits 0.)
+- **Abort policy (user-decided DEC-3): distinguish by the KNOWN install outcome, not the exit code**
+  (both the missing-extra guard and a real `--all` error exit 1):
+  - if the `[*,migrate]` extra install **succeeded** (deps present) → run `migrate --all` **under
+    `set -e`** so a genuine migration failure (corrupt store / bad step) **aborts the install** non-zero;
+  - if the extra install **fell back to base** (`[migrate]` absent) → **skip** `migrate --all`, print a
+    clear "migrations skipped — install `[migrate]`" notice (`pip install 'sandesh-relay[migrate]' &&
+    sandesh migrate --all`), and let the install **complete successfully** (AC2). Do NOT invoke `migrate`
+    in this branch (avoids the friendly-absent non-zero tripping `set -e`).
 - Idempotent: re-running the installer re-runs `migrate --all` harmlessly (yoyo skips applied steps).
 
-### §S2 — `--check` as a release/CI gate
-- A CI/release step runs `sandesh migrate --check` (against a representative/seeded store) so a release
-  with **pending** migrations relative to the committed `migrations/` fails the gate (pending ⇒ non-zero,
-  per CR-017 AC7). Wire it into the existing CI workflow (or document it as a release-checklist step in
-  `RELEASING.md` if a CI store fixture is out of scope — decide at gap-analysis).
+### §S2 — release-integrity gate: snapshot-sync in CI (user-decided DEC-1)
+- **The gate is a snapshot-sync check, not a literal `migrate --check`** (gap-analysis Dim-3: a freshly
+  migrated store has 0 pending and `--check` drift only warns, so `--check` would gate nothing). Add a
+  step to **`.github/workflows/publish-pypi.yml`** (the only existing workflow — DRIFT-A) that runs on
+  `release` / `pull_request` / `push: develop`: in a temp `$XDG_DATA_HOME`, `sandesh setup --project ci`,
+  `sandesh migrate --all`, then assert `sandesh migrate --dump-schema --project ci` **equals** the
+  committed `sandesh/schema/current-schema.json` (compare as JSON, modulo key ordering). **Mismatch ⇒
+  non-zero ⇒ the job fails** — catching a migration added without regenerating the snapshot, before a
+  release ships. The step needs the `[migrate]` extra on the CI interpreter (`pip install -e '.[migrate]'`
+  or the built wheel's extra).
+- The job must run BEFORE/independently of the publish step (a stale snapshot blocks the release).
 
 ### §S3 — docs
 - `README.md` — a short "Schema migrations" section: what `sandesh migrate` is, that updates auto-migrate
   via the installer, the `[migrate]` extra, and the `--check`/`--status`/`--rollback` flags.
 - `RELEASING.md` — the maintainer steps: ensure `current-schema.json` + `migrations/` are in sync before
   tagging; the `--check` gate; that the installer migrates on update.
-- `CLAUDE.md` — update the schema/"Gotchas" notes to point at the migration subsystem as the way schema
-  changes ship (replacing the "CREATE TABLE IF NOT EXISTS only covers new installs" caveat).
+- `CLAUDE.md` — **additively** (DRIFT-B: the old "`CREATE TABLE IF NOT EXISTS` only covers new installs"
+  caveat isn't present) add a short note in the schema/Gotchas area: schema changes ship via the migration
+  subsystem (`sandesh migrate` + the `[migrate]` extra), the installer auto-migrates existing stores on
+  update, and `current-schema.json` must stay in sync (the CI gate).
 
 ## Acceptance criteria
 
@@ -50,9 +67,12 @@ a release/CI never ships with a store schema out of step with the committed migr
       the deps and checking exit 0 + the notice).
 - [ ] **AC3 — fresh install no-op.** On an empty data home (no project stores), the installer's migrate
       step is a clean no-op (no error; asserted).
-- [ ] **AC4 — `--check` gate wired.** The CI workflow (or documented release step) runs `migrate --check`
-      and fails on pending migrations (asserted by the workflow file / a test that pending ⇒ non-zero is
-      consumed as a gate).
+- [ ] **AC4 — snapshot-sync release gate wired (DEC-1).** `.github/workflows/publish-pypi.yml` has a step
+      (on `release`/`pull_request`/`push: develop`) that seeds a temp store, `migrate --all`, and asserts
+      `migrate --dump-schema` **equals** the committed `current-schema.json`, **failing non-zero on
+      mismatch** (asserted by parsing the workflow YAML for the step + its commands). A unit-level test
+      may additionally prove the equality holds for the current committed snapshot (a stale-snapshot guard
+      runnable outside CI).
 - [ ] **AC5 — docs present.** `README.md`, `RELEASING.md`, and `CLAUDE.md` document the migration
       subsystem, the `[migrate]` extra, the installer auto-migrate, and the `--check` gate (asserted by
       content checks / grep markers).
@@ -61,9 +81,66 @@ a release/CI never ships with a store schema out of step with the committed migr
       `migrate` apply; the only new caller is the installer/CLI).
 
 ## Gap-analysis findings
-_To be completed by `/gap-analysis CR-SAN-018` before the feature branch — confirm the installer's
-interpreter/venv has access to the `[migrate]` extra (or document the manual fallback), and decide whether
-the `--check` gate runs in CI against a fixture store or is a `RELEASING.md` checklist step._
+_Completed 2026-06-10 (orchestrator: vidushi-sandesh; gap-analysis skill). Verdict: **READY** — the open
+questions were escalated and **user-decided 2026-06-10**, and folded into Scope/ACs below. CR-017 (the
+engine) is merged on `develop`; this CR only adds the installer hook + CI gate + docs._
+
+### Dimension 1 (Spec vs PRD): consistent
+PRD-db-migration **D7** (installer / documented post-install runs `migrate --all` so existing stores
+upgrade on update; idempotent), **D8** (CLI/installer only — never the hot path, never MCP/Pi), and **§5**
+(CR-018 = installer integration) all match the spec. No gap.
+
+### Dimension 2 (Spec vs Code)
+- **`install.sh` already has the §S1 machinery:** it builds its OWN venv at `<data_home>/sandesh/.venv`,
+  pip-installs `sandesh-relay$EXTRAS` (default `EXTRAS=[mcp]`, overridable via `$SANDESH_INSTALL_EXTRAS`),
+  with a **best-effort try-extra-then-fall-back-to-base** block, then symlinks the console scripts. So the
+  installer can provision `[migrate]` the same way, and it already KNOWS whether the extra install
+  succeeded or fell back to base — that branch is how we distinguish AC2's missing-extra case.
+- **`migrate --all` over an empty store list `return 0`** (clean no-op — AC3 holds; `cmd_migrate`
+  `migrate.py:454-472`). Friendly-absent is `_require_deps()` → exit non-zero (`migrate.py:419`) — AC2
+  mechanism present.
+- **`set -euo pipefail`:** a non-zero `migrate` would abort the install unless guarded — relevant to the
+  AC2 (tolerate missing-extra) vs decision-3 (abort on real error) split below.
+- **DRIFT-A (CI gate target) — §S2 SPEC_UPDATE:** §S2 says "wire into the **existing CI workflow**," but
+  there is **no general/test CI** — only `publish-npm.yml` + `publish-pypi.yml` (release-publish). So the
+  gate lands in `publish-pypi.yml`.
+- **DRIFT-B (CLAUDE.md target) — §S3 minor:** §S3 says "replace the *`CREATE TABLE IF NOT EXISTS` only
+  covers new installs* caveat," but that exact caveat is **not present** in CLAUDE.md (it already carries
+  the post-0002 note from CR-017 C6). So the CLAUDE.md edit is **additive** (a "schema changes ship via
+  the migration subsystem" note in the schema/Gotchas area), not a replacement.
+
+### Dimension 3 (Code vs PRD)
+- **AC6 boundary — clean baseline:** no `migrate`/`yoyo` references in `sandesh_db.py`, `mcp_server.py`,
+  `notify.py`, or `integrations/pi/src/*.ts`. The only `migrate` caller is `cli.py`. CR-018 adds only the
+  installer (+ CI) caller — boundary holds.
+- **The `--check`-as-gate semantics (resolved):** AC4 originally said the gate runs `migrate --check` and
+  "fails on pending migrations." But a freshly-seeded+migrated CI store has **0 pending**, and `--check`'s
+  drift is a **warning (exit 0)** (CR-017 user-decided strictness) — so a literal `migrate --check` in CI
+  gates ~nothing. The real release-integrity check is **snapshot-sync**: a fully-migrated store's
+  `--dump-schema` must **equal** the committed `current-schema.json` (CR-017 AC8). **Decided below.**
+
+### Resolved decisions (escalated → user-decided 2026-06-10)
+1. **CI gate = snapshot-sync (not literal `--check`).** In `publish-pypi.yml` (a step that runs on
+   release / PR / push `develop`): seed an empty store, `sandesh migrate --all`, then assert
+   `sandesh migrate --dump-schema` **==** the committed `sandesh/schema/current-schema.json` (modulo key
+   ordering); **mismatch ⇒ non-zero ⇒ fails the release** (catches a migration added without regenerating
+   the snapshot). This supersedes AC4's weak `--check`-pending wording. (§S2 + AC4 updated.)
+2. **Default install extras = `[mcp,migrate]`.** The installer's own venv gets `yoyo`+`jsonschema` so
+   `migrate --all` auto-runs on update out-of-the-box. (§S1 updated.)
+3. **Installer abort policy: tolerate ONLY missing-extra; abort on a real migrate error.** Distinguish by
+   the KNOWN install outcome (not exit code, since both are 1): if the `[mcp,migrate]` install **succeeded**
+   → run `migrate --all` and let a non-zero **abort** the install (real-error surfacing, decision #3); if
+   it **fell back to base** ([migrate] absent) → **skip** `migrate --all`, print the "migrations skipped —
+   install `[migrate]`" notice, and let the install **complete** (AC2). (§S1 updated.)
+
+### Summary table
+| # | Dim | Finding | Fix scope | Blocking? |
+|---|-----|---------|-----------|-----------|
+| DRIFT-A | 2 | §S2 "existing CI workflow" — none exists; only `publish-*.yml` | SPEC_UPDATE (gate → `publish-pypi.yml`) | No |
+| DRIFT-B | 2 | §S3 CLAUDE.md caveat to "replace" isn't present → edit is additive | SPEC_UPDATE (minor) | No |
+| DEC-1 | 3 | `--check`-pending gate is weak → snapshot-sync (`--dump-schema`==snapshot) | user-decided | No |
+| DEC-2 | 2 | install extras `[mcp]` → `[mcp,migrate]` | user-decided | No |
+| DEC-3 | 2 | installer abort policy (missing-extra tolerate / real-error abort) | user-decided | No |
 
 ## Estimated size
 Small–medium — `install.sh` hook + a CI/release `--check` step + README/RELEASING/CLAUDE doc updates.
