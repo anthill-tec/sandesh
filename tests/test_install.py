@@ -630,5 +630,591 @@ class InstallShTest(unittest.TestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# CR-SAN-018 C1 — install.sh migrate --all hook (RED tests)
+# AC1 — installer migrates an existing store
+# AC2 — installer tolerates missing [migrate] extra (skip + notice, exit 0)
+# AC3 — fresh install no-op (empty data-home, migrate step is clean)
+# ---------------------------------------------------------------------------
+
+# Old schema SQL — the 4-table shape FROM BEFORE CR-SAN-017 that included
+# message.status.  Constructed from sandesh_db._SCHEMA + a status column on
+# the message table.  No _yoyo_migration table — this is a pre-engine store.
+_PRE_MIGRATION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS address (
+    address       TEXT PRIMARY KEY,
+    kind          TEXT,
+    display_name  TEXT,
+    active        BOOLEAN NOT NULL DEFAULT TRUE,
+    registered_at TEXT NOT NULL DEFAULT (datetime('now')),
+    registered_by TEXT
+);
+CREATE TABLE IF NOT EXISTS message (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_addr   TEXT NOT NULL,
+    subject     TEXT NOT NULL,
+    kind        TEXT,
+    status      TEXT NOT NULL DEFAULT 'open',
+    in_reply_to INTEGER REFERENCES message(id),
+    body_path   TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS message_recipient (
+    message_id INTEGER NOT NULL REFERENCES message(id),
+    recipient  TEXT NOT NULL,
+    role       TEXT NOT NULL DEFAULT 'to',
+    read_at    TEXT,
+    PRIMARY KEY (message_id, recipient)
+);
+CREATE TABLE IF NOT EXISTS notifier (
+    recipient    TEXT PRIMARY KEY,
+    pid          INTEGER,
+    token        TEXT,
+    host         TEXT,
+    started_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    heartbeat_at TEXT NOT NULL DEFAULT (datetime('now')),
+    tombstone    BOOLEAN NOT NULL DEFAULT FALSE
+);
+"""
+
+
+def _make_pre_migration_store(xdg_data, project_id):
+    """Provision a project store that resembles a pre-CR-SAN-017 database.
+
+    Creates <xdg_data>/sandesh/projects/<project_id>/sandesh.db with the
+    old 4-table schema that includes message.status and has NO _yoyo_migration
+    table.  Returns the path to the db file.
+    """
+    import sqlite3
+    project_dir = os.path.join(xdg_data, "sandesh", "projects", project_id)
+    messages_dir = os.path.join(project_dir, "messages")
+    os.makedirs(messages_dir, exist_ok=True)
+    db_path = os.path.join(project_dir, "sandesh.db")
+    con = sqlite3.connect(db_path)
+    con.executescript(_PRE_MIGRATION_SCHEMA)
+    con.commit()
+    con.close()
+    return db_path
+
+
+def _db_has_status_column(db_path):
+    """Return True if message.status column exists in the given db."""
+    import sqlite3
+    con = sqlite3.connect(db_path)
+    try:
+        rows = con.execute("PRAGMA table_info(message)").fetchall()
+        return any(row[1] == "status" for row in rows)
+    finally:
+        con.close()
+
+
+def _db_has_yoyo_table(db_path):
+    """Return True if _yoyo_migration table exists (i.e. yoyo has run)."""
+    import sqlite3
+    con = sqlite3.connect(db_path)
+    try:
+        rows = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '_yoyo%'"
+        ).fetchall()
+        return len(rows) > 0
+    finally:
+        con.close()
+
+
+class MigrateExtraInstallTest(unittest.TestCase):
+    """AC2 — installer tolerates a missing [migrate] extra.
+
+    Run install.sh with SANDESH_INSTALL_EXTRAS="" (empty string forces a
+    stdlib-only base install — no [migrate] deps).  Assert:
+      - install exits 0 (completes successfully)
+      - output contains a "migrations skipped" notice naming [migrate]
+      - installer did NOT abort (the migrate step was skipped, not failed)
+
+    This test exercises the DEC-3 "missing-extra path": when [migrate] is
+    absent, install.sh must skip migrate --all, print the notice, and succeed.
+
+    RED: install.sh does not yet print the skip notice (it prints a different
+    NOTE about [mcp] only), so the notice assertion fails.
+    """
+
+    tmp = None
+    home_dir = None
+    xdg_data = None
+    install_result = None
+    _setup_error = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="sandesh-migrate-no-extra-test-")
+        cls.home_dir = os.path.join(cls.tmp, "home")
+        cls.xdg_data = os.path.join(cls.home_dir, ".local", "share")
+        os.makedirs(cls.home_dir, exist_ok=True)
+        env = {
+            **os.environ,
+            "HOME": cls.home_dir,
+            "XDG_DATA_HOME": cls.xdg_data,
+            # Force a base-only install — no [migrate] extra at all.
+            "SANDESH_INSTALL_EXTRAS": "",
+        }
+        try:
+            cls.install_result = subprocess.run(
+                ["bash", INSTALL_SH],
+                env=env,
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        except Exception as exc:
+            cls._setup_error = str(exc)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.tmp and os.path.isdir(cls.tmp):
+            shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _check_setup(self):
+        if self._setup_error:
+            self.fail(f"setUpClass failed to run install.sh: {self._setup_error}")
+        self.assertIsNotNone(self.install_result, "install_result is None")
+
+    def test_ac2_install_exits_zero_without_migrate_extra(self):
+        """install.sh must exit 0 when [migrate] deps are absent (base-only install).
+
+        RED: install.sh does not yet distinguish the missing-migrate case
+        (it only has the base-only path for [mcp]).  Once GREEN adds the
+        migrate --all hook the missing-extra path must still exit 0.
+        """
+        self._check_setup()
+        self.assertEqual(
+            self.install_result.returncode,
+            0,
+            msg=(
+                f"install.sh exited {self.install_result.returncode} with "
+                "SANDESH_INSTALL_EXTRAS='' — expected exit 0.\n"
+                f"STDOUT:\n{self.install_result.stdout}\n"
+                f"STDERR:\n{self.install_result.stderr}"
+            ),
+        )
+
+    def test_ac2_output_contains_migrations_skipped_notice(self):
+        """install.sh output must contain a 'migrations skipped' notice that
+        names the [migrate] extra and the sandesh migrate --all command.
+
+        RED: install.sh does not yet emit this notice (it currently only
+        prints the [mcp] fallback notice — no [migrate] skip message).
+        """
+        self._check_setup()
+        combined = self.install_result.stdout + self.install_result.stderr
+        # The notice must name the [migrate] extra.
+        self.assertIn(
+            "[migrate]",
+            combined,
+            msg=(
+                "install.sh output does not contain '[migrate]' — expected a "
+                "'migrations skipped — install [migrate]' notice.\n"
+                f"Full output:\n{combined}"
+            ),
+        )
+        # The notice must mention how to migrate later.
+        self.assertTrue(
+            any(
+                phrase in combined
+                for phrase in ("migrations skipped", "migrate --all", "sandesh migrate")
+            ),
+            msg=(
+                "install.sh output does not contain a 'migrations skipped' / "
+                "'sandesh migrate --all' hint.\n"
+                f"Full output:\n{combined}"
+            ),
+        )
+
+    def test_ac2_install_did_not_abort_on_missing_migrate(self):
+        """When [migrate] is absent, install.sh must complete (no abort).
+
+        The sandesh launcher must have been installed (exit 0 and the venv
+        was set up) — confirm the venv python exists as a proxy for completion.
+
+        RED: install.sh currently has no migrate step, so this passes now
+        as a guard; it will remain GREEN after the hook is added (the
+        missing-extra path must still complete).
+        """
+        self._check_setup()
+        # If the install aborted mid-way, the venv/bin/python would not exist.
+        venv_python = os.path.join(
+            self.xdg_data, "sandesh", ".venv", "bin", "python"
+        )
+        self.assertTrue(
+            os.path.isfile(venv_python),
+            msg=(
+                "install.sh appears to have aborted — venv python not found at "
+                f"{venv_python}.\n"
+                f"install.sh stdout:\n{self.install_result.stdout}\n"
+                f"install.sh stderr:\n{self.install_result.stderr}"
+            ),
+        )
+
+
+class MigrateOnInstallTest(unittest.TestCase):
+    """AC1 — installer runs migrate --all and upgrades existing stores.
+
+    Pre-creates a store in the temp XDG_DATA_HOME that has the old schema
+    (message.status present, no _yoyo_migration).  Runs install.sh with
+    SANDESH_INSTALL_EXTRAS=[mcp,migrate] so the installer venv gets the
+    [migrate] deps (yoyo + jsonschema).  After install, asserts:
+      - the pre-migration store is fully migrated (0 pending via installed
+        `sandesh migrate --status`)
+      - message.status column is GONE from the store
+      - _yoyo_migration table exists (yoyo recorded the migrations)
+
+    HARNESS NOTE: requires network/pip-cache for [mcp,migrate] deps.  If
+    the pip install fails (offline / no cache), the test is SKIPPED — same
+    pattern as McpExtraInstallTest.  Flag for orchestrator: if this env has
+    no network/cache, AC1/AC3 will report as SKIPPED, not RED.  The RED
+    assertions about migration status only fire when deps are available.
+
+    RED: install.sh does not yet run migrate --all, so after install the
+    store still has message.status (not migrated) and status reports pending.
+    """
+
+    tmp = None
+    home_dir = None
+    xdg_data = None
+    install_result = None
+    _setup_error = None
+    _skipped = False
+    _skip_reason = None
+
+    PROJECT_ID = "CR018AC1Test"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="sandesh-migrate-on-install-test-")
+        cls.home_dir = os.path.join(cls.tmp, "home")
+        cls.xdg_data = os.path.join(cls.home_dir, ".local", "share")
+        os.makedirs(cls.home_dir, exist_ok=True)
+
+        # Pre-create a store with the old schema (message.status present).
+        _make_pre_migration_store(cls.xdg_data, cls.PROJECT_ID)
+
+        env = {
+            **os.environ,
+            "HOME": cls.home_dir,
+            "XDG_DATA_HOME": cls.xdg_data,
+            # Request [mcp,migrate] so the installer venv gets yoyo+jsonschema.
+            "SANDESH_INSTALL_EXTRAS": "[mcp,migrate]",
+        }
+        try:
+            cls.install_result = subprocess.run(
+                ["bash", INSTALL_SH],
+                env=env,
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            # If the installer itself exited non-zero AND the venv python does
+            # not exist, the pip install of [mcp,migrate] likely failed offline.
+            venv_python = os.path.join(
+                cls.xdg_data, "sandesh", ".venv", "bin", "python"
+            )
+            if cls.install_result.returncode != 0 and not os.path.isfile(venv_python):
+                cls._skipped = True
+                cls._skip_reason = (
+                    "[mcp,migrate] pip install failed (likely offline/no cache); "
+                    f"install.sh rc={cls.install_result.returncode} "
+                    f"stderr={cls.install_result.stderr[:200]!r}"
+                )
+        except subprocess.TimeoutExpired:
+            cls._skipped = True
+            cls._skip_reason = "[mcp,migrate] install timed out — likely no network."
+        except Exception as exc:
+            cls._setup_error = str(exc)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.tmp and os.path.isdir(cls.tmp):
+            shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _check_available(self):
+        if self._setup_error:
+            self.fail(f"setUpClass failed: {self._setup_error}")
+        if self._skipped:
+            self.skipTest(self._skip_reason)
+
+    def _db_path(self):
+        return os.path.join(
+            self.xdg_data,
+            "sandesh", "projects", self.PROJECT_ID, "sandesh.db",
+        )
+
+    def _installed_sandesh(self):
+        """Path to the installed sandesh console script in the installer venv."""
+        return os.path.join(self.xdg_data, "sandesh", ".venv", "bin", "sandesh")
+
+    def test_ac1_install_exits_zero_with_migrate_extra(self):
+        """install.sh with SANDESH_INSTALL_EXTRAS=[mcp,migrate] must exit 0."""
+        self._check_available()
+        self.assertEqual(
+            self.install_result.returncode,
+            0,
+            msg=(
+                f"install.sh exited {self.install_result.returncode}.\n"
+                f"STDOUT:\n{self.install_result.stdout}\n"
+                f"STDERR:\n{self.install_result.stderr}"
+            ),
+        )
+
+    def test_ac1_store_has_no_status_column_after_install(self):
+        """After install.sh with [migrate], the pre-migration store must have
+        NO message.status column (migration 0002 must have been applied).
+
+        RED: install.sh does not yet run migrate --all → status column still
+        present after install.
+        """
+        self._check_available()
+        db_path = self._db_path()
+        self.assertTrue(
+            os.path.isfile(db_path),
+            msg=f"Pre-migration store not found at {db_path} after install.",
+        )
+        has_status = _db_has_status_column(db_path)
+        self.assertFalse(
+            has_status,
+            msg=(
+                "message.status column is still present in the store after install.sh "
+                "— install.sh must run `migrate --all` to apply 0002-drop-message-status.\n"
+                f"DB: {db_path}"
+            ),
+        )
+
+    def test_ac1_store_has_yoyo_migration_table_after_install(self):
+        """After install.sh with [migrate], the store must have a _yoyo_migration
+        table (yoyo has been run and recorded the applied migrations).
+
+        RED: install.sh does not run migrate --all → no _yoyo_migration table.
+        """
+        self._check_available()
+        db_path = self._db_path()
+        self.assertTrue(
+            os.path.isfile(db_path),
+            msg=f"Pre-migration store not found at {db_path} after install.",
+        )
+        has_yoyo = _db_has_yoyo_table(db_path)
+        self.assertTrue(
+            has_yoyo,
+            msg=(
+                "_yoyo_migration table is absent from the store after install.sh — "
+                "install.sh must run `migrate --all` so yoyo records applied migrations.\n"
+                f"DB: {db_path}"
+            ),
+        )
+
+    def test_ac1_migrate_status_shows_zero_pending_after_install(self):
+        """After install.sh with [migrate], `sandesh migrate --status --project X`
+        must report 0 pending migrations for the pre-migration store.
+
+        RED: install.sh does not run migrate --all → status shows pending
+        (0002-drop-message-status is pending on the store).
+        """
+        self._check_available()
+        sandesh_bin = self._installed_sandesh()
+        if not os.path.isfile(sandesh_bin):
+            self.skipTest(
+                f"Installed sandesh not found at {sandesh_bin} — "
+                "install.sh may not have completed."
+            )
+        env = {
+            **os.environ,
+            "HOME": self.home_dir,
+            "XDG_DATA_HOME": self.xdg_data,
+        }
+        result = subprocess.run(
+            [sandesh_bin, "migrate", "--status", "--project", self.PROJECT_ID],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(
+                f"`sandesh migrate --status` exited {result.returncode}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+        combined = result.stdout + result.stderr
+        self.assertIn(
+            "0 pending",
+            combined,
+            msg=(
+                "`sandesh migrate --status` does not show '0 pending' after install — "
+                "the pre-migration store was not migrated by install.sh.\n"
+                f"Full output:\n{combined}"
+            ),
+        )
+        # Negative bound: 'pending' must not appear without '0' prefix (no remaining).
+        # Allow "0 pending" but not "1 pending", "2 pending", etc.
+        import re as _re
+        non_zero_pending = _re.search(r"[1-9]\d* pending", combined)
+        self.assertIsNone(
+            non_zero_pending,
+            msg=(
+                f"`sandesh migrate --status` reports non-zero pending after install.\n"
+                f"Full output:\n{combined}"
+            ),
+        )
+
+
+class FreshInstallMigrateNoOpTest(unittest.TestCase):
+    """AC3 — fresh install with no existing stores: migrate --all is a clean no-op.
+
+    Empty XDG_DATA_HOME (no projects/ stores at all).  Run install.sh with
+    SANDESH_INSTALL_EXTRAS=[mcp,migrate].  Assert:
+      - install exits 0
+      - no error/traceback in output (the migrate step over zero stores is silent)
+      - the projects/ dir is empty (no stores were created as a side effect)
+
+    HARNESS NOTE: same offline/network caveat as MigrateOnInstallTest — skips
+    if [mcp,migrate] pip install fails.
+
+    RED: currently install.sh does not call migrate --all at all, so this test
+    passes trivially (no migrate step = no migrate error).  It acts as a guard:
+    after GREEN adds the hook, the fresh-install path must remain clean.
+    """
+
+    tmp = None
+    home_dir = None
+    xdg_data = None
+    install_result = None
+    _setup_error = None
+    _skipped = False
+    _skip_reason = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="sandesh-fresh-install-migrate-test-")
+        cls.home_dir = os.path.join(cls.tmp, "home")
+        cls.xdg_data = os.path.join(cls.home_dir, ".local", "share")
+        # Deliberately empty — no projects/ at all.
+        os.makedirs(cls.home_dir, exist_ok=True)
+
+        env = {
+            **os.environ,
+            "HOME": cls.home_dir,
+            "XDG_DATA_HOME": cls.xdg_data,
+            "SANDESH_INSTALL_EXTRAS": "[mcp,migrate]",
+        }
+        try:
+            cls.install_result = subprocess.run(
+                ["bash", INSTALL_SH],
+                env=env,
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            venv_python = os.path.join(
+                cls.xdg_data, "sandesh", ".venv", "bin", "python"
+            )
+            if cls.install_result.returncode != 0 and not os.path.isfile(venv_python):
+                cls._skipped = True
+                cls._skip_reason = (
+                    "[mcp,migrate] pip install failed (likely offline/no cache); "
+                    f"install.sh rc={cls.install_result.returncode} "
+                    f"stderr={cls.install_result.stderr[:200]!r}"
+                )
+        except subprocess.TimeoutExpired:
+            cls._skipped = True
+            cls._skip_reason = "[mcp,migrate] install timed out — likely no network."
+        except Exception as exc:
+            cls._setup_error = str(exc)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.tmp and os.path.isdir(cls.tmp):
+            shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _check_available(self):
+        if self._setup_error:
+            self.fail(f"setUpClass failed: {self._setup_error}")
+        if self._skipped:
+            self.skipTest(self._skip_reason)
+
+    def test_ac3_fresh_install_exits_zero(self):
+        """install.sh on an empty data-home must exit 0 (no-op migrate is clean).
+
+        RED (guard): install.sh currently has no migrate step — passes now.
+        After GREEN adds the hook, this must remain GREEN (no-op path).
+        """
+        self._check_available()
+        self.assertEqual(
+            self.install_result.returncode,
+            0,
+            msg=(
+                f"install.sh exited {self.install_result.returncode} on a fresh "
+                "(empty) data-home.\n"
+                f"STDOUT:\n{self.install_result.stdout}\n"
+                f"STDERR:\n{self.install_result.stderr}"
+            ),
+        )
+
+    def test_ac3_fresh_install_no_traceback_in_output(self):
+        """install.sh on an empty data-home must not produce a traceback.
+
+        RED (guard): no migrate step currently, so no migrate error possible.
+        After GREEN adds the hook, `migrate --all` over zero stores exits 0
+        silently — no traceback must appear.
+        """
+        self._check_available()
+        combined = self.install_result.stdout + self.install_result.stderr
+        self.assertNotIn(
+            "Traceback",
+            combined,
+            msg=(
+                "install.sh produced a Python traceback on a fresh data-home.\n"
+                f"Full output:\n{combined}"
+            ),
+        )
+
+    def test_ac3_fresh_install_no_error_marker_in_output(self):
+        """install.sh on an empty data-home must not print an error from migrate.
+
+        Checks that no 'migrate --all aborted' or 'Error:' line appeared —
+        confirming the zero-stores path is truly a no-op.
+        """
+        self._check_available()
+        combined = self.install_result.stdout + self.install_result.stderr
+        self.assertNotIn(
+            "migrate --all aborted",
+            combined,
+            msg=(
+                "install.sh printed a 'migrate --all aborted' error on a fresh "
+                "data-home — the no-op path must be silent.\n"
+                f"Full output:\n{combined}"
+            ),
+        )
+
+    def test_ac3_fresh_install_no_spurious_project_created(self):
+        """install.sh must not create any project stores as a side effect of
+        running migrate --all on an empty data-home.
+
+        The projects/ directory must either not exist or be empty.
+        """
+        self._check_available()
+        projects_dir = os.path.join(self.xdg_data, "sandesh", "projects")
+        if os.path.isdir(projects_dir):
+            entries = os.listdir(projects_dir)
+            self.assertEqual(
+                entries,
+                [],
+                msg=(
+                    f"install.sh created unexpected project entries in {projects_dir}: "
+                    f"{entries}"
+                ),
+            )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

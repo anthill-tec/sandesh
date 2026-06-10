@@ -21,9 +21,10 @@ DEST="${XDG_DATA_HOME:-$HOME/.local/share}/sandesh"
 BINDIR="$HOME/.local/bin"
 VENV="$DEST/.venv"
 
-# Which extras to install. Default to the [mcp] extra so the MCP server works out
-# of the box; a caller can override (e.g. SANDESH_INSTALL_EXTRAS="" for base-only).
-EXTRAS="${SANDESH_INSTALL_EXTRAS-[mcp]}"
+# Which extras to install. Default to [mcp,migrate] so the MCP server works out of
+# the box AND the venv gets yoyo+jsonschema for `migrate --all` (DEC-2); a caller
+# can override (e.g. SANDESH_INSTALL_EXTRAS="" for base-only).
+EXTRAS="${SANDESH_INSTALL_EXTRAS-[mcp,migrate]}"
 
 echo "installing Sandesh:  $SRC  →  $DEST"
 mkdir -p "$DEST/projects" "$BINDIR"
@@ -55,6 +56,22 @@ fi
 ln -sf "$VENV/bin/sandesh" "$BINDIR/sandesh"
 if [ -x "$VENV/bin/sandesh-mcp" ]; then
   ln -sf "$VENV/bin/sandesh-mcp" "$BINDIR/sandesh-mcp"
+fi
+
+# --- run migrations on existing stores (DEC-2/DEC-3) --------------------------
+# Probe the venv directly for the [migrate] deps (yoyo+jsonschema). Distinguish
+# the missing-extra case from a real migration error by the ACTUAL venv contents,
+# not the exit code: with deps present we run `migrate --all` under `set -e` so a
+# genuine migration error ABORTS the install (DEC-3); with deps absent we skip and
+# print a notice, letting the install complete (AC2). `migrate --all` honours the
+# same $XDG_DATA_HOME the installer used, so a bare invocation targets these stores.
+if "$VENV/bin/python" -c "import yoyo, jsonschema" 2>/dev/null; then
+  echo "running migrations on existing stores …"
+  "$VENV/bin/sandesh" migrate --all      # under set -e: a real migration error ABORTS the install (DEC-3)
+  echo "✓ migrations applied (migrate --all)"
+else
+  echo "  NOTE: migrations skipped — the [migrate] extra is not installed."
+  echo "        install it and migrate later:  pip install 'sandesh-relay[migrate]' && sandesh migrate --all"
 fi
 
 echo "✓ venv      → $VENV"
