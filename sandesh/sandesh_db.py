@@ -730,6 +730,64 @@ def _evict_project_notifiers(con, project_id, *, force, wait_secs, op):
         con.commit()
 
 
+def _archive_guards(con, project_id, by):
+    """State + authz guards shared by archive() and archive_preview() — the
+    dry-run raises exactly the same errors as the real operation."""
+    state = project_state(con, project_id)
+    if state is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    if state != "active":
+        raise ValueError(f"project '{project_id}' is not active")
+    _require_project_mainline(project_id, by)
+
+
+def _unarchive_guards(con, project_id, by):
+    """State + authz guards shared by unarchive() and unarchive_preview()."""
+    state = project_state(con, project_id)
+    if state is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    if state != "archived":
+        raise ValueError(f"project '{project_id}' is not archived")
+    _require_project_mainline(project_id, by)
+
+
+def _tombstone_guards(con, project_id, by):
+    """State + authz guards shared by tombstone_project() and
+    tombstone_preview(): archived-only (the two-step), super-admin-only `by`."""
+    state = project_state(con, project_id)
+    if state is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    if state == "tombstoned":
+        raise ValueError(f"project '{project_id}' is already tombstoned")
+    if state == "active":
+        raise ValueError(
+            f"project '{project_id}' is active — archive it first")
+    _require_admin(con, by, action="tombstone a project")
+
+
+def _live_watchers(con, project_id):
+    """The project's addresses whose notifier rows are genuinely live (fresh
+    heartbeat + live pid) — the watchers an archive/tombstone would evict."""
+    return [r["address"] for r in con.execute(
+        "SELECT address FROM address WHERE project=?", (project_id,))
+        if notifier_live(con, r["address"]) is not None]
+
+
+def _internal_message_ids(con, project_id):
+    """The internal-message id set (DRIFT-2 step 1), computed while the
+    project's address rows still exist: internal = sender's project ==
+    `project_id` AND no recipient row resolves to another project."""
+    return [r["id"] for r in con.execute(
+        "SELECT m.id FROM message m"
+        "  JOIN address sa ON sa.address = m.from_addr"
+        " WHERE sa.project = ?"
+        "   AND NOT EXISTS ("
+        "       SELECT 1 FROM message_recipient mr"
+        "         JOIN address ra ON ra.address = mr.recipient"
+        "        WHERE mr.message_id = m.id AND ra.project != ?)",
+        (project_id, project_id))]
+
+
 def archive(con, project_id, by, *, force=False, wait_secs=None):
     """Archive an active project (Mainline-only `by`): cooperatively evict every
     live notifier of its addresses (notifier_tombstone → bounded wait of
@@ -737,12 +795,7 @@ def archive(con, project_id, by, *, force=False, wait_secs=None):
     state='archived' + archived_at. Deletes NOTHING else. Refuses — state
     unchanged — if a watcher stays live past the wait, unless `force`, which
     reaps the surviving row(s) anyway."""
-    state = project_state(con, project_id)
-    if state is None:
-        raise ValueError(f"unknown project '{project_id}'")
-    if state != "active":
-        raise ValueError(f"project '{project_id}' is not active")
-    _require_project_mainline(project_id, by)
+    _archive_guards(con, project_id, by)
     _evict_project_notifiers(
         con, project_id, force=force, wait_secs=wait_secs, op="archive")
     con.execute(
@@ -755,12 +808,7 @@ def unarchive(con, project_id, by):
     """Reactivate an archived project (Mainline-only `by`): state='active',
     archived_at cleared. Grant columns are untouched (CR-SAN-024 DEC-E) — a
     grant set while active survives the archive→unarchive round-trip."""
-    state = project_state(con, project_id)
-    if state is None:
-        raise ValueError(f"unknown project '{project_id}'")
-    if state != "archived":
-        raise ValueError(f"project '{project_id}' is not archived")
-    _require_project_mainline(project_id, by)
+    _unarchive_guards(con, project_id, by)
     con.execute(
         "UPDATE project SET state='active', archived_at=NULL WHERE project_id=?",
         (project_id,))
@@ -783,29 +831,13 @@ def tombstone_project(con, project_id, by, *, force=False, wait_secs=None):
       5. set state='tombstoned' + tombstoned_at (the permanent marker row —
          created_at and xproj_granted_* untouched).
     Refusals (state/authz) change nothing."""
-    state = project_state(con, project_id)
-    if state is None:
-        raise ValueError(f"unknown project '{project_id}'")
-    if state == "tombstoned":
-        raise ValueError(f"project '{project_id}' is already tombstoned")
-    if state == "active":
-        raise ValueError(
-            f"project '{project_id}' is active — archive it first")
-    _require_admin(con, by, action="tombstone a project")
+    _tombstone_guards(con, project_id, by)
 
     _evict_project_notifiers(
         con, project_id, force=force, wait_secs=wait_secs, op="tombstone")
 
     # DRIFT-2 step 1: internal ids computed while address rows still exist.
-    internal_ids = [r["id"] for r in con.execute(
-        "SELECT m.id FROM message m"
-        "  JOIN address sa ON sa.address = m.from_addr"
-        " WHERE sa.project = ?"
-        "   AND NOT EXISTS ("
-        "       SELECT 1 FROM message_recipient mr"
-        "         JOIN address ra ON ra.address = mr.recipient"
-        "        WHERE mr.message_id = m.id AND ra.project != ?)",
-        (project_id, project_id))]
+    internal_ids = _internal_message_ids(con, project_id)
     # Step 2: internal message_recipient rows, then internal message rows.
     if internal_ids:
         placeholders = ",".join("?" * len(internal_ids))
@@ -826,6 +858,40 @@ def tombstone_project(con, project_id, by, *, force=False, wait_secs=None):
         "UPDATE project SET state='tombstoned', tombstoned_at=datetime('now') "
         "WHERE project_id=?", (project_id,))
     con.commit()
+
+
+def archive_preview(con, project_id, by):
+    """Dry-run report for archive() (CR-SAN-024 §S3): runs the SAME state +
+    authz guards (errors still raise), then returns the list of live-watcher
+    addresses an actual archive would evict. Writes nothing."""
+    _archive_guards(con, project_id, by)
+    return _live_watchers(con, project_id)
+
+
+def unarchive_preview(con, project_id, by):
+    """Dry-run for unarchive(): the same guards (errors still raise); a clean
+    return means the project would become active. Writes nothing."""
+    _unarchive_guards(con, project_id, by)
+
+
+def tombstone_preview(con, project_id, by):
+    """Dry-run report for tombstone_project() (CR-SAN-024 AC7): the same state
+    + authz guards, then — WITHOUT writing — what an actual tombstone would
+    destroy: internal message rows purged, body files deleted, and the
+    cross-project messages whose bodies would be lost (their rows survive).
+    Returns {'internal_messages', 'body_files', 'cross_project_messages'}."""
+    _tombstone_guards(con, project_id, by)
+    internal = len(_internal_message_ids(con, project_id))
+    sent_total = con.execute(
+        "SELECT COUNT(*) FROM message m JOIN address sa ON sa.address = m.from_addr"
+        " WHERE sa.project = ?", (project_id,)).fetchone()[0]
+    messages_dir = os.path.join(store_dir(project_id), "messages")
+    body_files = len(os.listdir(messages_dir)) if os.path.isdir(messages_dir) else 0
+    return {
+        "internal_messages": internal,
+        "body_files": body_files,
+        "cross_project_messages": sent_total - internal,
+    }
 
 
 # one-time legacy-store consolidation (CR-SAN-022 §S3)

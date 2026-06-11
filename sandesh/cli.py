@@ -244,6 +244,78 @@ def cmd_revoke(args):
     return 0
 
 
+def cmd_archive(args):
+    con = sdb.connect()
+    try:
+        if args.dry_run:
+            watchers = sdb.archive_preview(con, args.project, args.by)
+            print(f"[dry-run] project {args.project!r} would become archived")
+            if watchers:
+                print(f"[dry-run] watchers to evict ({len(watchers)}):")
+                for addr in watchers:
+                    print(f"  {addr}")
+            else:
+                print("[dry-run] watchers to evict: none")
+            print("[dry-run] nothing written")
+            return 0
+        sdb.archive(con, args.project, args.by, force=args.force)
+    except (ValueError, PermissionError, RuntimeError) as exc:
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"archived project {args.project!r} (by {args.by}) — "
+          f"read-only until unarchived; nothing deleted")
+    return 0
+
+
+def cmd_unarchive(args):
+    con = sdb.connect()
+    try:
+        if args.dry_run:
+            sdb.unarchive_preview(con, args.project, args.by)
+            print(f"[dry-run] project {args.project!r} would become active")
+            print("[dry-run] nothing written")
+            return 0
+        sdb.unarchive(con, args.project, args.by)
+    except (ValueError, PermissionError, RuntimeError) as exc:
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"unarchived project {args.project!r} (by {args.by}) — active again")
+    return 0
+
+
+def cmd_tombstone(args):
+    con = sdb.connect()
+    try:
+        if args.dry_run:
+            counts = sdb.tombstone_preview(con, args.project, args.by)
+            print(f"[dry-run] project {args.project!r} would become tombstoned:")
+            print(f"  internal messages: {counts['internal_messages']} (rows purged)")
+            print(f"  body files: {counts['body_files']} (deleted from disk)")
+            print(f"  cross-project messages: {counts['cross_project_messages']} "
+                  f"(rows survive; their bodies are lost)")
+            print("[dry-run] nothing written")
+            return 0
+        if not args.yes:
+            if not sys.stdin.isatty():
+                print(f"[sandesh] tombstoning project {args.project!r} is destructive "
+                      f"and irreversible — pass --yes to confirm "
+                      f"(stdin is not a terminal, cannot prompt)", file=sys.stderr)
+                sys.exit(1)
+            answer = input(
+                f"tombstone project {args.project!r}? This permanently purges its "
+                f"internal messages and deletes its body folder. [y/N] ")
+            if answer.strip().lower() not in ("y", "yes"):
+                print("aborted — nothing changed")
+                return 1
+        sdb.tombstone_project(con, args.project, args.by, force=args.force)
+    except (ValueError, PermissionError, RuntimeError) as exc:
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"tombstoned project {args.project!r} (by {args.by}) — internal history "
+          f"purged, body folder deleted; cross-project envelopes survive")
+    return 0
+
+
 def cmd_consolidate(args):
     summaries = sdb.consolidate()
     if not summaries:
@@ -380,6 +452,47 @@ def build_parser():
     p.add_argument("--project", required=True, help="the TARGET project losing the grant")
     p.add_argument("--by", required=True, help="your admin name (must match the stored admin)")
     p.set_defaults(fn=cmd_revoke)
+
+    # CR-SAN-024 §S3: project lifecycle verbs. Parentless like grant/revoke —
+    # their --project is the TARGET project, not routing context. Two-tier
+    # authz: archive/unarchive take the project's own Mainline (--by), the
+    # destructive tombstone takes the install-assigned super-admin (--by) and
+    # an interactive confirm (bypass with --yes). All three accept --dry-run
+    # (report only, writes nothing).
+    p = sub.add_parser("archive",
+                       help="archive a project — read-only, reversible "
+                            "(its own Mainline only)")
+    p.add_argument("--project", required=True, help="the project to archive")
+    p.add_argument("--by", required=True,
+                   help="the project's own Mainline address")
+    p.add_argument("--force", action="store_true",
+                   help="reap watchers that ignore the eviction tombstone")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true",
+                   help="report watchers to evict + would-be state; write nothing")
+    p.set_defaults(fn=cmd_archive)
+
+    p = sub.add_parser("unarchive",
+                       help="reactivate an archived project (its own Mainline only)")
+    p.add_argument("--project", required=True, help="the project to reactivate")
+    p.add_argument("--by", required=True,
+                   help="the project's own Mainline address")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true",
+                   help="report would-be state; write nothing")
+    p.set_defaults(fn=cmd_unarchive)
+
+    p = sub.add_parser("tombstone",
+                       help="permanently retire an ARCHIVED project — purges its "
+                            "internal history + body folder (Sandesh admin only)")
+    p.add_argument("--project", required=True, help="the project to tombstone")
+    p.add_argument("--by", required=True,
+                   help="your admin name (must match the stored admin)")
+    p.add_argument("--force", action="store_true",
+                   help="reap watchers that ignore the eviction tombstone")
+    p.add_argument("--yes", action="store_true",
+                   help="skip the interactive confirmation")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true",
+                   help="report would-be purge counts; write nothing")
+    p.set_defaults(fn=cmd_tombstone)
     return ap
 
 
