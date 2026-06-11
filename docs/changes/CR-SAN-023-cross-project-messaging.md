@@ -19,9 +19,10 @@ tracker-state checks, and proves To-wakes/Cc-silent across projects.
 
 ### §S1 — relax the same-project rule (D3)
 - `sandesh_db.send`/`reply`: a recipient is valid iff it is a **registered, active** address in **any
-  `active` project**. The send-time check "recipient `<Project>` must equal the store's project" is
-  removed. `register` keeps its existing per-address validation (address's `<Project>` part must equal the
-  project being registered into) — unchanged.
+  `active` project**. The explicit same-project recipient check **added by CR-SAN-022** (its gap-analysis
+  DRIFT-1: the rule was previously *emergent from store isolation*, made explicit code in 022) is
+  **replaced** by the grant-gated rule of §S2. `register` keeps its existing per-address validation
+  (address's `<Project>` part must equal the project being registered into) — unchanged.
 
 ### §S2 — cross-project access control (D11)
 - Grant metadata on the **`project` tracker row**: columns `xproj_granted_at` (TEXT, NULL = not granted)
