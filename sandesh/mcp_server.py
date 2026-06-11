@@ -480,14 +480,16 @@ tombstoned project's traffic is hidden from all reads (inbox/fetch/thread)."""
         Called by the project's own Mainline (`by`) when the project's work is done
         or paused. Returns a confirmation naming the project and its new state.
         """
-        con = sandesh_db.connect()
+        con = None
         try:
+            con = sandesh_db.connect()
             sandesh_db.archive(con, project_id, by, force=force)
             return f"project '{project_id}' is now archived"
         except (ValueError, PermissionError, RuntimeError) as e:
             raise ToolError(str(e)) from e
         finally:
-            con.close()
+            if con is not None:
+                con.close()
 
 
     @mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=False))
@@ -514,14 +516,16 @@ tombstoned project's traffic is hidden from all reads (inbox/fetch/thread)."""
         Called by the project's own Mainline (`by`) to resume a paused project.
         Returns a confirmation naming the project and its new state.
         """
-        con = sandesh_db.connect()
+        con = None
         try:
+            con = sandesh_db.connect()
             sandesh_db.unarchive(con, project_id, by)
             return f"project '{project_id}' is now active"
         except (ValueError, PermissionError, RuntimeError) as e:
             raise ToolError(str(e)) from e
         finally:
-            con.close()
+            if con is not None:
+                con.close()
 
 
     _USAGE_FALLBACK = """# Sandesh — Usage (fallback)
