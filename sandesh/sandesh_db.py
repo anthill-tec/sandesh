@@ -10,11 +10,12 @@ stdlib — no third-party deps) and **multi-project**: every call carries a
 
 `body_path` is stored as a FULL absolute path.
 
-Model — four tables:
+Model — five tables:
   address            the addressbook (durable identity; '<Orchestrator> - <Project>')
   message            the envelope (subject REQUIRED; body_path NULL = subject-only)
   message_recipient  per-message addressees (role 'to'/'cc' + per-recipient read_at)
   notifier           per-session poller liveness (pid/token/heartbeat/tombstone)
+  project            the project tracker (state: active | archived | tombstoned)
 
 Semantics:
   - To wakes / Cc silent     notify fires only on role='to'; fetch pulls to+cc.
@@ -45,7 +46,8 @@ CREATE TABLE IF NOT EXISTS address (
     display_name  TEXT,
     active        BOOLEAN NOT NULL DEFAULT TRUE,    -- soft-delete (history-safe)
     registered_at TEXT NOT NULL DEFAULT (datetime('now')),
-    registered_by TEXT
+    registered_by TEXT,
+    project       TEXT                              -- the address's <Project> part (exact-match scoping key)
 );
 CREATE TABLE IF NOT EXISTS message (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,6 +73,14 @@ CREATE TABLE IF NOT EXISTS notifier (
     started_at   TEXT NOT NULL DEFAULT (datetime('now')),
     heartbeat_at TEXT NOT NULL DEFAULT (datetime('now')),
     tombstone    BOOLEAN NOT NULL DEFAULT FALSE     -- 1 = shutdown requested (cooperative eviction)
+);
+CREATE TABLE IF NOT EXISTS project (
+    project_id    TEXT PRIMARY KEY,
+    state         TEXT NOT NULL DEFAULT 'active'
+                  CHECK (state IN ('active','archived','tombstoned')),
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    archived_at   TEXT,
+    tombstoned_at TEXT
 );
 """
 
@@ -144,7 +154,7 @@ def validate_address(addr, project=None):
 def register(con, addr, kind=None, display_name=None, by=None, project=None):
     """Self-register an address. Rejects an already-active duplicate; reactivates a
     previously-unregistered one; otherwise inserts."""
-    validate_address(addr, project)
+    _orch, proj = validate_address(addr, project)
     row = con.execute("SELECT active FROM address WHERE address=?", (addr,)).fetchone()
     if row is not None:
         if row["active"]:
@@ -152,12 +162,13 @@ def register(con, addr, kind=None, display_name=None, by=None, project=None):
         con.execute(
             "UPDATE address SET active=TRUE, kind=COALESCE(?,kind), "
             "display_name=COALESCE(?,display_name), registered_at=datetime('now'), "
-            "registered_by=? WHERE address=?",
-            (kind, display_name, by or addr, addr))
+            "registered_by=?, project=? WHERE address=?",
+            (kind, display_name, by or addr, proj, addr))
     else:
         con.execute(
-            "INSERT INTO address (address, kind, display_name, registered_by) VALUES (?,?,?,?)",
-            (addr, kind, display_name, by or addr))
+            "INSERT INTO address (address, kind, display_name, registered_by, project) "
+            "VALUES (?,?,?,?,?)",
+            (addr, kind, display_name, by or addr, proj))
     con.commit()
 
 
