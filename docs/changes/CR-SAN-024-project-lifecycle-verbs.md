@@ -96,6 +96,10 @@ Large — three core ops with guard matrix, the read-rule filters touching `inbo
 installer admin hook, and the widest AC set of the wave.
 
 ## Risks / open questions
+- _From CR-SAN-023's VERIFY:_ `grant_xproj`/`revoke_xproj` currently accept an **archived/tombstoned**
+  project (only `unknown` is refused). Decide the interaction at this CR's gap-analysis (lean: archive
+  leaves the grant in place but sends are blocked anyway by state checks; tombstone should clear/ignore
+  it; granting a non-active project should probably refuse).
 - The purge's "internal message" predicate (sender AND all recipients in-project) needs a careful SQL
   shape — verify against multi-recipient mixed messages at gap-analysis.
 - Hidden-traffic filters touch the hottest read queries — keep them index-friendly.

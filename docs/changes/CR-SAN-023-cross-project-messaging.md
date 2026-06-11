@@ -1,6 +1,6 @@
 # CR-SAN-023 — Cross-project messaging + access control
 
-**Status:** PENDING
+**Status:** COMPLETED (2026-06-11)
 **Priority:** High (the wave's raison d'être — Mainline-to-Mainline across projects)
 **Depends on:** CR-SAN-022 (global DB + tracker)
 **Labels:** wave-6, global-store, messaging, access-control
@@ -142,6 +142,32 @@ broad but mechanical test set (the AC matrix above).
 - The lifecycle verbs and their read rules (CR-SAN-024 — it now consumes the admin row shipped here).
 - Any MCP surface change (CR-SAN-025) — grant/revoke/admin never get MCP tools at all (D11/O3).
 - Per-address grants, expiring grants, or approval workflows (one-time project-level only).
+
+## Close-out
+_Completed 2026-06-11 (orchestrator: vidushi-sandesh). 4 cycles + VERIFY._
+- **C1** `b013d88`/`4b5b828`/`8e999d6` — `0004-xproj-grant` (xproj columns via 12-step rebuild + the
+  single-row `admin` table) + `_SCHEMA` parity + snapshot regen; authorized durable test refresh
+  (membership assertions + `rollback_until` helper in `tests/_migrate_helpers.py` — chain pins gone for
+  good; 3 trivially-passing tests re-targeted). AC9 + AC10 schema.
+- **C2** `5af7131`/`9a67634` — `assign_admin`/`admin_name`/`_require_admin`/`grant_xproj`/`revoke_xproj`/
+  `xproj_granted`; CLI `grant`/`revoke --cross-project` (parentless subparsers); installer
+  `$SANDESH_ADMIN` inline-python assignment (injection-safe via env read; refusal → notice, not abort);
+  NO `admin` subcommand. 71/71, 0 skips. AC5/AC10.
+- **C3** `46151e0`/`f965209` — grant-gated send/reply (022 placeholder error DELETED from source),
+  `_require_active_project` on sender + cross-project recipients + register; mixed-list atomicity
+  pre-insert. AC1/AC2/AC6 (+AC3/AC4 complete).
+- **C4** `395a962`/`12fdc9c` — `projects` 3-column listing (STATE/CROSS-PROJECT ✓/-), AC7/AC8 pins
+  under grant conditions, CLAUDE.md/README/docstring grant + admin docs. AC11.
+- **VERIFY** (python-verify-agent) — **PASS on all 11 ACs**, zero BLOCKING/SHOULD-FIX; boundaries
+  clean (no MCP/CLI admin surface, 9 tools unchanged, injection-safe installer); 767/767 re-run
+  independently, 0 skips. One suggestion routed to CR-SAN-024: `grant_xproj`/`revoke_xproj` accept an
+  archived/tombstoned project (only `unknown` is refused) — harmless pre-lifecycle, but 024 should
+  decide the interaction (noted in 024's risks).
+- **Independent verification (orchestrator):** 26-file sweep green; live probes — all four guard
+  errors verbatim, deny→grant→cross-send→wake-filter→fetch→revoke→deny lifecycle, the 3-column
+  listing rendering.
+- **Pre-merge gate:** `python-crucible.py pre-merge-gate` → **767 passed / 0 failed**, `py_compile`
+  clean, `ok=True`, coverage **77.0% lines / 83.7% funcs** (up from 74.9/81.1 at CR-022).
 
 ## Gap-analysis findings
 _Completed 2026-06-11 (orchestrator: vidushi-sandesh; gap-analysis skill). Verdict: **SPEC_UPDATE_NEEDED
