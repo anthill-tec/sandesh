@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS admin (
     name        TEXT NOT NULL,
     assigned_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(subject, body);
 """
 
 
@@ -409,6 +410,13 @@ def send(con, store, from_addr, to=None, cc=None, subject="", kind=None,
         with open(full, "w", encoding="utf-8") as fh:
             fh.write(body_text)
         con.execute("UPDATE message SET body_path=? WHERE id=?", (full, mid))
+
+    # FTS index entry (CR-SAN-027 §S2): rowid = message id; subject-only
+    # messages index the subject with an empty body. Inside the same
+    # transaction as the message row — committed (or rolled back) together.
+    con.execute(
+        "INSERT INTO message_fts (rowid, subject, body) VALUES (?,?,?)",
+        (mid, subject, body_text or ""))
 
     con.executemany(
         "INSERT INTO message_recipient (message_id, recipient, role) VALUES (?,?,?)",
@@ -892,6 +900,20 @@ def tombstone_project(con, project_id, by, *, force=False, wait_secs=None):
 
     # DRIFT-2 step 1: internal ids computed while address rows still exist.
     internal_ids = _internal_message_ids(con, project_id)
+    # FTS text destruction (CR-SAN-027 §S2 / T1): every message SENT BY this
+    # project — internal AND surviving cross-project ones — loses its index
+    # text copy (the body files die with the folder; the index must not
+    # retain the text). Computed by sender BEFORE the address-row purge
+    # (DRIFT-2 ordering); messages the project merely RECEIVED keep their
+    # index rows (the content belongs to the sender's project).
+    sent_ids = [r["id"] for r in con.execute(
+        "SELECT m.id FROM message m JOIN address sa ON sa.address = m.from_addr"
+        " WHERE sa.project = ?", (project_id,))]
+    if sent_ids:
+        placeholders = ",".join("?" * len(sent_ids))
+        con.execute(
+            f"DELETE FROM message_fts WHERE rowid IN ({placeholders})",
+            sent_ids)
     # Step 2: internal message_recipient rows, then internal message rows.
     if internal_ids:
         placeholders = ",".join("?" * len(internal_ids))
