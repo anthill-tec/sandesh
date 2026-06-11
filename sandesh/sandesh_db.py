@@ -461,24 +461,72 @@ def _is_tombstoned_sender(con, addr, tombstoned):
     return _address_project(con, addr) in tombstoned
 
 
-def inbox(con, recipient, unread_only=True):
+_TS_FULL_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+_TS_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _normalize_ts(value, end_of_day=False):
+    """Normalize a since/until bound (CR-SAN-026 §S1): a full
+    'YYYY-MM-DD HH:MM:SS' passes through; a date-only 'YYYY-MM-DD' stays as-is
+    for a lower bound but extends to inclusive end-of-day ('… 23:59:59') when
+    `end_of_day` (an until) — a lexicographic compare would otherwise exclude
+    the entire named day. Anything else raises ValueError."""
+    if _TS_FULL_RE.match(value):
+        return value
+    if _TS_DATE_RE.match(value):
+        return f"{value} 23:59:59" if end_of_day else value
+    raise ValueError(
+        f"invalid timestamp {value!r} — expected 'YYYY-MM-DD' or "
+        f"'YYYY-MM-DD HH:MM:SS'")
+
+
+def inbox(con, recipient, unread_only=True, *, sender=None, sender_project=None,
+          kind=None, since=None, until=None, subject_like=None):
     """The recipient's messages (to + cc), oldest first. Rows whose SENDER's
     project is tombstoned are hidden (CR-SAN-024 §S2) — filtered python-side
-    against the per-call tombstoned set; archived projects' traffic displays
-    fully."""
+    against the per-call tombstoned set, BEFORE the optional filters; archived
+    projects' traffic displays fully.
+
+    Composable server-side filters (CR-SAN-026 §S1), None = no constraint:
+    `sender` exact-matches from_addr; `sender_project` matches the sender's
+    project (via the _address_project seam, python-side like the tombstone
+    rule); `kind` exact-matches; `since`/`until` bound created_at inclusively
+    (see _normalize_ts); `subject_like` is a case-insensitive literal
+    substring (LIKE wildcards in the value are escaped)."""
     q = ("SELECT m.id, m.from_addr, m.subject, m.kind, m.in_reply_to, "
          "m.body_path, m.created_at, r.role, r.read_at "
          "FROM message m JOIN message_recipient r ON r.message_id = m.id "
          "WHERE r.recipient = ? ")
+    params = [recipient]
     if unread_only:
         q += "AND r.read_at IS NULL "
+    if sender is not None:
+        q += "AND m.from_addr = ? "
+        params.append(sender)
+    if kind is not None:
+        q += "AND m.kind = ? "
+        params.append(kind)
+    if since is not None:
+        q += "AND m.created_at >= ? "
+        params.append(_normalize_ts(since))
+    if until is not None:
+        q += "AND m.created_at <= ? "
+        params.append(_normalize_ts(until, end_of_day=True))
+    if subject_like is not None:
+        q += "AND lower(m.subject) LIKE ? ESCAPE '\\' "
+        literal = (subject_like.lower()
+                   .replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
+        params.append(f"%{literal}%")
     q += "ORDER BY m.created_at, m.id"
-    rows = con.execute(q, (recipient,)).fetchall()
+    rows = con.execute(q, params).fetchall()
     tombstoned = _tombstoned_projects(con)
-    if not tombstoned:                    # hot path: no tombstones → no filtering
-        return rows
-    return [r for r in rows
-            if not _is_tombstoned_sender(con, r["from_addr"], tombstoned)]
+    if tombstoned:                        # hidden traffic never matches anything
+        rows = [r for r in rows
+                if not _is_tombstoned_sender(con, r["from_addr"], tombstoned)]
+    if sender_project is not None:
+        rows = [r for r in rows
+                if _address_project(con, r["from_addr"]) == sender_project]
+    return rows
 
 
 def unread_to(con, recipient):
@@ -506,10 +554,16 @@ def mark_read(con, recipient, ids):
     con.commit()
 
 
-def fetch(con, store, recipient, mark=True):
+def fetch(con, store, recipient, mark=True, *, sender=None, sender_project=None,
+          kind=None, since=None, until=None, subject_like=None):
     """Consolidate this recipient's unread messages (to + cc) — bodies read from their
-    FULL path, subject-only entries carry no body — and (default) mark them read."""
-    rows = inbox(con, recipient, unread_only=True)
+    FULL path, subject-only entries carry no body — and (default) mark them read.
+
+    Rides the inbox filter params (CR-SAN-026 §S2): only the matching subset is
+    rendered and (when `mark`) marked read — non-matching unread mail stays unread."""
+    rows = inbox(con, recipient, unread_only=True, sender=sender,
+                 sender_project=sender_project, kind=kind, since=since,
+                 until=until, subject_like=subject_like)
     items = []
     for r in rows:
         body = None

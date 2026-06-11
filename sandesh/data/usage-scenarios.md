@@ -190,6 +190,7 @@ to set. (A request that's superseded or won't be done is simply answered with a 
 A session wants to see what's pending without marking anything read (e.g. a triage glance):
 ```
 sandesh inbox --to "Mainline - Nai"            # list unread (or --all for read+unread)
+sandesh inbox --to "Mainline - Nai" --from-project Dipa   # only the Dipa-sender stream (proxy filter)
 sandesh fetch --to "Mainline - Nai" --peek     # render the bodies WITHOUT marking read
 ```
 *Tools: `inbox`, `fetch --peek`.*
