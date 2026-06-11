@@ -49,7 +49,7 @@ def _ctx(project_id=None):
     `cli.py::_ctx`. `project_id` falls back to `$SANDESH_PROJECT` (D4)."""
     project = _resolve_project(project_id)
     store = sandesh_db.store_dir(project)
-    con = sandesh_db.connect(store)
+    con = sandesh_db.connect()
     return project, store, con
 
 
@@ -110,8 +110,8 @@ requested work. See the sandesh://usage resource for full Model-B scenarios."""
         """
         con = None
         try:
-            _project, _store, con = _ctx(project_id)
-            return sandesh_db.addressbook(con)
+            project, _store, con = _ctx(project_id)
+            return sandesh_db.addressbook(con, project)
         except (ValueError, PermissionError) as e:
             raise ToolError(str(e)) from e
         finally:

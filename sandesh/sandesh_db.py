@@ -2,23 +2,30 @@
 
 'Sandesh' (संदेश, Sanskrit/Hindi: *message / dispatch*) is a SQLite-backed maildir
 for cooperating agent/orchestrator sessions. It is **standalone** (pure Python
-stdlib — no third-party deps) and **multi-project**: every call carries a
-`project_id` that routes to that project's own store under the XDG data dir.
+stdlib — no third-party deps) and **multi-project**: all projects share ONE
+global DB (WAL) under the XDG data dir; every call carries a `project_id` that
+scopes it (enrolled in the `project` tracker table) and routes body files to
+that project's folder.
 
-  <data_home>/sandesh/projects/<project_id>/sandesh.db          (data_home = $XDG_DATA_HOME or ~/.local/share)
+  <data_home>/sandesh/sandesh.db                                 (the ONE global DB, WAL — all projects;
+                                                                  data_home = $XDG_DATA_HOME or ~/.local/share)
+  <data_home>/sandesh/projects/<project_id>/                     (per-project body folder)
   <data_home>/sandesh/projects/<project_id>/messages/msg-<id>.md
 
 `body_path` is stored as a FULL absolute path.
 
-Model — four tables:
+Model — five tables:
   address            the addressbook (durable identity; '<Orchestrator> - <Project>')
   message            the envelope (subject REQUIRED; body_path NULL = subject-only)
   message_recipient  per-message addressees (role 'to'/'cc' + per-recipient read_at)
   notifier           per-session poller liveness (pid/token/heartbeat/tombstone)
+  project            the project tracker (state: active | archived | tombstoned)
 
 Semantics:
   - To wakes / Cc silent     notify fires only on role='to'; fetch pulls to+cc.
-  - all-tracks broadcast      expands to active addresses minus the sender.
+  - all-tracks broadcast      expands to the sender's project's active addresses
+                               minus the sender (cross-project send is blocked
+                               until CR-SAN-023's grant).
   - per-recipient read         read_at lives on message_recipient, not the message.
   - keep history              nothing deleted; read_at (per recipient) is the only "seen" signal.
   - subject-only               body_path NULL → the subject IS the content.
@@ -45,7 +52,8 @@ CREATE TABLE IF NOT EXISTS address (
     display_name  TEXT,
     active        BOOLEAN NOT NULL DEFAULT TRUE,    -- soft-delete (history-safe)
     registered_at TEXT NOT NULL DEFAULT (datetime('now')),
-    registered_by TEXT
+    registered_by TEXT,
+    project       TEXT                              -- the address's <Project> part (exact-match scoping key)
 );
 CREATE TABLE IF NOT EXISTS message (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +80,14 @@ CREATE TABLE IF NOT EXISTS notifier (
     heartbeat_at TEXT NOT NULL DEFAULT (datetime('now')),
     tombstone    BOOLEAN NOT NULL DEFAULT FALSE     -- 1 = shutdown requested (cooperative eviction)
 );
+CREATE TABLE IF NOT EXISTS project (
+    project_id    TEXT PRIMARY KEY,
+    state         TEXT NOT NULL DEFAULT 'active'
+                  CHECK (state IN ('active','archived','tombstoned')),
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    archived_at   TEXT,
+    tombstoned_at TEXT
+);
 """
 
 
@@ -95,33 +111,64 @@ def store_dir(project_id):
     return os.path.join(root_dir(), "projects", project_id)
 
 
-def connect(store):
-    """Open (creating tables if absent) the Sandesh DB at <store>/sandesh.db."""
+def db_path():
+    """The global Sandesh DB file — <data_home>/sandesh/sandesh.db."""
+    return os.path.join(root_dir(), DB_FILE)
+
+
+def connect():
+    """Open (creating tables if absent) the global Sandesh DB at db_path(), WAL mode."""
     import sqlite3
-    os.makedirs(store, exist_ok=True)
-    con = sqlite3.connect(os.path.join(store, DB_FILE))
+    os.makedirs(root_dir(), exist_ok=True)
+    con = sqlite3.connect(db_path())
     con.row_factory = sqlite3.Row
     con.executescript(_SCHEMA)
+    con.execute("PRAGMA journal_mode=WAL")
     con.commit()
     return con
 
 
 def setup(project_id):
-    """Provision a project: create its store dir + messages/ and initialise the DB
-    tables. Idempotent — safe to re-run. Returns the store dir."""
-    store = store_dir(project_id)
+    """Provision a project: enroll it in the tracker (INSERT 'active' if absent;
+    no-op if already active/archived; refuse a tombstoned id) and create its
+    messages/ body dir. Idempotent — safe to re-run. Returns the store dir."""
+    store = store_dir(project_id)                 # validates project_id non-empty
+    con = connect()
+    try:
+        state = project_state(con, project_id)
+        if state == "tombstoned":
+            raise ValueError("project id retired (tombstoned) — choose a new id")
+        if state is None:
+            con.execute(
+                "INSERT INTO project (project_id, state) VALUES (?, 'active')",
+                (project_id,))
+            con.commit()
+    finally:
+        con.close()
     os.makedirs(os.path.join(store, MESSAGES_DIR), exist_ok=True)
-    connect(store).close()
     return store
 
 
-def list_projects():
-    """project_ids that have been set up (a projects/<id>/sandesh.db exists)."""
-    base = os.path.join(root_dir(), "projects")
-    if not os.path.isdir(base):
-        return []
-    return sorted(p for p in os.listdir(base)
-                  if os.path.isfile(os.path.join(base, p, DB_FILE)))
+def list_projects(include_tombstoned=False):
+    """Enrolled project_ids from the tracker, sorted — active+archived by default;
+    tombstoned ids only with include_tombstoned=True."""
+    sql = "SELECT project_id FROM project"
+    if not include_tombstoned:
+        sql += " WHERE state != 'tombstoned'"
+    sql += " ORDER BY project_id"
+    con = connect()
+    try:
+        return [row["project_id"] for row in con.execute(sql).fetchall()]
+    finally:
+        con.close()
+
+
+def project_state(con, project_id):
+    """The tracker state for a project — 'active' | 'archived' | 'tombstoned' —
+    or None if it has never been enrolled."""
+    row = con.execute(
+        "SELECT state FROM project WHERE project_id=?", (project_id,)).fetchone()
+    return row["state"] if row is not None else None
 
 
 # --------------------------------------------------------------------------- #
@@ -144,7 +191,7 @@ def validate_address(addr, project=None):
 def register(con, addr, kind=None, display_name=None, by=None, project=None):
     """Self-register an address. Rejects an already-active duplicate; reactivates a
     previously-unregistered one; otherwise inserts."""
-    validate_address(addr, project)
+    _orch, proj = validate_address(addr, project)
     row = con.execute("SELECT active FROM address WHERE address=?", (addr,)).fetchone()
     if row is not None:
         if row["active"]:
@@ -152,12 +199,13 @@ def register(con, addr, kind=None, display_name=None, by=None, project=None):
         con.execute(
             "UPDATE address SET active=TRUE, kind=COALESCE(?,kind), "
             "display_name=COALESCE(?,display_name), registered_at=datetime('now'), "
-            "registered_by=? WHERE address=?",
-            (kind, display_name, by or addr, addr))
+            "registered_by=?, project=? WHERE address=?",
+            (kind, display_name, by or addr, proj, addr))
     else:
         con.execute(
-            "INSERT INTO address (address, kind, display_name, registered_by) VALUES (?,?,?,?)",
-            (addr, kind, display_name, by or addr))
+            "INSERT INTO address (address, kind, display_name, registered_by, project) "
+            "VALUES (?,?,?,?,?)",
+            (addr, kind, display_name, by or addr, proj))
     con.commit()
 
 
@@ -172,9 +220,11 @@ def is_active(con, addr):
     return bool(r and r["active"])
 
 
-def addressbook(con):
-    """All addresses (active first), each annotated with live-notifier status."""
-    rows = con.execute("SELECT * FROM address ORDER BY active DESC, address").fetchall()
+def addressbook(con, project):
+    """The project's addresses (active first), each annotated with live-notifier status."""
+    rows = con.execute(
+        "SELECT * FROM address WHERE project=? ORDER BY active DESC, address",
+        (project,)).fetchall()
     return [{
         "address": r["address"], "kind": r["kind"],
         "active": bool(r["active"]), "registered_at": r["registered_at"],
@@ -182,21 +232,33 @@ def addressbook(con):
     } for r in rows]
 
 
-def active_addresses(con):
-    return [r["address"] for r in
-            con.execute("SELECT address FROM address WHERE active=TRUE ORDER BY address").fetchall()]
+def active_addresses(con, project):
+    """The project's active addresses, sorted — the `all-tracks` expansion pool."""
+    return [r["address"] for r in con.execute(
+        "SELECT address FROM address WHERE active=TRUE AND project=? ORDER BY address",
+        (project,)).fetchall()]
+
+
+def _address_project(con, addr):
+    """The project an address belongs to — its address-row `project` column, falling
+    back to the parsed '<Project>' part when the row is absent or unpopulated."""
+    row = con.execute("SELECT project FROM address WHERE address=?", (addr,)).fetchone()
+    if row is not None and row["project"]:
+        return row["project"]
+    _orch, proj = validate_address(addr)
+    return proj
 
 
 # --------------------------------------------------------------------------- #
 # sending
 
-def _expand_recipients(con, to_list, cc_list, sender):
-    """(recipient, role) pairs: expand `all-tracks`, drop the sender, dedup with To
-    winning over Cc, preserving To-then-Cc order."""
+def _expand_recipients(con, to_list, cc_list, sender, sender_project):
+    """(recipient, role) pairs: expand `all-tracks` (within the sender's project),
+    drop the sender, dedup with To winning over Cc, preserving To-then-Cc order."""
     def expand(lst):
         out = []
         for a in (lst or []):
-            out.extend(active_addresses(con) if a == BROADCAST else [a])
+            out.extend(active_addresses(con, sender_project) if a == BROADCAST else [a])
         return out
 
     tos = [a for a in expand(to_list) if a != sender]
@@ -221,14 +283,19 @@ def send(con, store, from_addr, to=None, cc=None, subject="", kind=None,
     if not subject:
         raise ValueError("subject is required (it is the minimal message content)")
     to, cc = (to or []), (cc or [])
+    sender_proj = project
     if validate:
-        validate_address(from_addr, project)
-        for a in to + cc:
+        _orch, sender_proj = validate_address(from_addr, project)
+        for a in to + cc:                    # complete for ALL recipients BEFORE any insert
             if a == BROADCAST:
                 continue
             if not is_active(con, a):
                 raise ValueError(f"unknown or inactive recipient: {a!r}")
-    recips = _expand_recipients(con, to, cc, from_addr)
+            if _address_project(con, a) != sender_proj:
+                raise ValueError(
+                    f"recipient {a!r} is outside project {sender_proj!r}: "
+                    f"cross-project sending is not enabled (CR-SAN-023)")
+    recips = _expand_recipients(con, to, cc, from_addr, sender_proj)
     if not recips:
         raise ValueError("no recipients (after excluding the sender)")
 
@@ -428,12 +495,17 @@ def notifier_reap_if_stale(con, recipient):
 
 
 def unregister(con, recipient, requester, project=None):
-    """Remove a participant. Auth: Mainline may remove anyone; anyone may remove self.
+    """Remove a participant. Auth: within a project, Mainline may remove anyone and
+    anyone may remove self; a foreign project's address may NOT be removed.
     Live notifier → tombstone it, return ('tombstoned', pid); else reap stale, soft-delete,
     return ('unregistered', None)."""
-    orch_req, _ = validate_address(requester, project)
+    orch_req, req_proj = validate_address(requester, project)
     if recipient != requester and orch_req != "Mainline":
         raise PermissionError("only Mainline may remove another participant")
+    if _address_project(con, recipient) != req_proj:
+        raise PermissionError(
+            f"cannot unregister {recipient!r}: it is not in project {req_proj!r} "
+            f"(cross-project removal is not allowed)")
     live = notifier_live(con, recipient)
     if live is not None:
         notifier_tombstone(con, recipient)
@@ -441,3 +513,117 @@ def unregister(con, recipient, requester, project=None):
     notifier_reap_if_stale(con, recipient)
     deactivate(con, recipient)
     return ("unregistered", None)
+
+
+# one-time legacy-store consolidation (CR-SAN-022 §S3)
+
+def _legacy_address_project(row, has_project_col):
+    """The project for a legacy address row — its `project` column when present
+    and populated, else derived from the address text exactly like the 0003
+    backfill (the suffix after the FIRST ' - ')."""
+    if has_project_col and row["project"]:
+        return row["project"]
+    addr = row["address"]
+    return addr.split(" - ", 1)[1] if " - " in addr else None
+
+
+def _consolidate_store(con, project_id, legacy_path):
+    """Import one legacy per-project store into the global DB (one transaction),
+    then rename it to `<legacy_path>.pre-global`. Returns the summary dict."""
+    import sqlite3
+    src = sqlite3.connect(legacy_path)
+    src.row_factory = sqlite3.Row
+    addresses_imported = messages_imported = 0
+    try:
+        addr_cols = {r["name"] for r in src.execute("PRAGMA table_info(address)")}
+        has_project_col = "project" in addr_cols
+        with con:                                   # one global-DB transaction per store
+            # addresses — verbatim, skipping ones the global DB already has;
+            # `project` populated from the column when present, else derived.
+            for r in src.execute("SELECT * FROM address"):
+                if con.execute("SELECT 1 FROM address WHERE address=?",
+                               (r["address"],)).fetchone() is not None:
+                    continue
+                con.execute(
+                    "INSERT INTO address (address, kind, display_name, active, "
+                    "registered_at, registered_by, project) VALUES (?,?,?,?,?,?,?)",
+                    (r["address"], r["kind"], r["display_name"], r["active"],
+                     r["registered_at"], r["registered_by"],
+                     _legacy_address_project(r, has_project_col)))
+                addresses_imported += 1
+
+            # messages — explicit columns (tolerates a legacy `status` column by
+            # never selecting it); first pass inserts with in_reply_to NULL and
+            # builds the old→new id map, second pass relinks via the map
+            # (dangling refs stay NULL). body_path is absolute → files unmoved.
+            id_map = {}
+            rows = src.execute(
+                "SELECT id, from_addr, subject, kind, in_reply_to, body_path, "
+                "created_at FROM message ORDER BY id").fetchall()
+            for r in rows:
+                cur = con.execute(
+                    "INSERT INTO message (from_addr, subject, kind, in_reply_to, "
+                    "body_path, created_at) VALUES (?,?,?,NULL,?,?)",
+                    (r["from_addr"], r["subject"], r["kind"],
+                     r["body_path"], r["created_at"]))
+                id_map[r["id"]] = cur.lastrowid
+                messages_imported += 1
+            for r in rows:
+                if r["in_reply_to"] is None:
+                    continue
+                new_parent = id_map.get(r["in_reply_to"])
+                if new_parent is not None:
+                    con.execute("UPDATE message SET in_reply_to=? WHERE id=?",
+                                (new_parent, id_map[r["id"]]))
+
+            # recipients — remapped message_id; recipient/role/read_at verbatim.
+            for r in src.execute(
+                    "SELECT message_id, recipient, role, read_at FROM message_recipient"):
+                new_mid = id_map.get(r["message_id"])
+                if new_mid is None:                  # orphan row (no such message)
+                    continue
+                con.execute(
+                    "INSERT INTO message_recipient (message_id, recipient, role, read_at) "
+                    "VALUES (?,?,?,?)",
+                    (new_mid, r["recipient"], r["role"], r["read_at"]))
+
+            # notifier rows are deliberately NOT imported — watchers re-acquire.
+
+            # enroll the project active if absent
+            if project_state(con, project_id) is None:
+                con.execute(
+                    "INSERT INTO project (project_id, state) VALUES (?, 'active')",
+                    (project_id,))
+    finally:
+        src.close()
+    os.rename(legacy_path, legacy_path + ".pre-global")  # after the committed import
+    return {"project_id": project_id,
+            "messages_imported": messages_imported,
+            "addresses_imported": addresses_imported}
+
+
+def consolidate():
+    """One-time import of legacy per-project stores into the global DB.
+
+    Scans <root_dir()>/projects/*/sandesh.db; for each legacy store: imports
+    address rows (project populated), message rows with remapped ids (reply
+    chains relinked, dangling in_reply_to → NULL, body_path verbatim — files
+    unmoved), message_recipient rows with remapped message_id, enrolls the
+    project 'active', then renames the legacy DB → sandesh.db.pre-global.
+    Idempotent: renamed stores are skipped on re-run; notifier rows are never
+    imported. Returns a list of per-project summary dicts
+    ({'project_id', 'messages_imported', 'addresses_imported'})."""
+    projects_dir = os.path.join(root_dir(), "projects")
+    summaries = []
+    if not os.path.isdir(projects_dir):
+        return summaries
+    con = connect()
+    try:
+        for project_id in sorted(os.listdir(projects_dir)):
+            legacy = os.path.join(projects_dir, project_id, DB_FILE)
+            if not os.path.isfile(legacy):           # .pre-global-only dirs: no-op
+                continue
+            summaries.append(_consolidate_store(con, project_id, legacy))
+    finally:
+        con.close()
+    return summaries

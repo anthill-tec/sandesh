@@ -602,23 +602,29 @@ class MigrateBaselineEqualsSchemaTest(unittest.TestCase):
             os.environ["XDG_DATA_HOME"] = self._orig_xdg
 
     def _store_a_path(self):
-        """DB file for a migrations-provisioned store."""
+        """DB file for a migrations-provisioned store.
+
+        Since CR-SAN-022 C3, migrate.apply() targets the GLOBAL DB at
+        <data_home>/sandesh/sandesh.db."""
         import os
         data_home_a = os.path.join(self._tmpdir, "data_a")
-        return os.path.join(data_home_a, "sandesh", "projects", "AC3Test", "sandesh.db"), data_home_a
+        return os.path.join(data_home_a, "sandesh", "sandesh.db"), data_home_a
 
     def _store_b_path(self):
-        """DB file for a sandesh_db.setup()-provisioned store."""
+        """DB file for a sandesh_db.setup()-provisioned store.
+
+        Since CR-SAN-022 C2, setup() provisions the GLOBAL DB at
+        <data_home>/sandesh/sandesh.db (not a per-project file)."""
         import os
         data_home_b = os.path.join(self._tmpdir, "data_b")
-        return os.path.join(data_home_b, "sandesh", "projects", "AC3Test", "sandesh.db"), data_home_b
+        return os.path.join(data_home_b, "sandesh", "sandesh.db"), data_home_b
 
     def _provision_via_migrations(self, data_home_a):
         """Apply 0001-baseline to a brand-new empty store."""
         import os
         os.environ["XDG_DATA_HOME"] = data_home_a
         from sandesh import migrate
-        migrate.apply("AC3Test")
+        migrate.apply()
 
     def _provision_via_setup(self, data_home_b):
         """Provision a store via sandesh_db.setup()."""
@@ -724,7 +730,7 @@ class MigrateBaselineEqualsSchemaTest(unittest.TestCase):
         import os
         os.environ["XDG_DATA_HOME"] = data_home_a
         from sandesh import migrate
-        applied, pending = migrate.status("AC3Test")
+        applied, pending = migrate.status()
         self.assertIn(
             "0001-baseline",
             applied,
@@ -740,12 +746,9 @@ class MigrateBaselineEqualsSchemaTest(unittest.TestCase):
             0,
             f"status() must report 0 pending after apply(); got pending={pending!r}",
         )
-        # Exact count: exactly 2 applied (0001-baseline + 0002-drop-message-status)
-        self.assertEqual(
-            len(applied),
-            2,
-            f"Exactly 2 migrations must be applied (0001-baseline + 0002-drop-message-status); got {applied!r}",
-        )
+        # CR-SAN-022: chain length deliberately NOT pinned — membership +
+        # zero-pending assert the contract without re-breaking on each new
+        # migration (0003+).
 
 
 # ---------------------------------------------------------------------------
@@ -787,7 +790,7 @@ class MigrateBaselineAdoptionTest(unittest.TestCase):
         from sandesh import sandesh_db
         sandesh_db.setup(project_id)
         db_path = os.path.join(
-            data_home, "sandesh", "projects", project_id, "sandesh.db"
+            data_home, "sandesh", "sandesh.db"
         )
         # Verify: _yoyo_migration must NOT exist at this point
         tables = _list_user_tables(db_path)
@@ -815,7 +818,7 @@ class MigrateBaselineAdoptionTest(unittest.TestCase):
         from sandesh import migrate
         # Must not raise
         try:
-            migrate.apply("AdoptTest")
+            migrate.apply()
         except Exception as e:
             self.fail(
                 f"apply() on a pre-yoyo store raised {type(e).__name__}: {e}\n"
@@ -836,8 +839,8 @@ class MigrateBaselineAdoptionTest(unittest.TestCase):
         db_path = self._make_pre_yoyo_store("AdoptRec", data_home)
         os.environ["XDG_DATA_HOME"] = data_home
         from sandesh import migrate
-        migrate.apply("AdoptRec")
-        applied, _pending = migrate.status("AdoptRec")
+        migrate.apply()
+        applied, _pending = migrate.status()
         self.assertIn(
             "0001-baseline",
             applied,
@@ -855,8 +858,8 @@ class MigrateBaselineAdoptionTest(unittest.TestCase):
         self._make_pre_yoyo_store("AdoptPend", data_home)
         os.environ["XDG_DATA_HOME"] = data_home
         from sandesh import migrate
-        migrate.apply("AdoptPend")
-        applied, pending = migrate.status("AdoptPend")
+        migrate.apply()
+        applied, pending = migrate.status()
         self.assertEqual(
             len(pending),
             0,
@@ -873,7 +876,7 @@ class MigrateBaselineAdoptionTest(unittest.TestCase):
         db_path = self._make_pre_yoyo_store("AdoptTables", data_home)
         os.environ["XDG_DATA_HOME"] = data_home
         from sandesh import migrate
-        migrate.apply("AdoptTables")
+        migrate.apply()
         tables = _list_user_tables(db_path)
         for t in _FOUR_TABLES:
             self.assertIn(
@@ -892,7 +895,7 @@ class MigrateBaselineAdoptionTest(unittest.TestCase):
         db_path = self._make_pre_yoyo_store("AdoptYoyoTbl", data_home)
         os.environ["XDG_DATA_HOME"] = data_home
         from sandesh import migrate
-        migrate.apply("AdoptYoyoTbl")
+        migrate.apply()
         all_tables = _list_user_tables(db_path)
         # _yoyo_migration is a yoyo internal table; list_user_tables queries
         # sqlite_master for user tables — yoyo's tables ARE user-visible.
@@ -922,14 +925,12 @@ class MigrateBaselineAdoptionTest(unittest.TestCase):
         data_home = os.path.join(self._tmpdir, "data_new_store")
         os.environ["XDG_DATA_HOME"] = data_home
 
-        # Fresh store: just create the directory; DO NOT call sandesh_db.setup()
-        store_dir = os.path.join(data_home, "sandesh", "projects", "NewStore")
-        os.makedirs(store_dir, exist_ok=True)
-
+        # Fresh store: DO NOT call sandesh_db.setup() — apply() creates the
+        # global DB from empty (CR-SAN-022 C3: the global DB is the sole target).
         from sandesh import migrate
-        migrate.apply("NewStore")
+        migrate.apply()
 
-        db_path = os.path.join(store_dir, "sandesh.db")
+        db_path = os.path.join(data_home, "sandesh", "sandesh.db")
         tables = _list_user_tables(db_path)
         for t in _FOUR_TABLES:
             self.assertIn(
@@ -939,7 +940,7 @@ class MigrateBaselineAdoptionTest(unittest.TestCase):
                 f"found: {tables!r}",
             )
 
-        applied, pending = migrate.status("NewStore")
+        applied, pending = migrate.status()
         self.assertIn(
             "0001-baseline",
             applied,
@@ -997,16 +998,18 @@ def _setup_project(project_id, data_home):
             os.environ["XDG_DATA_HOME"] = orig
 
 
-def _status_api(project_id, data_home):
-    """Call migrate.status(project_id) with XDG_DATA_HOME overridden.
+def _status_api(_project_id, data_home):
+    """Call migrate.status() (global DB) with XDG_DATA_HOME overridden.
 
+    ``_project_id`` is retained for call-site compatibility but unused —
+    CR-SAN-022 C3: status() targets the single global DB.
     Returns (applied_ids, pending_ids).
     """
     orig = os.environ.get("XDG_DATA_HOME")
     os.environ["XDG_DATA_HOME"] = data_home
     try:
         from sandesh import migrate
-        return migrate.status(project_id)
+        return migrate.status()
     finally:
         if orig is None:
             os.environ.pop("XDG_DATA_HOME", None)
@@ -1126,11 +1129,9 @@ class MigrateCliApplyTest(unittest.TestCase):
             "0002-drop-message-status", applied,
             f"After 2 applies, 0002-drop-message-status must still be applied; got {applied!r}",
         )
-        # Exact count: exactly 2 applied (0001-baseline + 0002-drop-message-status)
-        self.assertEqual(
-            len(applied), 2,
-            f"Exactly 2 migrations applied (0001-baseline + 0002-drop-message-status); got {applied!r}",
-        )
+        # CR-SAN-022: chain length deliberately NOT pinned — membership +
+        # zero-pending assert idempotency without re-breaking on each new
+        # migration (0003+).
 
 
 # ---------------------------------------------------------------------------
@@ -1233,7 +1234,7 @@ class MigrateCliStatusFlagTest(unittest.TestCase):
         try:
             from sandesh import sandesh_db, migrate
             sandesh_db.setup("StatusReadonly")
-            migrate.apply("StatusReadonly")
+            migrate.apply()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -1290,7 +1291,7 @@ class MigrateCliStatusFlagTest(unittest.TestCase):
         try:
             from sandesh import sandesh_db, migrate
             sandesh_db.setup("StatusPosBefore")
-            migrate.apply("StatusPosBefore")
+            migrate.apply()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -1310,12 +1311,12 @@ class MigrateCliStatusFlagTest(unittest.TestCase):
             f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
         )
 
-    def test_status_flag_position_project_after_subcommand(self):
-        """--project after `migrate` + --status works (SUPPRESS pattern).
+    def test_status_flag_bare_no_project_needed(self):
+        """Bare `migrate --status` (no --project anywhere) works on the global DB.
 
-        `sandesh migrate --status --project X` must exit 0 and produce status output.
-
-        RED: as above — if dispatch is missing, no output → assertion fails.
+        CR-SAN-022 C3 conversion of the former after-subcommand position test:
+        `migrate --project X` is now an argparse error (DEC-B), and --status
+        needs no project at all — it reads the one global DB.
         """
         data_home = os.path.join(self._tmpdir, "dh_sf_pos_after")
         orig = os.environ.get("XDG_DATA_HOME")
@@ -1323,23 +1324,23 @@ class MigrateCliStatusFlagTest(unittest.TestCase):
         try:
             from sandesh import sandesh_db, migrate
             sandesh_db.setup("StatusPosAfter")
-            migrate.apply("StatusPosAfter")
+            migrate.apply()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
             else:
                 os.environ["XDG_DATA_HOME"] = orig
 
-        r = _run_cli(["migrate", "--status", "--project", "StatusPosAfter"], data_home)
+        r = _run_cli(["migrate", "--status"], data_home)
         self.assertEqual(
             r.returncode, 0,
-            f"migrate --status --project X (project after subcommand) must exit 0.\n"
+            f"bare migrate --status must exit 0.\n"
             f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
         )
         combined = r.stdout + r.stderr
         self.assertIn(
             "0001-baseline", combined,
-            f"Project-after-subcommand --status must output '0001-baseline'.\n"
+            f"bare migrate --status must output '0001-baseline'.\n"
             f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
         )
 
@@ -1472,8 +1473,8 @@ class MigrateCliAllFlagTest(unittest.TestCase):
             applied, pending = _status_api(pid, data_home)
             self.assertEqual(len(pending), 0,
                              f"{pid}: still 0 pending after 2nd --all; pending={pending!r}")
-            self.assertEqual(len(applied), 2,
-                             f"{pid}: exactly 2 applied after 2nd --all (0001+0002); applied={applied!r}")
+            # CR-SAN-022: chain length deliberately NOT pinned — membership +
+            # zero-pending assert idempotency without re-breaking on 0003+.
             self.assertIn("0001-baseline", applied,
                           f"{pid}: 0001-baseline must be applied; applied={applied!r}")
             self.assertIn("0002-drop-message-status", applied,
@@ -1492,7 +1493,7 @@ class MigrateCliAllFlagTest(unittest.TestCase):
             os.environ["XDG_DATA_HOME"] = data_home
             try:
                 from sandesh import migrate
-                migrate.apply(pid)
+                migrate.apply()
             finally:
                 if orig is None:
                     os.environ.pop("XDG_DATA_HOME", None)
@@ -1505,34 +1506,29 @@ class MigrateCliAllFlagTest(unittest.TestCase):
             f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
         )
 
-    def test_status_all_mentions_both_projects(self):
-        """migrate --status --all output must mention both project ids.
+    def test_status_all_reports_global_applied_set(self):
+        """migrate --status --all output must report the global DB's applied set.
 
-        RED: --all not wired → argparse exits 2 with no output.
+        CR-SAN-022 C3 conversion: status is global (one DB) — the output no
+        longer mentions per-project ids; it must name the applied migrations.
         """
         data_home = os.path.join(self._tmpdir, "dh_status_all_output")
         self._prime_two_projects(data_home)
-        for pid in ("AllAlpha", "AllBeta"):
-            orig = os.environ.get("XDG_DATA_HOME")
-            os.environ["XDG_DATA_HOME"] = data_home
-            try:
-                from sandesh import migrate
-                migrate.apply(pid)
-            finally:
-                if orig is None:
-                    os.environ.pop("XDG_DATA_HOME", None)
-                else:
-                    os.environ["XDG_DATA_HOME"] = orig
+        orig = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = data_home
+        try:
+            from sandesh import migrate
+            migrate.apply()
+        finally:
+            if orig is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = orig
         r = _run_cli(["migrate", "--status", "--all"], data_home)
         combined = r.stdout + r.stderr
         self.assertIn(
-            "AllAlpha", combined,
-            f"--status --all must mention 'AllAlpha' in output.\n"
-            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
-        )
-        self.assertIn(
-            "AllBeta", combined,
-            f"--status --all must mention 'AllBeta' in output.\n"
+            "0001-baseline", combined,
+            f"--status --all must name '0001-baseline' as applied on the global DB.\n"
             f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
         )
 
@@ -1548,7 +1544,7 @@ class MigrateCliAllFlagTest(unittest.TestCase):
             os.environ["XDG_DATA_HOME"] = data_home
             try:
                 from sandesh import migrate
-                migrate.apply(pid)
+                migrate.apply()
             finally:
                 if orig is None:
                     os.environ.pop("XDG_DATA_HOME", None)
@@ -1580,7 +1576,7 @@ class MigrateCliAllFlagTest(unittest.TestCase):
             os.environ["XDG_DATA_HOME"] = data_home
             try:
                 from sandesh import migrate
-                migrate.apply(pid)
+                migrate.apply()
             finally:
                 if orig is None:
                     os.environ.pop("XDG_DATA_HOME", None)
@@ -1602,12 +1598,13 @@ class MigrateCliAllFlagTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class MigrateCliProjectPositionTest(unittest.TestCase):
-    """Regression: `--project` works whether placed before or after `migrate`
-    (the SUPPRESS common-parent pattern documented in CLAUDE.md gotchas).
+    """Regression: `--project` BEFORE the subcommand still parses (the SUPPRESS
+    common-parent pattern documented in CLAUDE.md gotchas) — migrate ignores
+    the value but the flag must not break other subcommands' topology.
 
-    RED: if cmd_migrate() doesn't dispatch on --status, the output assertions fail
-    even though the position parsing itself may work.  This suite verifies BOTH
-    the parsing AND the dispatch.
+    CR-SAN-022 C3: the former after-subcommand position tests were deleted as
+    obsolete — `sandesh migrate --project X` is now an argparse error (DEC-B),
+    asserted by tests/test_migrate_global.py::MigrateCliProjectFlagTest.
     """
 
     def setUp(self):
@@ -1628,7 +1625,7 @@ class MigrateCliProjectPositionTest(unittest.TestCase):
         try:
             from sandesh import sandesh_db, migrate
             sandesh_db.setup(project_id)
-            migrate.apply(project_id)
+            migrate.apply()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -1664,31 +1661,6 @@ class MigrateCliProjectPositionTest(unittest.TestCase):
         self.assertEqual(len(pending), 0,
                          f"PosBeforeState: 0 pending; got {pending!r}")
 
-    def test_project_after_subcommand_apply_exits_zero(self):
-        """sandesh migrate --project X (project after subcommand) → exit 0."""
-        data_home = os.path.join(self._tmpdir, "dh_pos_after_apply")
-        _setup_project("PosAfter", data_home)
-        r = _run_cli(["migrate", "--project", "PosAfter"], data_home)
-        self.assertEqual(
-            r.returncode, 0,
-            f"--project after subcommand apply must exit 0.\n"
-            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
-        )
-
-    def test_project_after_subcommand_apply_state(self):
-        """sandesh migrate --project X → state: 0001-baseline applied, 0 pending.
-
-        RED: cmd_migrate() doesn't dispatch apply.
-        """
-        data_home = os.path.join(self._tmpdir, "dh_pos_after_state")
-        _setup_project("PosAfterState", data_home)
-        _run_cli(["migrate", "--project", "PosAfterState"], data_home)
-        applied, pending = _status_api("PosAfterState", data_home)
-        self.assertIn("0001-baseline", applied,
-                      f"PosAfterState: 0001-baseline applied; got {applied!r}")
-        self.assertEqual(len(pending), 0,
-                         f"PosAfterState: 0 pending; got {pending!r}")
-
     def test_project_before_subcommand_status_exits_zero(self):
         """sandesh --project X migrate --status → exit 0.
 
@@ -1716,32 +1688,6 @@ class MigrateCliProjectPositionTest(unittest.TestCase):
         self.assertIn(
             "0001-baseline", combined,
             f"--project before subcommand --status must mention '0001-baseline'.\n"
-            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
-        )
-
-    def test_project_after_subcommand_status_exits_zero(self):
-        """sandesh migrate --status --project X → exit 0."""
-        data_home = os.path.join(self._tmpdir, "dh_pos_after_status_exit")
-        self._prime("PosAfterStatus", data_home)
-        r = _run_cli(["migrate", "--status", "--project", "PosAfterStatus"], data_home)
-        self.assertEqual(
-            r.returncode, 0,
-            f"--project after subcommand --status must exit 0.\n"
-            f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
-        )
-
-    def test_project_after_subcommand_status_output(self):
-        """sandesh migrate --status --project X → output contains 0001-baseline.
-
-        RED: no dispatch → no output.
-        """
-        data_home = os.path.join(self._tmpdir, "dh_pos_after_status_out")
-        self._prime("PosAfterStatusOut", data_home)
-        r = _run_cli(["migrate", "--status", "--project", "PosAfterStatusOut"], data_home)
-        combined = r.stdout + r.stderr
-        self.assertIn(
-            "0001-baseline", combined,
-            f"--project after subcommand --status must mention '0001-baseline'.\n"
             f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
         )
 
@@ -1797,28 +1743,20 @@ def _make_temp_migrations_dir(base_dir, migrations_sql):
 # 1. Fail-fast on --all
 # ---------------------------------------------------------------------------
 
-class MigrateCliAllFailFastTest(unittest.TestCase):
-    """AC10 (fail-fast): when one store errors during --all, the whole run
-    exits non-zero and stores ordered AFTER the failing one are left un-migrated.
+class MigrateCliAllCorruptDbTest(unittest.TestCase):
+    """CR-SAN-022 C3 conversion of the former per-store fail-fast suite
+    (MigrateCliAllFailFastTest): with one global DB there is no multi-store
+    iteration order to fail fast over. The surviving invariant is the error
+    path itself — a corrupt (non-SQLite) global DB must make `migrate --all`
+    exit non-zero with a diagnosable error message, never silently succeed.
 
-    Failure injection: after setup, replace the failing store's sandesh.db
-    with a garbage (non-SQLite) file so yoyo / sqlite3 raises when it tries
-    to open it. The failing store ('FailAlpha') sorts before the healthy one
-    ('FailZeta') — list_projects() returns sorted order — so the implementation
-    processes FailAlpha first, hits the error, and must abort before touching
-    FailZeta.
-
-    RED: --all is not yet implemented (cmd_migrate() returns 0 without doing
-    anything), so the fail-fast assertions fail:
-      - the non-zero exit assertion fails (cmd_migrate returns 0)
-      - the un-migrated assertion fails OR errors because --all isn't dispatched
+    Failure injection: provision the data home (setup creates the global
+    sandesh.db), then overwrite the global DB file with garbage bytes so
+    sqlite3/yoyo raises when migrate opens it.
     """
 
-    _FAIL_PROJ = "FailAlpha"   # sorts first — will error
-    _SAFE_PROJ = "FailZeta"    # sorts last — must be untouched after fail-fast
-
     def setUp(self):
-        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c3_failfast_")
+        self._tmpdir = tempfile.mkdtemp(prefix="sandesh_test_c3_corrupt_")
         self._orig_xdg = os.environ.get("XDG_DATA_HOME")
 
     def tearDown(self):
@@ -1829,138 +1767,46 @@ class MigrateCliAllFailFastTest(unittest.TestCase):
         else:
             os.environ["XDG_DATA_HOME"] = self._orig_xdg
 
-    def _data_home(self):
-        return os.path.join(self._tmpdir, "dh_failfast")
-
-    def _db_path(self, project_id, data_home):
-        return os.path.join(
-            data_home, "sandesh", "projects", project_id, "sandesh.db"
-        )
-
-    def _prime_with_failure(self):
-        """Set up two stores; corrupt FailAlpha's DB to force an error on apply."""
-        data_home = self._data_home()
-        # 1. Setup both stores (creates the directory layout and sandesh.db)
-        _setup_project(self._FAIL_PROJ, data_home)
-        _setup_project(self._SAFE_PROJ, data_home)
-
-        # 2. Verify ordering — list_projects must return FailAlpha before FailZeta
-        orig = os.environ.get("XDG_DATA_HOME")
-        os.environ["XDG_DATA_HOME"] = data_home
-        try:
-            from sandesh import sandesh_db
-            projects = sandesh_db.list_projects()
-        finally:
-            if orig is None:
-                os.environ.pop("XDG_DATA_HOME", None)
-            else:
-                os.environ["XDG_DATA_HOME"] = orig
-
-        fail_idx = projects.index(self._FAIL_PROJ) if self._FAIL_PROJ in projects else -1
-        safe_idx = projects.index(self._SAFE_PROJ) if self._SAFE_PROJ in projects else -1
-        self.assertIn(self._FAIL_PROJ, projects,
-                      f"list_projects() did not include {self._FAIL_PROJ!r}: {projects!r}")
-        self.assertIn(self._SAFE_PROJ, projects,
-                      f"list_projects() did not include {self._SAFE_PROJ!r}: {projects!r}")
-        self.assertLess(
-            fail_idx, safe_idx,
-            f"list_projects() must return {self._FAIL_PROJ!r} before {self._SAFE_PROJ!r} "
-            f"(alphabetical); got order: {projects!r}",
-        )
-
-        # 3. Corrupt FailAlpha's DB (overwrite with garbage so sqlite3.connect raises)
-        fail_db = self._db_path(self._FAIL_PROJ, data_home)
-        self.assertTrue(os.path.isfile(fail_db),
-                        f"Expected {fail_db!r} to exist after setup")
-        with open(fail_db, "wb") as fh:
+    def _prime_with_corrupt_global_db(self):
+        """Provision a data home, then corrupt the global DB file."""
+        data_home = os.path.join(self._tmpdir, "dh_corrupt")
+        _setup_project("CorruptGlobal", data_home)
+        global_db = os.path.join(data_home, "sandesh", "sandesh.db")
+        with open(global_db, "wb") as fh:
             fh.write(b"THIS IS NOT A SQLITE DATABASE -- garbage bytes to force an error")
-
         return data_home
 
-    def test_all_exits_nonzero_when_store_errors(self):
-        """--all must exit non-zero when any store fails to migrate.
-
-        RED: cmd_migrate() returns 0 without dispatching --all, so no error
-        is detected and the exit code is 0 — assertion fails.
-        """
-        data_home = self._prime_with_failure()
+    def test_all_exits_nonzero_when_global_db_corrupt(self):
+        """migrate --all must exit non-zero when the global DB is corrupt."""
+        data_home = self._prime_with_corrupt_global_db()
         r = _run_cli(["migrate", "--all"], data_home)
         self.assertNotEqual(
             r.returncode, 0,
-            "migrate --all must exit non-zero when a store errors during apply; "
+            "migrate --all must exit non-zero when the global DB errors during apply; "
             f"got returncode=0.\n"
             f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
         )
 
-    def test_all_failfast_leaves_subsequent_store_unmigrated(self):
-        """After --all aborts on FailAlpha, FailZeta must be left un-migrated
-        (0001-baseline pending, not applied).
-
-        RED: cmd_migrate() returns 0 without dispatching --all; FailZeta's
-        store is never touched by the CLI path, but the test independently
-        checks FailZeta's state via the Python API and asserts it is un-migrated.
-        Since --all is not dispatched at all, FailZeta stays un-migrated
-        BUT the exit-code assertion in the sibling test already catches the real
-        RED — this test additionally verifies the un-migrated invariant.
-        """
-        data_home = self._prime_with_failure()
-        _run_cli(["migrate", "--all"], data_home)  # expected non-zero, but we check state
-
-        # FailZeta was never migrated (either because --all aborted fail-fast,
-        # or because --all was never dispatched). Either way it must be pending.
-        applied, pending = _status_api(self._SAFE_PROJ, data_home)
-        self.assertNotIn(
-            "0001-baseline", applied,
-            f"{self._SAFE_PROJ}: 0001-baseline must NOT be applied after a fail-fast "
-            f"--all run (store after the failing one must be untouched); "
-            f"got applied={applied!r}",
-        )
-        self.assertIn(
-            "0001-baseline", pending,
-            f"{self._SAFE_PROJ}: 0001-baseline must be PENDING after fail-fast --all; "
-            f"got pending={pending!r}",
-        )
-
-    def test_all_failfast_mentions_failing_project_in_output(self):
-        """--all error output must mention the failing project id so the user
-        can diagnose which store failed.
-
-        RED: cmd_migrate() returns 0 silently; no output mentions FailAlpha.
-        """
-        data_home = self._prime_with_failure()
+    def test_all_corrupt_db_error_is_reported(self):
+        """The error output must name the failure so the user can diagnose it."""
+        data_home = self._prime_with_corrupt_global_db()
         r = _run_cli(["migrate", "--all"], data_home)
         combined = r.stdout + r.stderr
         self.assertIn(
-            self._FAIL_PROJ, combined,
-            f"--all error output must mention the failing project ('{self._FAIL_PROJ}'); "
+            "migrate failed", combined,
+            "migrate --all error output must contain a 'migrate failed' diagnostic; "
             f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
         )
 
-    def test_all_failfast_corrupt_db_is_not_silently_skipped(self):
-        """A store with a corrupt (non-SQLite) DB must cause --all to abort,
-        not silently continue as if nothing happened.
-
-        Verifies: exit non-zero AND FailZeta un-migrated in a single assertion
-        pair (belt-and-suspenders for the central fail-fast invariant).
-
-        RED: --all not dispatched → exit 0 (first assertion fails).
-        """
-        data_home = self._prime_with_failure()
-        r = _run_cli(["migrate", "--all"], data_home)
-
-        # The run must have failed
+    def test_all_corrupt_db_is_not_silently_skipped(self):
+        """Bare migrate (the --all alias path) must also fail loudly on a
+        corrupt global DB — exit non-zero, never a silent success."""
+        data_home = self._prime_with_corrupt_global_db()
+        r = _run_cli(["migrate"], data_home)
         self.assertNotEqual(
             r.returncode, 0,
-            "migrate --all must not silently succeed when a store DB is corrupt.\n"
+            "bare migrate must not silently succeed when the global DB is corrupt.\n"
             f"stdout: {r.stdout!r}\nstderr: {r.stderr!r}",
-        )
-
-        # The store that came after the failure must still be un-migrated
-        applied, pending = _status_api(self._SAFE_PROJ, data_home)
-        self.assertEqual(
-            len(applied), 0,
-            f"After fail-fast, {self._SAFE_PROJ} must have 0 applied migrations "
-            f"(it was skipped due to fail-fast); got applied={applied!r}",
         )
 
 
@@ -2044,9 +1890,9 @@ class MigrateTransactionalRollbackTest(unittest.TestCase):
 
         return mdir
 
-    def _db_path_for(self, project_id, data_home):
+    def _db_path_for(self, _project_id, data_home):
         return os.path.join(
-            data_home, "sandesh", "projects", project_id, "sandesh.db"
+            data_home, "sandesh", "sandesh.db"
         )
 
     def _table_exists(self, db_path, table_name):
@@ -2101,7 +1947,7 @@ class MigrateTransactionalRollbackTest(unittest.TestCase):
         # Prime 0001 first (via real baseline to avoid applying through the custom dir
         # where 0001 also exists — apply 0001 then run again to attempt 0002)
         r_first = _run_cli(
-            ["migrate", "--project", "TxnNonZero"],
+            ["migrate"],
             data_home,
             extra_env={"SANDESH_MIGRATIONS_DIR": custom_mdir},
         )
@@ -2137,7 +1983,7 @@ class MigrateTransactionalRollbackTest(unittest.TestCase):
 
         # Attempt apply with the custom (failing) migrations dir
         _run_cli(
-            ["migrate", "--project", "TxnAbsent"],
+            ["migrate"],
             data_home,
             extra_env={"SANDESH_MIGRATIONS_DIR": custom_mdir},
         )
@@ -2167,7 +2013,7 @@ class MigrateTransactionalRollbackTest(unittest.TestCase):
 
         # Attempt apply; expect it to fail on 0002
         _run_cli(
-            ["migrate", "--project", "TxnPrior"],
+            ["migrate"],
             data_home,
             extra_env={"SANDESH_MIGRATIONS_DIR": custom_mdir},
         )
@@ -2179,7 +2025,7 @@ class MigrateTransactionalRollbackTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import migrate
-            applied, pending = migrate.status("TxnPrior")
+            applied, pending = migrate.status()
         finally:
             if orig_mdir is None:
                 os.environ.pop("SANDESH_MIGRATIONS_DIR", None)
@@ -2225,7 +2071,7 @@ class MigrateTransactionalRollbackTest(unittest.TestCase):
         db_path = self._db_path_for("TxnIntact", data_home)
 
         _run_cli(
-            ["migrate", "--project", "TxnIntact"],
+            ["migrate"],
             data_home,
             extra_env={"SANDESH_MIGRATIONS_DIR": custom_mdir},
         )
@@ -2645,15 +2491,21 @@ class MigrateSnapshotContentTest(unittest.TestCase):
             f"columns: {list(self.tables.get('message_recipient', {}).get('columns', {}).keys())!r}",
         )
 
-    def test_exactly_four_tables_in_snapshot(self):
-        """The snapshot must describe exactly 4 tables (pre-0002).
-
-        RED: file absent (SkipTest); or wrong table count.
+    def test_exactly_five_tables_in_snapshot(self):
+        """The snapshot must describe exactly 5 tables (post-0003: the four
+        baseline tables + the `project` tracker — CR-SAN-022 C3 conversion of
+        the former exactly-4 assertion).
         """
         self.assertEqual(
-            len(self.tables), 4,
-            f"current-schema.json must have exactly 4 tables; "
+            len(self.tables), 5,
+            f"current-schema.json must have exactly 5 tables "
+            f"(address, message, message_recipient, notifier, project); "
             f"found {len(self.tables)}: {list(self.tables.keys())!r}",
+        )
+        self.assertIn(
+            "project", self.tables,
+            f"current-schema.json must include the 'project' tracker table; "
+            f"found: {list(self.tables.keys())!r}",
         )
 
 
@@ -2816,7 +2668,7 @@ class MigrateCheckCliInterfaceTest(unittest.TestCase):
 
         RED: --check is not wired into the migrate subparser → argparse exits 2.
         """
-        r = _run_cli(["migrate", "--check", "--project", "CheckIface"], self._data_home)
+        r = _run_cli(["migrate", "--check"], self._data_home)
         self.assertNotEqual(
             r.returncode, 2,
             f"migrate --check must not exit 2 (argparse unrecognised-argument error).\n"
@@ -2875,7 +2727,7 @@ class MigrateCheckPendingExitsNonZeroTest(unittest.TestCase):
         """
         data_home = os.path.join(self._tmpdir, "dh_pending_exit")
         self._make_unmigrated_store("CheckPendingExit", data_home)
-        r = _run_cli(["migrate", "--check", "--project", "CheckPendingExit"], data_home)
+        r = _run_cli(["migrate", "--check"], data_home)
         self.assertNotEqual(
             r.returncode, 0,
             f"migrate --check must exit NON-ZERO when there are pending migrations; "
@@ -2893,7 +2745,7 @@ class MigrateCheckPendingExitsNonZeroTest(unittest.TestCase):
         """
         data_home = os.path.join(self._tmpdir, "dh_pending_output")
         self._make_unmigrated_store("CheckPendingOutput", data_home)
-        r = _run_cli(["migrate", "--check", "--project", "CheckPendingOutput"], data_home)
+        r = _run_cli(["migrate", "--check"], data_home)
         combined = r.stdout + r.stderr
         self.assertIn(
             "0001-baseline", combined,
@@ -2910,7 +2762,7 @@ class MigrateCheckPendingExitsNonZeroTest(unittest.TestCase):
         data_home = os.path.join(self._tmpdir, "dh_pending_ro")
         self._make_unmigrated_store("CheckPendingRO", data_home)
         # Run --check
-        _run_cli(["migrate", "--check", "--project", "CheckPendingRO"], data_home)
+        _run_cli(["migrate", "--check"], data_home)
         # The store must still be un-migrated (0001-baseline still pending)
         applied, pending = _status_api("CheckPendingRO", data_home)
         self.assertNotIn(
@@ -2970,7 +2822,7 @@ class MigrateCheckCleanExitsZeroTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import migrate
-            migrate.apply(project_id)
+            migrate.apply()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -2990,7 +2842,7 @@ class MigrateCheckCleanExitsZeroTest(unittest.TestCase):
         """
         data_home = os.path.join(self._tmpdir, "dh_clean_exit")
         self._make_fully_migrated_store("CheckCleanExit", data_home)
-        r = _run_cli(["migrate", "--check", "--project", "CheckCleanExit"], data_home)
+        r = _run_cli(["migrate", "--check"], data_home)
         self.assertEqual(
             r.returncode, 0,
             f"migrate --check must exit 0 on a fully-migrated store with no drift; "
@@ -3005,7 +2857,7 @@ class MigrateCheckCleanExitsZeroTest(unittest.TestCase):
         """
         data_home = os.path.join(self._tmpdir, "dh_clean_output")
         self._make_fully_migrated_store("CheckCleanOutput", data_home)
-        r = _run_cli(["migrate", "--check", "--project", "CheckCleanOutput"], data_home)
+        r = _run_cli(["migrate", "--check"], data_home)
         combined = r.stdout + r.stderr
         # Must not warn about pending migrations
         self.assertNotIn(
@@ -3022,7 +2874,7 @@ class MigrateCheckCleanExitsZeroTest(unittest.TestCase):
         """
         data_home = os.path.join(self._tmpdir, "dh_clean_nodrift")
         self._make_fully_migrated_store("CheckCleanNoDrift", data_home)
-        r = _run_cli(["migrate", "--check", "--project", "CheckCleanNoDrift"], data_home)
+        r = _run_cli(["migrate", "--check"], data_home)
         combined = r.stdout + r.stderr
         self.assertNotIn(
             "drift", combined.lower(),
@@ -3040,7 +2892,7 @@ class MigrateCheckCleanExitsZeroTest(unittest.TestCase):
         # State before
         applied_before, pending_before = _status_api("CheckCleanRO", data_home)
         # Run --check
-        _run_cli(["migrate", "--check", "--project", "CheckCleanRO"], data_home)
+        _run_cli(["migrate", "--check"], data_home)
         # State after — must be identical
         applied_after, pending_after = _status_api("CheckCleanRO", data_home)
         self.assertEqual(
@@ -3080,9 +2932,9 @@ class MigrateCheckDriftWarningTest(unittest.TestCase):
         else:
             os.environ["XDG_DATA_HOME"] = self._orig_xdg
 
-    def _db_path(self, project_id, data_home):
+    def _db_path(self, _project_id, data_home):
         return os.path.join(
-            data_home, "sandesh", "projects", project_id, "sandesh.db"
+            data_home, "sandesh", "sandesh.db"
         )
 
     def _make_drifted_store(self, project_id, data_home):
@@ -3092,7 +2944,7 @@ class MigrateCheckDriftWarningTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import migrate
-            migrate.apply(project_id)
+            migrate.apply()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -3117,7 +2969,7 @@ class MigrateCheckDriftWarningTest(unittest.TestCase):
         """
         data_home = os.path.join(self._tmpdir, "dh_drift_exit")
         self._make_drifted_store("CheckDriftExit", data_home)
-        r = _run_cli(["migrate", "--check", "--project", "CheckDriftExit"], data_home)
+        r = _run_cli(["migrate", "--check"], data_home)
         self.assertEqual(
             r.returncode, 0,
             f"migrate --check must exit 0 when there is drift (drift = warning, not error); "
@@ -3137,7 +2989,7 @@ class MigrateCheckDriftWarningTest(unittest.TestCase):
         """
         data_home = os.path.join(self._tmpdir, "dh_drift_warn")
         self._make_drifted_store("CheckDriftWarn", data_home)
-        r = _run_cli(["migrate", "--check", "--project", "CheckDriftWarn"], data_home)
+        r = _run_cli(["migrate", "--check"], data_home)
         combined = r.stdout + r.stderr
         has_warning_keyword = (
             "drift" in combined.lower()
@@ -3160,7 +3012,7 @@ class MigrateCheckDriftWarningTest(unittest.TestCase):
         """
         data_home = os.path.join(self._tmpdir, "dh_drift_name")
         self._make_drifted_store("CheckDriftName", data_home)
-        r = _run_cli(["migrate", "--check", "--project", "CheckDriftName"], data_home)
+        r = _run_cli(["migrate", "--check"], data_home)
         combined = r.stdout + r.stderr
         names_drift = (
             "extra_drift_col" in combined
@@ -3184,7 +3036,7 @@ class MigrateCheckDriftWarningTest(unittest.TestCase):
         data_home = os.path.join(self._tmpdir, "dh_drift_ro")
         db_path = self._make_drifted_store("CheckDriftRO", data_home)
         # --check must not modify the DB
-        _run_cli(["migrate", "--check", "--project", "CheckDriftRO"], data_home)
+        _run_cli(["migrate", "--check"], data_home)
         # The extra column must still exist (--check is read-only)
         import sqlite3
         con = sqlite3.connect(db_path)
@@ -3208,7 +3060,7 @@ class MigrateCheckDriftWarningTest(unittest.TestCase):
         """
         data_home = os.path.join(self._tmpdir, "dh_drift_combo")
         self._make_drifted_store("CheckDriftCombo", data_home)
-        r = _run_cli(["migrate", "--check", "--project", "CheckDriftCombo"], data_home)
+        r = _run_cli(["migrate", "--check"], data_home)
         self.assertEqual(
             r.returncode, 0,
             f"Drifted + fully-migrated store: --check must exit 0 (drift is not an error); "
@@ -3267,9 +3119,8 @@ def _make_fully_migrated_store(project_id, data_home):
     try:
         from sandesh import sandesh_db, migrate
         sandesh_db.setup(project_id)
-        migrate.apply(project_id)
-        store = sandesh_db.store_dir(project_id)
-        return os.path.join(store, sandesh_db.DB_FILE)
+        migrate.apply()
+        return sandesh_db.db_path()
     finally:
         if orig is None:
             os.environ.pop("XDG_DATA_HOME", None)
@@ -3310,7 +3161,7 @@ class MigrateDumpSchemaTest(unittest.TestCase):
         data_home = os.path.join(self._tmpdir, "dh_dump_exit")
         _make_fully_migrated_store("DumpExit", data_home)
         r = _run_cli(
-            ["migrate", "--dump-schema", "--project", "DumpExit"],
+            ["migrate", "--dump-schema"],
             data_home,
         )
         self.assertEqual(
@@ -3328,7 +3179,7 @@ class MigrateDumpSchemaTest(unittest.TestCase):
         data_home = os.path.join(self._tmpdir, "dh_dump_json")
         _make_fully_migrated_store("DumpJson", data_home)
         r = _run_cli(
-            ["migrate", "--dump-schema", "--project", "DumpJson"],
+            ["migrate", "--dump-schema"],
             data_home,
         )
         self.assertEqual(
@@ -3357,7 +3208,7 @@ class MigrateDumpSchemaTest(unittest.TestCase):
         data_home = os.path.join(self._tmpdir, "dh_dump_tables_key")
         _make_fully_migrated_store("DumpTablesKey", data_home)
         r = _run_cli(
-            ["migrate", "--dump-schema", "--project", "DumpTablesKey"],
+            ["migrate", "--dump-schema"],
             data_home,
         )
         self.assertEqual(r.returncode, 0,
@@ -3379,7 +3230,7 @@ class MigrateDumpSchemaTest(unittest.TestCase):
         data_home = os.path.join(self._tmpdir, "dh_dump_equals")
         _make_fully_migrated_store("DumpEquals", data_home)
         r = _run_cli(
-            ["migrate", "--dump-schema", "--project", "DumpEquals"],
+            ["migrate", "--dump-schema"],
             data_home,
         )
         self.assertEqual(r.returncode, 0,
@@ -3407,7 +3258,7 @@ class MigrateDumpSchemaTest(unittest.TestCase):
         data_home = os.path.join(self._tmpdir, "dh_dump_four_tables")
         _make_fully_migrated_store("DumpFourTables", data_home)
         r = _run_cli(
-            ["migrate", "--dump-schema", "--project", "DumpFourTables"],
+            ["migrate", "--dump-schema"],
             data_home,
         )
         self.assertEqual(r.returncode, 0,
@@ -3435,20 +3286,20 @@ class MigrateDumpSchemaTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import migrate
-            applied_before, pending_before = migrate.status("DumpReadOnly")
+            applied_before, pending_before = migrate.status()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
             else:
                 os.environ["XDG_DATA_HOME"] = orig
 
-        _run_cli(["migrate", "--dump-schema", "--project", "DumpReadOnly"], data_home)
+        _run_cli(["migrate", "--dump-schema"], data_home)
 
         orig = os.environ.get("XDG_DATA_HOME")
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import migrate
-            applied_after, pending_after = migrate.status("DumpReadOnly")
+            applied_after, pending_after = migrate.status()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -3560,7 +3411,7 @@ class MigrateDiffStructuralTest(unittest.TestCase):
         fixture_path = self._write_current_snapshot_fixture()
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--project", "DiffAccept"],
+            ["migrate", "--diff", fixture_path],
             data_home,
         )
         # Exit code 0 or any non-2 value is acceptable; argparse exits 2 for
@@ -3582,7 +3433,7 @@ class MigrateDiffStructuralTest(unittest.TestCase):
         fixture_path = self._write_current_snapshot_fixture()
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffJsonAccept"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertNotEqual(
@@ -3617,7 +3468,7 @@ class MigrateDiffNoDifferenceTest(unittest.TestCase):
     def _run_diff_json(self, project_id, data_home, old_snapshot_path):
         """Run migrate --diff <old> --json --project X; return the CompletedProcess."""
         return _run_cli(
-            ["migrate", "--diff", old_snapshot_path, "--json", "--project", project_id],
+            ["migrate", "--diff", old_snapshot_path, "--json"],
             data_home,
         )
 
@@ -3719,7 +3570,7 @@ class MigrateDiffRemovedColumnTest(unittest.TestCase):
         self._make_old_snapshot_with_extra_col(fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffRmExit"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertEqual(
@@ -3740,7 +3591,7 @@ class MigrateDiffRemovedColumnTest(unittest.TestCase):
         self._make_old_snapshot_with_extra_col(fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffRmJson"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertEqual(r.returncode, 0,
@@ -3770,7 +3621,7 @@ class MigrateDiffRemovedColumnTest(unittest.TestCase):
         self._make_old_snapshot_with_extra_col(fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffRmNotOther"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertEqual(r.returncode, 0,
@@ -3813,7 +3664,7 @@ class MigrateDiffRemovedColumnTest(unittest.TestCase):
         self._make_old_snapshot_with_extra_col(fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffRmAddedEmpty"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertEqual(r.returncode, 0,
@@ -3868,7 +3719,7 @@ class MigrateDiffAddedColumnTest(unittest.TestCase):
         self._make_old_snapshot_missing_col(fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffAddJson"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertEqual(
@@ -3903,7 +3754,7 @@ class MigrateDiffAddedColumnTest(unittest.TestCase):
         self._make_old_snapshot_missing_col(fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffAddDesc"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertEqual(r.returncode, 0,
@@ -3952,7 +3803,7 @@ class MigrateDiffAddedColumnTest(unittest.TestCase):
         self._make_old_snapshot_missing_col(fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffAddRmEmpty"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertEqual(r.returncode, 0,
@@ -4017,7 +3868,7 @@ class MigrateDiffChangedColumnTest(unittest.TestCase):
         self._make_old_snapshot_notnull_change(fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffChgNotnull"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertEqual(
@@ -4049,7 +3900,7 @@ class MigrateDiffChangedColumnTest(unittest.TestCase):
         self._make_old_snapshot_notnull_change(fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffChgEntry"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertEqual(r.returncode, 0,
@@ -4101,7 +3952,7 @@ class MigrateDiffChangedColumnTest(unittest.TestCase):
         self._make_old_snapshot_type_change(fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffChgType"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertEqual(
@@ -4133,7 +3984,7 @@ class MigrateDiffChangedColumnTest(unittest.TestCase):
         self._make_old_snapshot_notnull_change(fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffChgOnlyOne"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertEqual(r.returncode, 0,
@@ -4190,7 +4041,7 @@ class MigrateDiffReadOnlyTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import migrate
-            applied_before, pending_before = migrate.status("DiffReadOnly")
+            applied_before, pending_before = migrate.status()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -4209,7 +4060,7 @@ class MigrateDiffReadOnlyTest(unittest.TestCase):
         _write_snapshot_fixture(fixture_path, tables_dict)
 
         _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "DiffReadOnly"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
 
@@ -4217,7 +4068,7 @@ class MigrateDiffReadOnlyTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import migrate
-            applied_after, pending_after = migrate.status("DiffReadOnly")
+            applied_after, pending_after = migrate.status()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -4278,7 +4129,7 @@ class MigrateDiffHumanReadableTest(unittest.TestCase):
         _write_snapshot_fixture(fixture_path, tables_dict)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--project", "DiffHumanRm"],
+            ["migrate", "--diff", fixture_path],
             data_home,
         )
         self.assertEqual(
@@ -4305,7 +4156,7 @@ class MigrateDiffHumanReadableTest(unittest.TestCase):
         shutil.copy2(_CURRENT_SCHEMA_PATH, fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--project", "DiffHumanExit"],
+            ["migrate", "--diff", fixture_path],
             data_home,
         )
         self.assertEqual(
@@ -4421,9 +4272,8 @@ def _apply_with_two_migrations(project_id, data_home, mig_dir):
         os.environ["SANDESH_MIGRATIONS_DIR"] = mig_dir
     try:
         sandesh_db.setup(project_id)
-        migrate.apply(project_id)
-        store = sandesh_db.store_dir(project_id)
-        return os.path.join(store, sandesh_db.DB_FILE)
+        migrate.apply()
+        return sandesh_db.db_path()
     finally:
         if orig is None:
             os.environ.pop("XDG_DATA_HOME", None)
@@ -4474,7 +4324,7 @@ class MigrateRollbackFlagAcceptedTest(unittest.TestCase):
         """
         data_home = os.path.join(self._tmpdir, "dh_rb_struct")
         _setup_project("RbStruct", data_home)
-        r = _run_cli(["migrate", "--rollback", "--project", "RbStruct"], data_home)
+        r = _run_cli(["migrate", "--rollback"], data_home)
         self.assertNotEqual(
             r.returncode,
             2,
@@ -4528,17 +4378,17 @@ class MigrateRollbackTest(unittest.TestCase):
         try:
             from sandesh import sandesh_db, migrate
             sandesh_db.setup(project_id)
-            migrate.apply(project_id)
+            migrate.apply()
             store = sandesh_db.store_dir(project_id)
-            return os.path.join(store, sandesh_db.DB_FILE), store
+            return sandesh_db.db_path(), store
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
             else:
                 os.environ["XDG_DATA_HOME"] = orig
 
-    def _rollback_via_api(self, project_id, data_home):
-        """Call migrate.rollback(project_id) directly (Python API, not CLI).
+    def _rollback_via_api(self, _project_id, data_home):
+        """Call migrate.rollback() directly (Python API, not CLI).
 
         Returns whatever rollback() returns (no return value asserted here).
         """
@@ -4546,7 +4396,7 @@ class MigrateRollbackTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import migrate
-            return migrate.rollback(project_id)
+            return migrate.rollback()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -4565,14 +4415,18 @@ class MigrateRollbackTest(unittest.TestCase):
         )
 
     def test_rollback_restores_status_column_pragma(self):
-        """After apply(0001+0002) + rollback, PRAGMA table_info(message) must
-        include 'status' again.
+        """After full apply + rolling back PAST 0002, PRAGMA table_info(message)
+        must include 'status' again.
+
+        CR-SAN-022: rollback() is one-step (most recent first), so with 0003 in
+        the chain reaching 0002's undo takes TWO rollbacks (0003, then 0002).
 
         RED:
           - 0002 absent → after apply() only 0001 is applied; no 0002 to roll
             back; rollback() may raise or be a no-op; status column state
             doesn't change (was already present from 0001); but the FOLLOWING
-            test (status shows 0002 pending) will catch the real missing piece.
+            test (status shows the rolled-back step pending) will catch the
+            real missing piece.
           - rollback() absent → AttributeError.
         """
         data_home = os.path.join(self._tmpdir, "dh_rb_pragma")
@@ -4585,11 +4439,12 @@ class MigrateRollbackTest(unittest.TestCase):
         self.assertNotIn(
             "status",
             col_names_before,
-            "Pre-condition: after applying 0001+0002, message.status must be ABSENT "
+            "Pre-condition: after applying the full chain, message.status must be ABSENT "
             f"(so the rollback test is meaningful); columns: {col_names_before!r}",
         )
 
-        # Rollback 0002
+        # Rollback 0003 (most recent), then 0002 — one step each
+        self._rollback_via_api("RbPragma", data_home)
         self._rollback_via_api("RbPragma", data_home)
 
         col_names_after = [
@@ -4603,19 +4458,37 @@ class MigrateRollbackTest(unittest.TestCase):
         )
 
     def test_rollback_makes_0002_pending_again_via_api(self):
-        """After rollback, migrate.status() must show 0002 as pending (not applied).
+        """rollback() is one-step: the FIRST undoes the most recent step (0003),
+        the SECOND makes 0002 pending again.
 
         RED: rollback() absent / 0002 absent.
         """
         data_home = os.path.join(self._tmpdir, "dh_rb_pending_api")
         self._apply_0001_and_0002("RbPendApi", data_home)
-        self._rollback_via_api("RbPendApi", data_home)
 
+        # First rollback undoes the MOST RECENT applied step (0003), not 0002.
+        self._rollback_via_api("RbPendApi", data_home)
+        applied, pending = _status_api("RbPendApi", data_home)
+        self.assertIn(
+            "0003-project-tracker",
+            pending,
+            "After one rollback, the most recent step '0003-project-tracker' must be pending;\n"
+            f"applied={applied!r}, pending={pending!r}",
+        )
+        self.assertIn(
+            "0002-drop-message-status",
+            applied,
+            "After one rollback, '0002-drop-message-status' must STILL be applied (one-step);\n"
+            f"applied={applied!r}, pending={pending!r}",
+        )
+
+        # Second rollback now undoes 0002.
+        self._rollback_via_api("RbPendApi", data_home)
         applied, pending = _status_api("RbPendApi", data_home)
         self.assertIn(
             "0002-drop-message-status",
             pending,
-            "After rollback, '0002-drop-message-status' must be in the pending set;\n"
+            "After a second rollback, '0002-drop-message-status' must be in the pending set;\n"
             f"applied={applied!r}, pending={pending!r}",
         )
 
@@ -4650,14 +4523,14 @@ class MigrateRollbackTest(unittest.TestCase):
         try:
             from sandesh import sandesh_db, migrate
             sandesh_db.setup("RbCliStatus")
-            migrate.apply("RbCliStatus")
+            migrate.apply()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
             else:
                 os.environ["XDG_DATA_HOME"] = orig
 
-        r_rb = _run_cli(["migrate", "--rollback", "--project", "RbCliStatus"], data_home)
+        r_rb = _run_cli(["migrate", "--rollback"], data_home)
         self.assertNotEqual(
             r_rb.returncode, 2,
             "migrate --rollback must not exit 2 (argparse unrecognised).\n"
@@ -4669,7 +4542,7 @@ class MigrateRollbackTest(unittest.TestCase):
             f"stdout: {r_rb.stdout!r}\nstderr: {r_rb.stderr!r}",
         )
 
-        r_st = _run_cli(["migrate", "--status", "--project", "RbCliStatus"], data_home)
+        r_st = _run_cli(["migrate", "--status"], data_home)
         combined = r_st.stdout + r_st.stderr
         self.assertIn(
             "0002-drop-message-status",
@@ -4688,7 +4561,11 @@ class MigrateRollbackTest(unittest.TestCase):
         )
 
     def test_rollback_via_cli_restores_status_column(self):
-        """CLI: migrate --rollback restores message.status column (PRAGMA check).
+        """CLI: migrate --rollback (run twice — one step each: 0003, then 0002)
+        restores message.status column (PRAGMA check).
+
+        CR-SAN-022: with 0003 in the chain, reaching 0002's undo takes two
+        one-step CLI rollbacks.
 
         RED: --rollback absent / 0002 absent.
         """
@@ -4698,16 +4575,17 @@ class MigrateRollbackTest(unittest.TestCase):
         try:
             from sandesh import sandesh_db, migrate
             sandesh_db.setup("RbCliPragma")
-            migrate.apply("RbCliPragma")
-            store = sandesh_db.store_dir("RbCliPragma")
-            db_path = os.path.join(store, sandesh_db.DB_FILE)
+            migrate.apply()
+            db_path = sandesh_db.db_path()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
             else:
                 os.environ["XDG_DATA_HOME"] = orig
 
-        _run_cli(["migrate", "--rollback", "--project", "RbCliPragma"], data_home)
+        # Two one-step rollbacks: first undoes 0003, second undoes 0002.
+        _run_cli(["migrate", "--rollback"], data_home)
+        _run_cli(["migrate", "--rollback"], data_home)
 
         col_names = [c["name"] for c in _pragma_table_info(db_path, "message")]
         self.assertIn(
@@ -4836,8 +4714,8 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         try:
             from sandesh import sandesh_db
             sandesh_db.setup("AC11New")
-            store = sandesh_db.store_dir("AC11New")
-            db_path = os.path.join(store, sandesh_db.DB_FILE)
+            # CR-SAN-022 C2: setup() provisions the GLOBAL DB, not a per-project file.
+            db_path = sandesh_db.db_path()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -4873,8 +4751,8 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         try:
             from sandesh import sandesh_db
             sandesh_db.setup("AC11ConvNew")
-            store_new = sandesh_db.store_dir("AC11ConvNew")
-            db_new = os.path.join(store_new, sandesh_db.DB_FILE)
+            # CR-SAN-022 C2: setup() provisions the GLOBAL DB, not a per-project file.
+            db_new = sandesh_db.db_path()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -4917,9 +4795,9 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
             from sandesh import sandesh_db
             sandesh_db.setup(project_id)
             store = sandesh_db.store_dir(project_id)
-            db_path = os.path.join(store, sandesh_db.DB_FILE)
+            db_path = sandesh_db.db_path()
 
-            con = sandesh_db.connect(store)
+            con = sandesh_db.connect()
             # Register addresses (validate=False avoids project_id check in send)
             sandesh_db.register(con, f"Mainline - {project_id}", kind="mainline",
                                 project=project_id)
@@ -4974,7 +4852,7 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import migrate
-            migrate.apply("AC11DataIds")
+            migrate.apply()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -5006,7 +4884,7 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import migrate
-            migrate.apply("AC11DataCols")
+            migrate.apply()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -5059,7 +4937,7 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import migrate
-            migrate.apply("AC11NoStatusCol")
+            migrate.apply()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -5092,7 +4970,7 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import migrate
-            migrate.apply("AC11Recips")
+            migrate.apply()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -5138,8 +5016,8 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import sandesh_db, migrate
-            migrate.apply("AC11Thread")
-            con = sandesh_db.connect(store)
+            migrate.apply()
+            con = sandesh_db.connect()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -5178,8 +5056,8 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import sandesh_db, migrate
-            migrate.apply("AC11Inbox")
-            con = sandesh_db.connect(store)
+            migrate.apply()
+            con = sandesh_db.connect()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -5222,8 +5100,8 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import sandesh_db, migrate
-            migrate.apply("AC11Fetch")
-            con = sandesh_db.connect(store)
+            migrate.apply()
+            con = sandesh_db.connect()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -5254,7 +5132,7 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import sandesh_db
-            con2 = sandesh_db.connect(store)
+            con2 = sandesh_db.connect()
             remaining = sandesh_db.inbox(con2, mainline, unread_only=True)
             con2.close()
         finally:
@@ -5285,8 +5163,8 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import sandesh_db, migrate
-            migrate.apply("AC11CCUnread")
-            con = sandesh_db.connect(store)
+            migrate.apply()
+            con = sandesh_db.connect()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -5305,7 +5183,7 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import sandesh_db
-            con2 = sandesh_db.connect(store)
+            con2 = sandesh_db.connect()
             track2_unread = sandesh_db.inbox(con2, track2, unread_only=True)
             con2.close()
         finally:
@@ -5390,7 +5268,7 @@ class MigrateDiffStatusRemovedTest(unittest.TestCase):
         self._write_pre0002_fixture(fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "AC9Removed"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertEqual(
@@ -5427,7 +5305,7 @@ class MigrateDiffStatusRemovedTest(unittest.TestCase):
         self._write_pre0002_fixture(fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "AC9Desc"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertEqual(r.returncode, 0,
@@ -5471,7 +5349,7 @@ class MigrateDiffStatusRemovedTest(unittest.TestCase):
         self._write_pre0002_fixture(fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "AC9Type"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertEqual(r.returncode, 0,
@@ -5493,15 +5371,13 @@ class MigrateDiffStatusRemovedTest(unittest.TestCase):
             f"message.status old type must be 'TEXT'; got {status_entry.get('old', {})!r}",
         )
 
-    def test_diff_added_and_changed_are_empty_for_pre0002_vs_post0002(self):
-        """When the old snapshot is pre-0002 (only status removed), 'added' and
-        'changed' lists must be empty (only a removal, nothing added or changed).
+    def test_diff_pre0002_vs_post0002_message_table_only_drops_status(self):
+        """When the old snapshot is pre-0002, the 'message' table's only diff
+        must be the removal of message.status — nothing added or changed on it.
 
-        RED: 0002 absent → live store still has status → diff shows no difference
-        at all → added=[], removed=[], changed=[] → 'removed' is empty → the
-        above tests fail, but this test would PASS (vacuously) at RED time.
-        This test is therefore a GREEN-guaranteeing assertion: it should pass
-        once 0002 exists AND the snapshot only changed by removing status.
+        Assertions are scoped to the 'message' table (the table 0002 is about);
+        other tables' evolution (later migrations, e.g. 0003) is deliberately
+        un-pinned so this test survives future schema growth.
         """
         data_home = os.path.join(self._tmpdir, "dh_ac9_add_chg")
         _make_fully_migrated_store("AC9AddChg", data_home)
@@ -5509,23 +5385,42 @@ class MigrateDiffStatusRemovedTest(unittest.TestCase):
         self._write_pre0002_fixture(fixture_path)
 
         r = _run_cli(
-            ["migrate", "--diff", fixture_path, "--json", "--project", "AC9AddChg"],
+            ["migrate", "--diff", fixture_path, "--json"],
             data_home,
         )
         self.assertEqual(r.returncode, 0,
                          f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
         parsed = _json.loads(r.stdout)
+        added_message = [
+            e for e in parsed.get("added", [])
+            if isinstance(e, dict) and e.get("table") == "message"
+        ]
         self.assertEqual(
-            parsed.get("added", "MISSING"),
+            added_message,
             [],
-            f"'added' must be empty when old=pre-0002 and current=post-0002; "
-            f"got: {parsed.get('added')!r}",
+            f"no 'added' entry may reference table 'message' when old=pre-0002 "
+            f"and current=post-0002; got: {added_message!r}",
         )
+        changed_message = [
+            e for e in parsed.get("changed", [])
+            if isinstance(e, dict) and e.get("table") == "message"
+        ]
         self.assertEqual(
-            parsed.get("changed", "MISSING"),
+            changed_message,
             [],
-            f"'changed' must be empty when only status was removed; "
-            f"got: {parsed.get('changed')!r}",
+            f"no 'changed' entry may reference table 'message' when only status "
+            f"was removed; got: {changed_message!r}",
+        )
+        removed_message = [
+            (e.get("table"), e.get("column"))
+            for e in parsed.get("removed", [])
+            if isinstance(e, dict) and e.get("table") == "message"
+        ]
+        self.assertEqual(
+            removed_message,
+            [("message", "status")],
+            f"'removed' must contain exactly the ('message','status') entry for "
+            f"the message table; got: {removed_message!r}",
         )
 
 

@@ -128,7 +128,7 @@ class T2InMemoryClientServerTest(unittest.IsolatedAsyncioTestCase):
 
         # Seed via the library directly (same XDG_DATA_HOME)
         store = sdb.setup(self.PROJ)
-        con = sdb.connect(store)
+        con = sdb.connect()
         try:
             sdb.register(con, self.MAINLINE, kind="mainline", project=self.PROJ)
             sdb.register(con, self.TRACK1, kind="track", project=self.PROJ)
@@ -161,7 +161,7 @@ class T2InMemoryClientServerTest(unittest.IsolatedAsyncioTestCase):
 
         # Seed addressbook via library
         store = sdb.setup(self.PROJ)
-        con = sdb.connect(store)
+        con = sdb.connect()
         try:
             sdb.register(con, self.MAINLINE, kind="mainline", project=self.PROJ)
             sdb.register(con, self.TRACK1, kind="track", project=self.PROJ)
@@ -244,7 +244,7 @@ class T2InMemoryClientServerTest(unittest.IsolatedAsyncioTestCase):
         CC_ADDR = "Track 2 - E2EMemory"
 
         store = sdb.setup(self.PROJ)
-        con = sdb.connect(store)
+        con = sdb.connect()
         try:
             sdb.register(con, TO_ADDR, kind="mainline", project=self.PROJ)
             sdb.register(con, SENDER, kind="track", project=self.PROJ)

@@ -36,7 +36,7 @@ jobs:
           export XDG_DATA_HOME="$(mktemp -d)"
           sandesh setup --project ci
           sandesh migrate --all
-          sandesh migrate --dump-schema --project ci > "$XDG_DATA_HOME/dumped.json"
+          sandesh migrate --dump-schema > "$XDG_DATA_HOME/dumped.json"
           python -c "import json,sys; a=json.load(open('$XDG_DATA_HOME/dumped.json')); b=json.load(open('sandesh/schema/current-schema.json')); sys.exit(0 if a==b else 1)"
           echo "✓ current-schema.json in sync with migrations"
 

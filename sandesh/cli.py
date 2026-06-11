@@ -33,7 +33,7 @@ def _ctx(args):
     """(project_id, store_dir, connection)."""
     project = _project(args)
     store = sdb.store_dir(project)
-    return project, store, sdb.connect(store)
+    return project, store, sdb.connect()
 
 
 def _self_addr(args, flag):
@@ -96,7 +96,7 @@ def cmd_unregister(args):
 
 def cmd_addressbook(args):
     project, _, con = _ctx(args)
-    book = sdb.addressbook(con)
+    book = sdb.addressbook(con, project)
     if not book:
         print(f"addressbook ({project}): empty")
         return 0
@@ -205,6 +205,18 @@ def cmd_migrate(args):
     return _migrate.cmd_migrate(args)
 
 
+def cmd_consolidate(args):
+    summaries = sdb.consolidate()
+    if not summaries:
+        print("nothing to consolidate — no legacy per-project stores found.")
+        return 0
+    for entry in summaries:
+        print(f"consolidated {entry['project_id']}: "
+              f"{entry['messages_imported']} message(s), "
+              f"{entry['addresses_imported']} address(es) → sandesh.db.pre-global")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 
 def build_parser():
@@ -277,8 +289,14 @@ def build_parser():
     p.add_argument("--timeout", type=int, default=_notify.DEFAULT_TIMEOUT_SECS)
     p.set_defaults(fn=cmd_notify)
 
-    p = sub.add_parser("migrate", parents=[common],
-                       help="apply/inspect schema migrations (needs the [migrate] extra)")
+    # CR-SAN-022 DEC-B: the migrate engine targets the single global DB, so the
+    # migrate subparser deliberately does NOT inherit the common --project
+    # parent (`sandesh migrate --project X` is an argparse error). The
+    # pre-subcommand `sandesh --project X migrate` form still parses via the
+    # top-level parser; migrate simply ignores the value.
+    p = sub.add_parser("migrate",
+                       help="apply/inspect schema migrations on the global DB "
+                            "(needs the [migrate] extra)")
     p.add_argument("--status", action="store_true", help="report applied vs pending (no writes)")
     p.add_argument("--rollback", action="store_true",
                    help="roll back the single most-recent applied migration")
@@ -293,6 +311,15 @@ def build_parser():
     p.add_argument("--json", dest="json", action="store_true",
                    help="machine-parseable JSON output for --diff")
     p.set_defaults(fn=cmd_migrate)
+
+    # CR-SAN-022 §S3: one-time import of legacy per-project stores into the
+    # global DB. Global like `migrate` — no --project needed (the
+    # pre-subcommand `sandesh --project X consolidate` form still parses;
+    # the value is simply ignored).
+    p = sub.add_parser("consolidate",
+                       help="import legacy per-project stores into the global DB "
+                            "(one-time; legacy files become sandesh.db.pre-global)")
+    p.set_defaults(fn=cmd_consolidate)
     return ap
 
 

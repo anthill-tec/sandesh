@@ -105,7 +105,7 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
 
     def _fresh_con(self):
         """Open a fresh DB connection to read back side-effects."""
-        return sdb.connect(self.store)
+        return sdb.connect()
 
     # ------------------------------------------------------------------
     # AC1 — list_tools includes all four mutating tools; sandesh_actioned is gone
@@ -147,7 +147,7 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
         )
         con = self._fresh_con()
         try:
-            book = sdb.addressbook(con)
+            book = sdb.addressbook(con, PROJ)
             addresses = [row["address"] for row in book]
             self.assertIn(MAINLINE, addresses)
             # Exactly one entry (we registered one)

@@ -434,5 +434,103 @@ class CommittedSnapshotFileExistsTest(unittest.TestCase):
         )
 
 
+class SnapshotSyncGatePostC3ContractTest(unittest.TestCase):
+    """CR-SAN-022 C3 contract: after C3 the yml gate must carry NO --project on its
+    migrate invocations (the engine targets the global DB; no project routing needed).
+
+    These tests FAIL at RED because the yml currently has
+    `sandesh migrate --dump-schema --project ci`.
+    GREEN edits the yml so migrate invocations carry no --project.
+    """
+
+    def setUp(self):
+        if not os.path.isfile(_WORKFLOW_PATH):
+            self.skipTest("Workflow file absent — see SnapshotSyncGateExistsTest")
+        with open(_WORKFLOW_PATH, encoding="utf-8") as fh:
+            self._text = fh.read()
+
+    def test_dump_schema_invocation_has_no_project_flag(self):
+        """publish-pypi.yml: `migrate --dump-schema` must NOT carry --project.
+
+        RED: yml currently has `migrate --dump-schema --project ci`.
+        GREEN removes --project so the invocation is `migrate --dump-schema` alone.
+        """
+        import re
+        pattern = re.compile(r"migrate\s+--dump-schema\s+--project\b")
+        match = pattern.search(self._text)
+        self.assertIsNone(
+            match,
+            "publish-pypi.yml still has `migrate --dump-schema --project <id>` — "
+            "after CR-SAN-022 C3 the migrate engine targets the global DB and "
+            "requires no --project.  GREEN must remove the --project flag from "
+            "the dump-schema invocation in the snapshot-sync gate step."
+        )
+
+    def test_migrate_invocations_have_no_project_flag(self):
+        """No migrate invocation in the yml may carry --project (in any position).
+
+        Covers both `migrate --project X` and `migrate --all --project X` patterns.
+        RED: the yml has at least one migrate call with --project.
+        """
+        import re
+        # Match any `migrate` command line that contains --project anywhere after it.
+        # We look for sandesh migrate ... --project or migrate ... --project within
+        # the same run: block line.
+        pattern = re.compile(r"(?:sandesh\s+)?migrate\b[^\n]*--project\b")
+        match = pattern.search(self._text)
+        matched_text = match.group(0) if match else "(none)"
+        self.assertIsNone(
+            match,
+            "publish-pypi.yml: found a `migrate` invocation with --project — "
+            "after CR-SAN-022 C3, migrate requires no --project (global DB). "
+            f"Matching line: {matched_text!r}"
+        )
+
+    def test_setup_project_flag_retained(self):
+        """publish-pypi.yml: `sandesh setup --project ci` must still be present.
+
+        setup() still takes a project_id; only the migrate invocations lose --project.
+        This PASSES at RED (yml has it) and must continue to PASS at GREEN.
+        """
+        self.assertIn(
+            "sandesh setup --project ci",
+            self._text,
+            "publish-pypi.yml: `sandesh setup --project ci` is missing — "
+            "setup must still provision the project; only migrate loses --project."
+        )
+
+    def test_migrate_all_still_present(self):
+        """publish-pypi.yml: `migrate --all` must still be present (the apply step).
+
+        Only --project is removed; --all stays so all migrations are applied.
+        This should PASS at RED already (yml has `migrate --all`).
+        """
+        self.assertIn(
+            "migrate --all",
+            self._text,
+            "publish-pypi.yml: `migrate --all` not found — "
+            "the gate step must still run migrate --all to apply all pending migrations."
+        )
+
+    def test_dump_schema_still_present(self):
+        """publish-pypi.yml: `migrate --dump-schema` (without --project) must be present.
+
+        After GREEN edits the yml, the bare `migrate --dump-schema` invocation
+        (no --project) must exist so the gate can capture the live schema.
+        RED: line currently reads `migrate --dump-schema --project ci` — the bare
+        form is absent; this test will fail if only the --project form exists.
+        """
+        import re
+        # Must find `migrate --dump-schema` that is NOT followed by --project.
+        pattern = re.compile(r"migrate\s+--dump-schema(?!\s+--project)\b")
+        match = pattern.search(self._text)
+        self.assertIsNotNone(
+            match,
+            "publish-pypi.yml: `migrate --dump-schema` (without --project) not found — "
+            "GREEN must change `migrate --dump-schema --project ci` to bare "
+            "`migrate --dump-schema` so the invocation works with the global-DB engine."
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

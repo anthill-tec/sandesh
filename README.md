@@ -35,13 +35,14 @@ Semantics: **To wakes / Cc silent** · `all-tracks` **broadcast** (minus sender)
 ## Layout
 
 Sandesh is a standard Python package (`sandesh/`) installed via `pyproject.toml`; the two
-console scripts (`sandesh`, `sandesh-mcp`) land on `$PATH`. Per-project runtime data lives under
-the XDG data dir:
+console scripts (`sandesh`, `sandesh-mcp`) land on `$PATH`. Runtime data lives under
+the XDG data dir — one global DB for all projects, plus a body folder per project:
 
 ```
-$XDG_DATA_HOME/sandesh/projects/<project_id>/     (default ~/.local/share/sandesh/…)
-├── sandesh.db
-└── messages/msg-<id>.md
+$XDG_DATA_HOME/sandesh/                           (default ~/.local/share/sandesh/…)
+├── sandesh.db                                    (the ONE global DB, WAL — all projects)
+└── projects/<project_id>/
+    └── messages/msg-<id>.md
 ```
 
 ## Install
@@ -149,19 +150,19 @@ latest schema. It needs the optional **`[migrate]`** extra (which pulls in `yoyo
 pip install 'sandesh-relay[migrate]'      # or: uv tool install 'sandesh-relay[migrate]'
 ```
 
-Updates **auto-migrate**: `install.sh` runs `sandesh migrate --all` on update, so every
-existing project store is migrated to the latest schema as part of the install. (If the
+Updates **auto-migrate**: `install.sh` runs `sandesh migrate --all` on update, so the
+global DB is migrated to the latest schema as part of the install. (If the
 `[migrate]` extra is absent the installer prints a notice and continues — the migration is
-simply skipped, not fatal.) A fresh install with no stores is a clean no-op.
+simply skipped, not fatal.) A fresh install with no data is a clean no-op.
 
-The flags:
+The flags (the global DB is the single target — there is no `--project` on `migrate`):
 
 ```bash
-sandesh migrate --project <id>            # apply pending migrations to one store
-sandesh migrate --all                     # apply to every project store (what the installer runs)
-sandesh migrate --status --project <id>   # show applied / pending migrations
-sandesh migrate --rollback --project <id> # roll back one migration step
-sandesh migrate --check --project <id>    # pending ⇒ non-zero (error); schema drift ⇒ warning
+sandesh migrate            # apply pending migrations
+sandesh migrate --all      # same single global target (what the installer runs)
+sandesh migrate --status   # show applied / pending migrations
+sandesh migrate --rollback # roll back one migration step
+sandesh migrate --check    # pending ⇒ non-zero (error); schema drift ⇒ warning
 ```
 
 ## MCP server

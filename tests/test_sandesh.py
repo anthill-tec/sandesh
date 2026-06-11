@@ -17,10 +17,16 @@ T1, T2, T3 = "Track 1 - Nai", "Track 2 - Nai", "Track 3 - Nai"
 class SandeshTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="sandesh-test-")
-        self.con = s.connect(self.tmp)
+        self._prev_xdg = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = self.tmp
+        self.con = s.connect()
 
     def tearDown(self):
         self.con.close()
+        if self._prev_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._prev_xdg
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
@@ -34,7 +40,7 @@ class SandeshTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = self.tmp
         try:
             store = s.setup("DemoProj")
-            self.assertTrue(os.path.isfile(os.path.join(store, s.DB_FILE)))
+            self.assertTrue(os.path.isfile(s.db_path()))   # CR-SAN-022: global DB, not <store>/sandesh.db
             self.assertTrue(os.path.isdir(os.path.join(store, s.MESSAGES_DIR)))
             self.assertIn("DemoProj", s.list_projects())
             self.assertIn(os.path.join("sandesh", "projects", "DemoProj"), store)
@@ -74,7 +80,7 @@ class SandeshTest(unittest.TestCase):
 
     def test_addressbook_lists_with_liveness(self):
         self._roster()
-        book = s.addressbook(self.con)
+        book = s.addressbook(self.con, PROJ)
         self.assertEqual({b["address"] for b in book}, {MAINLINE, T1, T2, T3})
         self.assertTrue(all(b["listening"] is False for b in book))
 

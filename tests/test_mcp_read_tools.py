@@ -70,7 +70,7 @@ class McpReadToolsTest(unittest.IsolatedAsyncioTestCase):
         # Provision the project store and seed data via the library directly.
         sdb.setup(PROJ)
         self.store = sdb.store_dir(PROJ)
-        self.con = sdb.connect(self.store)
+        self.con = sdb.connect()
 
         # Register three addresses.
         sdb.register(self.con, MAINLINE, kind="mainline")
@@ -127,7 +127,7 @@ class McpReadToolsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_addressbook_returns_same_as_direct_call(self):
         """AC2: sandesh_addressbook(project_id) == addressbook(con)."""
-        expected = sdb.addressbook(self.con)
+        expected = sdb.addressbook(self.con, PROJ)
         result = await mcp_server.mcp.call_tool("sandesh_addressbook", {"project_id": PROJ})
         actual = _data(result)
         self.assertIsInstance(actual, list)
@@ -225,7 +225,7 @@ class McpReadToolsTest(unittest.IsolatedAsyncioTestCase):
         # Re-seed: fetch consumes unread state; use mark=False on both so the direct call
         # sees the same state the tool sees.
         # Open fresh connections so neither call has seen the rows already.
-        con2 = sdb.connect(self.store)
+        con2 = sdb.connect()
         expected = sdb.fetch(con2, self.store, MAINLINE, mark=False)
         con2.close()
 
