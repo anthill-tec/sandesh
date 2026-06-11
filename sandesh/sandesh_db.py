@@ -38,6 +38,7 @@ Semantics:
 
 import os
 import re
+import shutil
 import time
 
 DB_FILE = "sandesh.db"
@@ -218,15 +219,14 @@ def admin_name(con):
     return row["name"] if row is not None else None
 
 
-def _require_admin(con, by):
+def _require_admin(con, by, action="grant/revoke cross-project access"):
     """Guard for admin-only operations: `by` must equal the stored admin name."""
     stored = admin_name(con)
     if stored is None:
         raise PermissionError(
             "no admin assigned — re-run install.sh with $SANDESH_ADMIN")
     if by != stored:
-        raise PermissionError(
-            "only the Sandesh admin may grant/revoke cross-project access")
+        raise PermissionError(f"only the Sandesh admin may {action}")
 
 
 def grant_xproj(con, project_id, by):
@@ -645,20 +645,12 @@ def _require_project_mainline(project_id, by):
             f"archive/unarchive project '{project_id}'; got {by!r}")
 
 
-def archive(con, project_id, by, *, force=False, wait_secs=None):
-    """Archive an active project (Mainline-only `by`): cooperatively evict every
-    live notifier of its addresses (notifier_tombstone → bounded wait of
-    `wait_secs`, default 2 poll cycles → notifier_reap_if_stale sweep), then set
-    state='archived' + archived_at. Deletes NOTHING else. Refuses — state
-    unchanged — if a watcher stays live past the wait, unless `force`, which
-    reaps the surviving row(s) anyway."""
-    state = project_state(con, project_id)
-    if state is None:
-        raise ValueError(f"unknown project '{project_id}'")
-    if state != "active":
-        raise ValueError(f"project '{project_id}' is not active")
-    _require_project_mainline(project_id, by)
-
+def _evict_project_notifiers(con, project_id, *, force, wait_secs, op):
+    """Cooperatively evict every live notifier of the project's addresses:
+    notifier_tombstone → bounded wait of `wait_secs` (default 2 poll cycles) →
+    notifier_reap_if_stale sweep. Raises RuntimeError (naming `op`) if a watcher
+    stays live past the wait, unless `force`, which reaps the surviving row(s)
+    anyway. Shared seam for archive() and tombstone_project()."""
     if wait_secs is None:
         wait_secs = 2 * poll_interval()
     addresses = [r["address"] for r in con.execute(
@@ -677,12 +669,29 @@ def archive(con, project_id, by, *, force=False, wait_secs=None):
     if still_live:
         if not force:
             raise RuntimeError(
-                f"cannot archive project '{project_id}': live notifier(s) for "
+                f"cannot {op} project '{project_id}': live notifier(s) for "
                 f"{still_live} ignored the tombstone past the {wait_secs}s wait "
                 f"— retry, or pass force=True to reap them anyway")
         for addr in still_live:
             con.execute("DELETE FROM notifier WHERE recipient=?", (addr,))
         con.commit()
+
+
+def archive(con, project_id, by, *, force=False, wait_secs=None):
+    """Archive an active project (Mainline-only `by`): cooperatively evict every
+    live notifier of its addresses (notifier_tombstone → bounded wait of
+    `wait_secs`, default 2 poll cycles → notifier_reap_if_stale sweep), then set
+    state='archived' + archived_at. Deletes NOTHING else. Refuses — state
+    unchanged — if a watcher stays live past the wait, unless `force`, which
+    reaps the surviving row(s) anyway."""
+    state = project_state(con, project_id)
+    if state is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    if state != "active":
+        raise ValueError(f"project '{project_id}' is not active")
+    _require_project_mainline(project_id, by)
+    _evict_project_notifiers(
+        con, project_id, force=force, wait_secs=wait_secs, op="archive")
     con.execute(
         "UPDATE project SET state='archived', archived_at=datetime('now') "
         "WHERE project_id=?", (project_id,))
@@ -702,6 +711,67 @@ def unarchive(con, project_id, by):
     con.execute(
         "UPDATE project SET state='active', archived_at=NULL WHERE project_id=?",
         (project_id,))
+    con.commit()
+
+
+def tombstone_project(con, project_id, by, *, force=False, wait_secs=None):
+    """Tombstone an ARCHIVED project (super-admin-only `by` — CR-SAN-024 §S1):
+    evict any live notifiers (the archive() seam, same `force` semantics), then
+    purge in DRIFT-2 order within ONE transaction:
+      1. compute the internal message-id set WHILE the address rows still exist
+         (internal = sender's project == project_id AND no recipient resolves
+         to another project),
+      2. delete those messages' message_recipient rows, then the message rows
+         (cross-project rows AND their recipient rows — including this
+         project's recipient rows on surviving messages — SURVIVE: PRD D6),
+      3. delete the project's notifier + address rows,
+      4. delete the projects/<id>/ folder entirely (bodies — T1
+         content-dies-with-origin),
+      5. set state='tombstoned' + tombstoned_at (the permanent marker row —
+         created_at and xproj_granted_* untouched).
+    Refusals (state/authz) change nothing."""
+    state = project_state(con, project_id)
+    if state is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    if state == "tombstoned":
+        raise ValueError(f"project '{project_id}' is already tombstoned")
+    if state == "active":
+        raise ValueError(
+            f"project '{project_id}' is active — archive it first")
+    _require_admin(con, by, action="tombstone a project")
+
+    _evict_project_notifiers(
+        con, project_id, force=force, wait_secs=wait_secs, op="tombstone")
+
+    # DRIFT-2 step 1: internal ids computed while address rows still exist.
+    internal_ids = [r["id"] for r in con.execute(
+        "SELECT m.id FROM message m"
+        "  JOIN address sa ON sa.address = m.from_addr"
+        " WHERE sa.project = ?"
+        "   AND NOT EXISTS ("
+        "       SELECT 1 FROM message_recipient mr"
+        "         JOIN address ra ON ra.address = mr.recipient"
+        "        WHERE mr.message_id = m.id AND ra.project != ?)",
+        (project_id, project_id))]
+    # Step 2: internal message_recipient rows, then internal message rows.
+    if internal_ids:
+        placeholders = ",".join("?" * len(internal_ids))
+        con.execute(
+            f"DELETE FROM message_recipient WHERE message_id IN ({placeholders})",
+            internal_ids)
+        con.execute(
+            f"DELETE FROM message WHERE id IN ({placeholders})", internal_ids)
+    # Step 3: notifier rows (resolved via address) THEN the address rows.
+    con.execute(
+        "DELETE FROM notifier WHERE recipient IN "
+        "(SELECT address FROM address WHERE project=?)", (project_id,))
+    con.execute("DELETE FROM address WHERE project=?", (project_id,))
+    # Step 4: the whole body folder (a missing dir is fine — already gone).
+    shutil.rmtree(store_dir(project_id), ignore_errors=True)
+    # Step 5: the permanent marker.
+    con.execute(
+        "UPDATE project SET state='tombstoned', tombstoned_at=datetime('now') "
+        "WHERE project_id=?", (project_id,))
     con.commit()
 
 
