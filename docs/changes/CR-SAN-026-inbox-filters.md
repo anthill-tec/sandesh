@@ -1,6 +1,6 @@
 # CR-SAN-026 — Server-side inbox/fetch filters (lib + CLI)
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-12 on develop)
 **Priority:** High (ships the headline sender-project proxy stream)
 **Depends on:** — (post-Wave-6 develop)
 **Labels:** wave-7, search, filters
