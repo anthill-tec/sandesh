@@ -53,6 +53,19 @@ def _ctx(project_id=None):
     return project, store, con
 
 
+def _derive_or_resolve(project_id, addr):
+    """The full derivation chain (CR-SAN-025 §S2): explicit `project_id` → it;
+    else `$SANDESH_PROJECT`; else the `<Project>` part of `addr` (the calling
+    address — `from_addr` for send/reply, `recipient` for fetch). An explicit
+    or env project always wins; derivation only kicks in when BOTH are absent.
+    Raises ValueError when no project can be determined (malformed `addr`)."""
+    project = project_id or os.environ.get("SANDESH_PROJECT")
+    if project:
+        return project
+    _orch, proj = sandesh_db.validate_address(addr)
+    return proj
+
+
 if _MCP_AVAILABLE:
     SANDESH_INSTRUCTIONS = """Sandesh relays messages between cooperating agent orchestrators in the Model-B
 workflow: a Mainline coordinator session plus parallel Track worker sessions that
@@ -68,7 +81,19 @@ which then calls sandesh_fetch.
 
 Lifecycle without a status field: reading a message (fetch) means "received and now
 being acted on"; sending a reply means done — reply signals completion of the
-requested work. See the sandesh://usage resource for full Model-B scenarios."""
+requested work. See the sandesh://usage resource for full Model-B scenarios.
+
+Cross-project messaging exists but is gated behind a one-time per-project admin
+grant, and granting is CLI-only — a human operator must run
+`sandesh grant --cross-project --project <Project> --by <admin>`; there is no MCP
+grant tool. If a send fails with "cross-project sending not approved for project
+...", ask a human to run that grant — do not retry.
+
+Project lifecycle: sandesh_archive is a reversible, read-only pause — while a
+project is archived its participants can neither send nor receive, and
+sandesh_unarchive restores it (messages and read state survive untouched).
+Tombstoning is a destructive, backend-admin CLI action with no MCP tool; a
+tombstoned project's traffic is hidden from all reads (inbox/fetch/thread)."""
 
 
     mcp = FastMCP("sandesh", instructions=SANDESH_INSTRUCTIONS)
@@ -123,8 +148,8 @@ requested work. See the sandesh://usage resource for full Model-B scenarios."""
     def sandesh_inbox(
         project_id: Annotated[
             str | None,
-            Field(description="The project store router. Falls back to $SANDESH_PROJECT "
-                  "if omitted."),
+            Field(description="Accepted for compatibility but unused — inbox is "
+                  "recipient-keyed on the global DB and needs no project routing."),
         ] = None,
         recipient: Annotated[
             str,
@@ -146,7 +171,7 @@ requested work. See the sandesh://usage resource for full Model-B scenarios."""
         """
         con = None
         try:
-            _project, _store, con = _ctx(project_id)
+            con = sandesh_db.connect()
             return [dict(r) for r in sandesh_db.inbox(con, recipient, unread_only)]
         except (ValueError, PermissionError) as e:
             raise ToolError(str(e)) from e
@@ -159,8 +184,8 @@ requested work. See the sandesh://usage resource for full Model-B scenarios."""
     def sandesh_fetch(
         project_id: Annotated[
             str | None,
-            Field(description="The project store router. Falls back to $SANDESH_PROJECT "
-                  "if omitted."),
+            Field(description="The project store router. Falls back to $SANDESH_PROJECT, "
+                  "else derived from recipient's <Project> part."),
         ] = None,
         recipient: Annotated[
             str,
@@ -184,7 +209,7 @@ requested work. See the sandesh://usage resource for full Model-B scenarios."""
         """
         con = None
         try:
-            _project, store, con = _ctx(project_id)
+            _project, store, con = _ctx(_derive_or_resolve(project_id, recipient))
             return sandesh_db.fetch(con, store, recipient, mark)
         except (ValueError, PermissionError) as e:
             raise ToolError(str(e)) from e
@@ -197,8 +222,8 @@ requested work. See the sandesh://usage resource for full Model-B scenarios."""
     def sandesh_thread(
         project_id: Annotated[
             str | None,
-            Field(description="The project store router. Falls back to $SANDESH_PROJECT "
-                  "if omitted."),
+            Field(description="Accepted for compatibility but unused — thread is "
+                  "msg_id-keyed on the global DB and needs no project routing."),
         ] = None,
         msg_id: Annotated[
             int,
@@ -214,7 +239,7 @@ requested work. See the sandesh://usage resource for full Model-B scenarios."""
         """
         con = None
         try:
-            _project, _store, con = _ctx(project_id)
+            con = sandesh_db.connect()
             return [dict(r) for r in sandesh_db.thread(con, msg_id)]
         except (ValueError, PermissionError) as e:
             raise ToolError(str(e)) from e
@@ -319,7 +344,8 @@ requested work. See the sandesh://usage resource for full Model-B scenarios."""
         project_id: Annotated[
             str | None,
             Field(description="The project store router; routes to that project's isolated "
-                  "store. Falls back to $SANDESH_PROJECT if omitted."),
+                  "store. Falls back to $SANDESH_PROJECT, else derived from from_addr's "
+                  "<Project> part."),
         ] = None,
         to: Annotated[
             list[str] | None,
@@ -359,7 +385,7 @@ requested work. See the sandesh://usage resource for full Model-B scenarios."""
         """
         con = None
         try:
-            project, store, con = _ctx(project_id)
+            project, store, con = _ctx(_derive_or_resolve(project_id, from_addr))
             if isinstance(to, str):
                 to = [to]
             if isinstance(cc, str):
@@ -388,8 +414,8 @@ requested work. See the sandesh://usage resource for full Model-B scenarios."""
         ],
         project_id: Annotated[
             str | None,
-            Field(description="The project store router. Falls back to $SANDESH_PROJECT "
-                  "if omitted."),
+            Field(description="The project store router. Falls back to $SANDESH_PROJECT, "
+                  "else derived from from_addr's <Project> part."),
         ] = None,
         subject: Annotated[
             str | None,
@@ -413,7 +439,7 @@ requested work. See the sandesh://usage resource for full Model-B scenarios."""
         """
         con = None
         try:
-            project, store, con = _ctx(project_id)
+            project, store, con = _ctx(_derive_or_resolve(project_id, from_addr))
             return sandesh_db.reply(
                 con, store, parent_id, from_addr, subject, body_text, project=project)
         except (ValueError, PermissionError) as e:

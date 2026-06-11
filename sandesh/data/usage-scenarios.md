@@ -215,6 +215,39 @@ sandesh send --from "Track 3 - Nai" --to "Track 1 - Nai" --cc "Mainline - Nai" -
 ```
 *Tools: `send` (Track-to-Track + cc).*
 
+### S11 — Cross-project messaging (gated) and closing a collaboration (archive)
+Two projects sometimes cooperate — e.g. `Mainline - P1` needs something from the
+parallel project `P2`:
+```
+sandesh send --from "Mainline - P1" --to "Mainline - P2" --kind request \
+   --subject "P2: publish the shared schema snapshot before our Wave closes"
+```
+Cross-project sends are **gated behind a one-time per-project admin grant** on the
+*sender's* project. Without it the send is rejected:
+```
+cross-project sending not approved for project 'P1' — ask the Sandesh admin
+```
+The remediation is **human-only and CLI-only** — there is no MCP grant tool, so an
+agent that hits this error must ask a human operator to run:
+```
+sandesh grant --cross-project --project P1 --by <admin>
+```
+Once granted, sends to the other project flow normally (and the grant persists —
+it's one-time per project, revocable with `sandesh revoke`).
+
+When the collaboration ends, the project's own Mainline **archives** it — a
+reversible, read-only pause: while archived, the project's participants can
+neither send nor receive, but every message and read flag survives untouched.
+```
+sandesh_archive(project_id="P2", by="Mainline - P2")     # or: sandesh archive --project P2 --by "Mainline - P2"
+sandesh_unarchive(project_id="P2", by="Mainline - P2")   # resume later — state restored
+```
+**Tombstone is different**: a destructive, backend-admin CLI action (never an MCP
+tool) — a tombstoned project's traffic is **hidden from all reads** (`inbox`,
+`fetch`, `thread`), so a vanished conversation usually means the counterpart
+project was tombstoned, not lost mail.
+*Tools: `send` (cross-project), `sandesh_archive`, `sandesh_unarchive`; CLI-only: `sandesh grant`/`revoke`.*
+
 ---
 
 ## 5. Tool-by-tool reference (for the docstrings)
