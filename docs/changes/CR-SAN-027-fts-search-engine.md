@@ -18,22 +18,32 @@ migration gate?") needs full-text search. SQLite FTS5 is compiled into all targe
 
 ### §S1 — the index (migration + parity + dump exclusion)
 - Migration `0005-message-fts.sql` (+ rollback dropping it): `CREATE VIRTUAL TABLE IF NOT EXISTS
-  message_fts USING fts5(subject, body, ...)` — content-mode (external-content vs plain) settled at
-  gap-analysis from real FTS5 trade-offs; rows keyed to `message.id` (rowid).
+  message_fts USING fts5(subject, body)` — a **PLAIN** fts5 table (settled empirically: contentless
+  returns NULL snippets and cannot DELETE; external-content is impossible since bodies live on disk,
+  not in a table column); rows keyed to `message.id` via rowid. The text copies it stores are derived
+  data; the canonical body stays the file.
 - `_SCHEMA` parity (fresh DBs create it; harmless re-run).
 - **The schema dump EXCLUDES the FTS family**: `_live_shape`'s enumeration skips `message_fts` and its
-  `message_fts_*` shadow tables (a derived, regenerable index — not schema-of-record). Committed
-  snapshot regenerated; the CI snapshot-sync gate stays green.
+  `message_fts_*` shadow tables (a derived, regenerable index — not schema-of-record): add the
+  `message_fts` prefix to the exclusion tuple (`migrate.py` `_live_shape`, the `startswith` predicate).
+  **The committed snapshot is therefore UNCHANGED** — equality must still hold (no regeneration).
 
 ### §S2 — index maintenance
 - `send` inserts into the index (subject + body text; subject-only messages index the subject with
-  empty body) in the same transaction as the message row.
+  empty body) before its single end-of-call commit — atomic with the message row.
+- **Tombstone destroys the text copies (PRD-global-store T1 interplay):** `tombstone_project`
+  additionally deletes the `message_fts` rows of ALL messages **sent by** the tombstoned project —
+  internal AND surviving cross-project ones (their body files die with the folder; the index must not
+  retain the text). Computed by sender before the address-row purge (the DRIFT-2 ordering). Messages
+  the project merely RECEIVED keep their index rows (the content belongs to the sender's project).
 - `reindex(con)` (lib): rebuilds the whole index from `message` rows + body files (missing body file →
   subject-only entry); idempotent; returns the indexed count.
 - `sandesh reindex` CLI verb (plumbing, no args beyond the global pattern); `install.sh` runs it once
   after the consolidate block.
 - **Lazy auto-reindex:** `search` detects an EMPTY index alongside a non-empty `message` table →
-  triggers one `reindex` before querying (never when the index is merely sparse).
+  triggers one `reindex` before querying (never when the index is merely sparse). `sandesh_db` stays
+  print-free: the search RESULT carries a `reindexed: True` flag when the heuristic fired; the CLI
+  prints a one-line notice on seeing it.
 
 ### §S3 — `search()`
 - `search(con, recipient, query, *, limit=20, offset=0, sender_project=None)`:
@@ -45,7 +55,8 @@ migration gate?") needs full-text search. SQLite FTS5 is compiled into all targe
     `offset` for paging);
   - read-state untouched; the tombstone hidden-traffic rule applies; `sender_project` composes;
   - FTS5 query syntax passes through (`"quoted phrases"`, `AND`/`OR`/`NOT`); a malformed query
-    raises a clean `ValueError` (no sqlite traceback).
+    (sqlite raises `OperationalError`, e.g. `unterminated string`) is caught and re-raised as a clean
+    `ValueError` carrying the sqlite message.
 - `sandesh search <query> --to <addr> [--from-project P] [--limit N] [--offset N]` CLI verb rendering
   hits with snippets + a `total` line.
 
@@ -77,14 +88,16 @@ migration gate?") needs full-text search. SQLite FTS5 is compiled into all targe
       hits; matches from a tombstoned project's senders never surface.
 - [ ] **AC8 — malformed query.** An invalid FTS5 expression (e.g. unbalanced quote) raises
       `ValueError` containing a readable message; the CLI exits 1 with `[sandesh]` prefix.
+- [ ] **AC9 — tombstone destroys index text.** After `tombstone_project(P2)`: zero `message_fts` rows
+      remain for messages sent by P2 addresses (internal AND the surviving cross-project ones —
+      asserted raw); index rows for messages P2 merely received (sent by live projects) remain; a
+      search by a live recipient for a term that appeared only in P2-sent bodies returns no hits.
 
 ## Estimated size
 Medium-large — one migration + dump-exclusion change, send/searching/reindex lib work, two CLI verbs,
 and the widest AC matrix of the wave.
 
 ## Risks / open questions
-- FTS5 content-mode choice (external-content saves space but complicates reindex/rollback; plain
-  duplicates text) — settle at gap-analysis from upstream docs, don't assume.
 - bm25 ordering assertions must use a deliberately skewed corpus to be deterministic.
 
 ## Non-goals
