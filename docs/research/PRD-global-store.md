@@ -222,8 +222,10 @@ sandesh/
   agent-reachable surface (MCP, or even the post-install CLI) can create or change the admin. **Stored form
   APPROVED (owner, 2026-06-11):** one reserved global row (`kind='admin'`, fixed project-less name), value
   supplied at install via `$SANDESH_ADMIN` or an interactive prompt; **re-running install must NOT silently
-  re-assign it**; `tombstone --by` must match it. (Exact row placement — address table vs dedicated row —
-  verified mechanically at CR-SAN-024 gap-analysis.)
+  re-assign it**; `tombstone --by` must match it. **Placement RESOLVED (CR-SAN-023 gap-analysis DEC-C,
+  user-decided 2026-06-11): a dedicated single-row `admin` table** (the admin is not an address — never
+  messageable/registrable/listable); storage + installer assignment ship in CR-SAN-023 (DEC-D pulled the
+  assignment forward), CR-SAN-024 consumes it.
 
 **Resolved by owner review (2026-06-11):** single global DB over hybrid (easier migration, simpler connection
 code); global tracker with tombstoned state; **archive vs tombstone split** (archive = blocks sends, full reads,
