@@ -86,7 +86,14 @@ CREATE TABLE IF NOT EXISTS project (
                   CHECK (state IN ('active','archived','tombstoned')),
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     archived_at   TEXT,
-    tombstoned_at TEXT
+    tombstoned_at TEXT,
+    xproj_granted_at TEXT,                              -- NULL = cross-project not granted
+    xproj_granted_by TEXT                               -- admin identity that granted it
+);
+CREATE TABLE IF NOT EXISTS admin (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),     -- single row, enforced
+    name        TEXT NOT NULL,
+    assigned_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
 
