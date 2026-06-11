@@ -1,6 +1,6 @@
 # PRD — Inbox filters & search (FTS5)
 
-**Status:** DRAFT (design contract — owner review pending; CRs spin from this after agreement)
+**Status:** AGREED (design contract — owner resolved O1–O3, 2026-06-12)
 **Owner:** Mainline - Sandesh
 **Wave:** Wave 7 (inbox search)
 **Related:** PRD-global-store (D1 single DB, D6 read rules, D11 cross-project grant — the feature that
@@ -66,17 +66,22 @@ EXCLUDES the FTS family** (`message_fts` + its `message_fts_*` shadow tables): `
 enumeration adds the exclusion — the index is regenerable, not schema-of-record (same reasoning as
 excluding `_yoyo_migration`). `_SCHEMA` parity: fresh DBs create it too (`IF NOT EXISTS`).
 
-**D4 — Indexing at send; explicit reindex for history.** `send` inserts (subject + body text — it has
-both in memory; subject-only messages index the subject with empty body). **`sandesh reindex`** (CLI,
-plumbing verb) rebuilds the whole index from `message` rows + body files (legacy/consolidated stores;
-also the repair path). `install.sh` runs `reindex` once after `consolidate` (idempotent). Search
-results gracefully note nothing for unindexed history until reindexed.
+**D4 — Indexing at send; reindex via BOTH explicit and lazy paths.** `send` inserts (subject + body
+text — it has both in memory; subject-only messages index the subject with empty body).
+**`sandesh reindex`** (CLI, plumbing verb) rebuilds the whole index from `message` rows + body files
+(legacy/consolidated stores; also the repair path), and `install.sh` runs it once after `consolidate`
+(idempotent). ADDITIONALLY, **`search` lazily auto-reindexes** when it detects an empty index over a
+non-empty `message` table (the friendlier path for stores that predate the index and never re-ran the
+installer) — a one-shot heuristic, logged, never run when the index is merely sparse.
 
-**D5 — `search()` semantics.** `search(con, recipient, query, *, limit=20, sender_project=None, ...)`:
-FTS5 `MATCH` over the caller's own mail (to + cc, read or unread), bm25 order, each hit = the message
-envelope + a `snippet()` highlight; read-state NEVER touched; D6 hidden-traffic rule applied; the D1
-filters composable where they make sense (at minimum `sender_project`). Query syntax = FTS5's (document
-that `"quoted phrases"`, `AND`/`OR`/`NOT` work; malformed queries → a clean error, not a traceback).
+**D5 — `search()` semantics.** `search(con, recipient, query, *, limit=20, offset=0,
+sender_project=None, ...)`: FTS5 `MATCH` over **the caller's own mail ONLY (to + cc, read or unread) —
+for ALL orchestrators including Mainline; no crossing inbox boundaries**. bm25 order; each hit = the
+message envelope + a `snippet()` highlight; the result carries the **total match count** and is
+**paginated** (`limit` default 20 + `offset`; agents page until offset+page ≥ total). Read-state NEVER
+touched; the hidden-tombstoned-traffic rule applies; the D1 filters composable where they make sense
+(at minimum `sender_project`). Query syntax = FTS5's (document that `"quoted phrases"`,
+`AND`/`OR`/`NOT` work; malformed queries → a clean error, not a traceback).
 
 **D6 — Surfaces.** Lib: the extended `inbox`/`fetch` + `search` + `reindex`. CLI: `sandesh inbox`
 gains `--from-project` (headline) / `--from` / `--kind` / `--since` / `--until` / `--subject`;
@@ -101,15 +106,7 @@ sandesh/
   install.sh       reindex after consolidate
 ```
 
-## 5. CR breakdown (provisional — numbers allocated at queue time, after this PRD is agreed)
-
-| CR | Scope | Depends on |
-|---|---|---|
-| **CR-A (filters)** | D1/D2: `inbox`/`fetch` filter params (lib) + CLI flags; tombstone-rule composition proven; `sender_project` resolution via the existing seam. No FTS. | — |
-| **CR-B (FTS engine)** | D3/D4/D5: `0005` migration + `_SCHEMA` parity + shape-dump exclusion + snapshot; send-time indexing; `search()`/`reindex()` lib + CLI verbs; installer hook. | CR-A |
-| **CR-C (MCP surface)** | D6: `sandesh_inbox` filter params; `sandesh_search` tool (11→12); docs/instructions/usage; stdio E2E (filtered inbox + search round-trip). | CR-B |
-
-## 6. Verification (informs the CRs' ACs)
+## 5. Verification (informs the CRs' ACs)
 
 Deterministic lib/CLI tests per filter + composition (incl. tombstone-hidden + archived-visible
 contrast); FTS: indexing at send, subject-only messages, reindex over a consolidated fixture, bm25
@@ -117,11 +114,10 @@ ordering sanity, snippet presence, malformed-query error, read-state untouched; 
 green WITH the FTS exclusion (dump == committed snapshot on a fully-migrated store); MCP in-process +
 one stdio E2E scenario; the `projects`/`migrate` regression suites untouched.
 
-## 7. Open questions (owner to rule at PRD review)
+## 6. Open questions — RESOLVED by owner review (2026-06-12)
 
-- **O1 — reindex trigger**: explicit CLI + installer hook only (lean), or also lazy auto-reindex when
-  `search` detects an empty index over a non-empty store (one extra heuristic, friendlier)?
-- **O2 — search scope for Mainline**: strictly own-mailbox (lean — matches inbox semantics), or may a
-  project's Mainline search its project's whole traffic (all recipients in its project)?
-- **O3 — result cap/pagination**: fixed `limit` param only (lean, default 20), or cursor pagination
-  (overkill at agent scale)?
+- **O1 — reindex trigger: BOTH** — explicit CLI + installer hook AND the lazy empty-index
+  auto-reindex (folded into D4).
+- **O2 — search scope: own mailbox for ALL orchestrators** — no crossing inbox boundaries, Mainline
+  included (folded into D5).
+- **O3 — results: PAGINATED** — `limit` (default 20) + `offset` + total match count (folded into D5).
