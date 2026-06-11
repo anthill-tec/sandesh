@@ -229,6 +229,8 @@ def cmd_grant(args):
         # that capture stderr still see the error text.
         print(f"[sandesh] {exc}", file=sys.stderr)
         sys.exit(1)
+    finally:
+        con.close()
     print(f"cross-project sending granted to project {args.project!r} (by {args.by})")
     return 0
 
@@ -240,6 +242,8 @@ def cmd_revoke(args):
     except (ValueError, PermissionError) as exc:
         print(f"[sandesh] {exc}", file=sys.stderr)
         sys.exit(1)
+    finally:
+        con.close()
     print(f"cross-project sending revoked for project {args.project!r} (by {args.by})")
     return 0
 
@@ -262,6 +266,8 @@ def cmd_archive(args):
     except (ValueError, PermissionError, RuntimeError) as exc:
         print(f"[sandesh] {exc}", file=sys.stderr)
         sys.exit(1)
+    finally:
+        con.close()
     print(f"archived project {args.project!r} (by {args.by}) — "
           f"read-only until unarchived; nothing deleted")
     return 0
@@ -279,6 +285,8 @@ def cmd_unarchive(args):
     except (ValueError, PermissionError, RuntimeError) as exc:
         print(f"[sandesh] {exc}", file=sys.stderr)
         sys.exit(1)
+    finally:
+        con.close()
     print(f"unarchived project {args.project!r} (by {args.by}) — active again")
     return 0
 
@@ -311,6 +319,8 @@ def cmd_tombstone(args):
     except (ValueError, PermissionError, RuntimeError) as exc:
         print(f"[sandesh] {exc}", file=sys.stderr)
         sys.exit(1)
+    finally:
+        con.close()
     print(f"tombstoned project {args.project!r} (by {args.by}) — internal history "
           f"purged, body folder deleted; cross-project envelopes survive")
     return 0
