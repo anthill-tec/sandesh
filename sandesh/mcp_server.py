@@ -423,6 +423,81 @@ requested work. See the sandesh://usage resource for full Model-B scenarios."""
                 con.close()
 
 
+    @mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=False))
+    def sandesh_archive(
+        project_id: Annotated[
+            str,
+            Field(description="The project to archive. REQUIRED — lifecycle ops act on "
+                  "an explicit target only; there is NO $SANDESH_PROJECT fallback."),
+        ],
+        by: Annotated[
+            str,
+            Field(description="The address performing the archive — must be the "
+                  "project's own Mainline ('Mainline - <Project>')."),
+        ],
+        force: Annotated[
+            bool,
+            Field(description="When True, forcibly reap a notifier watcher that does "
+                  "not exit cooperatively within the eviction wait; when False "
+                  "(default) such a watcher makes the archive refuse, unchanged."),
+        ] = False,
+    ) -> str:
+        """Archive a project — a REVERSIBLE soft-close (sandesh_unarchive restores it).
+
+        While archived, the project's participants can neither send nor receive
+        messages; existing messages and read state stay intact (nothing is deleted).
+        Live `notify` watchers are cooperatively evicted first, so this call may
+        block for up to ~2× the poll interval while they exit; a non-cooperating
+        watcher makes the call refuse (state unchanged) unless force=True, which
+        reaps it anyway.
+
+        Called by the project's own Mainline (`by`) when the project's work is done
+        or paused. Returns a confirmation naming the project and its new state.
+        """
+        con = sandesh_db.connect()
+        try:
+            sandesh_db.archive(con, project_id, by, force=force)
+            return f"project '{project_id}' is now archived"
+        except (ValueError, PermissionError, RuntimeError) as e:
+            raise ToolError(str(e)) from e
+        finally:
+            con.close()
+
+
+    @mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=False))
+    def sandesh_unarchive(
+        project_id: Annotated[
+            str,
+            Field(description="The archived project to reactivate. REQUIRED — lifecycle "
+                  "ops act on an explicit target only; there is NO $SANDESH_PROJECT "
+                  "fallback."),
+        ],
+        by: Annotated[
+            str,
+            Field(description="The address performing the unarchive — must be the "
+                  "project's own Mainline ('Mainline - <Project>')."),
+        ],
+    ) -> str:
+        """Unarchive a project — reverses sandesh_archive (state back to 'active').
+
+        The project's participants can send and receive again; messages, read state
+        and any cross-project grant survive the archive→unarchive round-trip
+        untouched. Participants should relaunch their `notify` watchers (archive
+        evicted them).
+
+        Called by the project's own Mainline (`by`) to resume a paused project.
+        Returns a confirmation naming the project and its new state.
+        """
+        con = sandesh_db.connect()
+        try:
+            sandesh_db.unarchive(con, project_id, by)
+            return f"project '{project_id}' is now active"
+        except (ValueError, PermissionError, RuntimeError) as e:
+            raise ToolError(str(e)) from e
+        finally:
+            con.close()
+
+
     _USAGE_FALLBACK = """# Sandesh — Usage (fallback)
 
     The usage-scenarios document could not be located on disk. Sandesh is a Model-B
