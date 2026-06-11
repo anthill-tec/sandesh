@@ -28,6 +28,9 @@ Single source of truth for change requests. Pick the next `PENDING` CR by phase 
 | [CR-SAN-023](CR-SAN-023-cross-project-messaging.md) | **Cross-project messaging + access control**: grant-gated sends (D11 — **admin grant per project, inherited, revoked project-wide**; CLI-only `grant`/`revoke`); **super-admin: dedicated single-row `admin` table + install-time `$SANDESH_ADMIN` assignment**; tracker-state errors on send/register; `projects` listing w/ grant flag; cross-project To-wakes/Cc-silent | Wave 6 | COMPLETED | CR-SAN-022 | 2026-06-11 |
 | [CR-SAN-024](CR-SAN-024-project-lifecycle-verbs.md) | **Lifecycle verbs**: `archive` (read-only, nothing deleted, watchers evicted, reversible) / `unarchive` / `tombstone` (archived-only; selective internal purge + body-folder delete; hidden from reads incl. wake, `thread` warns); confirm/`--yes`/`--dry-run` previews/`--force`; super-admin (from 023) sole tombstoner; grant/revoke require active, transitions never touch grant columns | Wave 6 | COMPLETED | CR-SAN-023 | 2026-06-11 |
 | [CR-SAN-025](CR-SAN-025-mcp-surface-update.md) | **MCP surface**: `sandesh_archive`+`sandesh_unarchive` (9→11 tools; tombstone/grant/revoke NEVER exposed), `project_id` optional where derivable, docstrings/`instructions`/usage + stdio E2E cross-project scenario | Wave 6 | COMPLETED | CR-SAN-024 | 2026-06-12 |
+| [CR-SAN-026](CR-SAN-026-inbox-filters.md) | **Inbox/fetch filters (lib+CLI)**: composable server-side filters — `sender_project` headline (the cross-project proxy stream) + sender/kind/since/until/subject; filtered fetch marks only the subset; wake path untouched | Wave 7 | PENDING | — | — |
+| [CR-SAN-027](CR-SAN-027-fts-search-engine.md) | **FTS5 search engine**: `0005-message-fts` (+dump excludes the FTS family), send-time indexing, `search()` (bm25+snippets, own-mailbox, paginated limit/offset/total) + `reindex` (explicit CLI + installer + lazy empty-index path) | Wave 7 | PENDING | CR-SAN-026 | — |
+| [CR-SAN-028](CR-SAN-028-mcp-search-surface.md) | **MCP search surface**: `sandesh_inbox`/`sandesh_fetch` filter params + `sandesh_search` (11→12 tools, readOnlyHint, paginated; NO reindex tool), instructions/usage, stdio E2E | Wave 7 | PENDING | CR-SAN-027 | — |
 
 Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distribution](../research/PRD-distribution.md) · [PRD-pi-extension](../research/PRD-pi-extension.md) · [PRD-db-migration](../research/PRD-db-migration.md) · [PRD-global-store](../research/PRD-global-store.md)
 Design notes: [DN-windows-notifier](../research/DN-windows-notifier.md) · [DN-pi-wake](../research/DN-pi-wake.md) (Pi wake spike — RESOLVED: native injection)
@@ -46,10 +49,11 @@ Strict order CR-SAN-022 → 023 → 024 → 025 — **Wave 6 COMPLETE (2026-06-1
 super-admin storage + installer assignment moved from CR-SAN-024 into CR-SAN-023 at 023's gap-analysis
 (023 is the first reader; 024 consumes the row); `migrate --project` removal (022) was a user-approved
 breaking change.
-Upcoming (wave-close SCRUM, 2026-06-12): **Wave 7 — inbox filters & FTS5 search** (design contract:
-[PRD-inbox-search](../research/PRD-inbox-search.md), DRAFT pending owner review; CRs allocated after
-agreement) → **Wave 8 — Pi extension catch-up** to the global-store world (design opens at its wave) →
-then the **v0.2.0 release + local reinstall**.
+Wave 7 (inbox search) — design contract: **[PRD-inbox-search](../research/PRD-inbox-search.md)**
+(AGREED 2026-06-12): sender-project proxy stream + composable filters, FTS5 keyword search (own-mailbox,
+paginated), explicit+lazy reindex; semantic search assessed/deferred. Strict order CR-SAN-026 → 027 →
+028 (breakdown user-approved 2026-06-12). Then: **Wave 8 — Pi extension catch-up** (design opens at its
+wave) → the **v0.2.0 release + local reinstall**.
 
 ## Canonical statuses
 `PENDING` / `IN_PROGRESS` / `COMPLETED` / `SUPERSEDED` / `DEFERRED`
