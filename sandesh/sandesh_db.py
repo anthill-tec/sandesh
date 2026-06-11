@@ -508,3 +508,117 @@ def unregister(con, recipient, requester, project=None):
     notifier_reap_if_stale(con, recipient)
     deactivate(con, recipient)
     return ("unregistered", None)
+
+
+# one-time legacy-store consolidation (CR-SAN-022 §S3)
+
+def _legacy_address_project(row, has_project_col):
+    """The project for a legacy address row — its `project` column when present
+    and populated, else derived from the address text exactly like the 0003
+    backfill (the suffix after the FIRST ' - ')."""
+    if has_project_col and row["project"]:
+        return row["project"]
+    addr = row["address"]
+    return addr.split(" - ", 1)[1] if " - " in addr else None
+
+
+def _consolidate_store(con, project_id, legacy_path):
+    """Import one legacy per-project store into the global DB (one transaction),
+    then rename it to `<legacy_path>.pre-global`. Returns the summary dict."""
+    import sqlite3
+    src = sqlite3.connect(legacy_path)
+    src.row_factory = sqlite3.Row
+    addresses_imported = messages_imported = 0
+    try:
+        addr_cols = {r["name"] for r in src.execute("PRAGMA table_info(address)")}
+        has_project_col = "project" in addr_cols
+        with con:                                   # one global-DB transaction per store
+            # addresses — verbatim, skipping ones the global DB already has;
+            # `project` populated from the column when present, else derived.
+            for r in src.execute("SELECT * FROM address"):
+                if con.execute("SELECT 1 FROM address WHERE address=?",
+                               (r["address"],)).fetchone() is not None:
+                    continue
+                con.execute(
+                    "INSERT INTO address (address, kind, display_name, active, "
+                    "registered_at, registered_by, project) VALUES (?,?,?,?,?,?,?)",
+                    (r["address"], r["kind"], r["display_name"], r["active"],
+                     r["registered_at"], r["registered_by"],
+                     _legacy_address_project(r, has_project_col)))
+                addresses_imported += 1
+
+            # messages — explicit columns (tolerates a legacy `status` column by
+            # never selecting it); first pass inserts with in_reply_to NULL and
+            # builds the old→new id map, second pass relinks via the map
+            # (dangling refs stay NULL). body_path is absolute → files unmoved.
+            id_map = {}
+            rows = src.execute(
+                "SELECT id, from_addr, subject, kind, in_reply_to, body_path, "
+                "created_at FROM message ORDER BY id").fetchall()
+            for r in rows:
+                cur = con.execute(
+                    "INSERT INTO message (from_addr, subject, kind, in_reply_to, "
+                    "body_path, created_at) VALUES (?,?,?,NULL,?,?)",
+                    (r["from_addr"], r["subject"], r["kind"],
+                     r["body_path"], r["created_at"]))
+                id_map[r["id"]] = cur.lastrowid
+                messages_imported += 1
+            for r in rows:
+                if r["in_reply_to"] is None:
+                    continue
+                new_parent = id_map.get(r["in_reply_to"])
+                if new_parent is not None:
+                    con.execute("UPDATE message SET in_reply_to=? WHERE id=?",
+                                (new_parent, id_map[r["id"]]))
+
+            # recipients — remapped message_id; recipient/role/read_at verbatim.
+            for r in src.execute(
+                    "SELECT message_id, recipient, role, read_at FROM message_recipient"):
+                new_mid = id_map.get(r["message_id"])
+                if new_mid is None:                  # orphan row (no such message)
+                    continue
+                con.execute(
+                    "INSERT INTO message_recipient (message_id, recipient, role, read_at) "
+                    "VALUES (?,?,?,?)",
+                    (new_mid, r["recipient"], r["role"], r["read_at"]))
+
+            # notifier rows are deliberately NOT imported — watchers re-acquire.
+
+            # enroll the project active if absent
+            if project_state(con, project_id) is None:
+                con.execute(
+                    "INSERT INTO project (project_id, state) VALUES (?, 'active')",
+                    (project_id,))
+    finally:
+        src.close()
+    os.rename(legacy_path, legacy_path + ".pre-global")  # after the committed import
+    return {"project_id": project_id,
+            "messages_imported": messages_imported,
+            "addresses_imported": addresses_imported}
+
+
+def consolidate():
+    """One-time import of legacy per-project stores into the global DB.
+
+    Scans <root_dir()>/projects/*/sandesh.db; for each legacy store: imports
+    address rows (project populated), message rows with remapped ids (reply
+    chains relinked, dangling in_reply_to → NULL, body_path verbatim — files
+    unmoved), message_recipient rows with remapped message_id, enrolls the
+    project 'active', then renames the legacy DB → sandesh.db.pre-global.
+    Idempotent: renamed stores are skipped on re-run; notifier rows are never
+    imported. Returns a list of per-project summary dicts
+    ({'project_id', 'messages_imported', 'addresses_imported'})."""
+    projects_dir = os.path.join(root_dir(), "projects")
+    summaries = []
+    if not os.path.isdir(projects_dir):
+        return summaries
+    con = connect()
+    try:
+        for project_id in sorted(os.listdir(projects_dir)):
+            legacy = os.path.join(projects_dir, project_id, DB_FILE)
+            if not os.path.isfile(legacy):           # .pre-global-only dirs: no-op
+                continue
+            summaries.append(_consolidate_store(con, project_id, legacy))
+    finally:
+        con.close()
+    return summaries

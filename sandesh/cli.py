@@ -205,6 +205,18 @@ def cmd_migrate(args):
     return _migrate.cmd_migrate(args)
 
 
+def cmd_consolidate(args):
+    summaries = sdb.consolidate()
+    if not summaries:
+        print("nothing to consolidate — no legacy per-project stores found.")
+        return 0
+    for entry in summaries:
+        print(f"consolidated {entry['project_id']}: "
+              f"{entry['messages_imported']} message(s), "
+              f"{entry['addresses_imported']} address(es) → sandesh.db.pre-global")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 
 def build_parser():
@@ -299,6 +311,15 @@ def build_parser():
     p.add_argument("--json", dest="json", action="store_true",
                    help="machine-parseable JSON output for --diff")
     p.set_defaults(fn=cmd_migrate)
+
+    # CR-SAN-022 §S3: one-time import of legacy per-project stores into the
+    # global DB. Global like `migrate` — no --project needed (the
+    # pre-subcommand `sandesh --project X consolidate` form still parses;
+    # the value is simply ignored).
+    p = sub.add_parser("consolidate",
+                       help="import legacy per-project stores into the global DB "
+                            "(one-time; legacy files become sandesh.db.pre-global)")
+    p.set_defaults(fn=cmd_consolidate)
     return ap
 
 

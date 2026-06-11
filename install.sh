@@ -74,6 +74,14 @@ else
   echo "        install it and migrate later:  pip install 'sandesh-relay[migrate]' && sandesh migrate --all"
 fi
 
+# --- consolidate legacy per-project stores (CR-SAN-022 §S3) -------------------
+# Stdlib-only (no [migrate] extra needed), hence OUTSIDE the yoyo probe above.
+# Idempotent: imported stores become sandesh.db.pre-global and are skipped on
+# re-run. Under `set -e` a genuine consolidation error ABORTS the install.
+echo "consolidating legacy per-project stores into the global DB …"
+"$VENV/bin/sandesh" consolidate
+echo "✓ consolidation done"
+
 echo "✓ venv      → $VENV"
 echo "✓ launcher  → $BINDIR/sandesh"
 if [ -x "$VENV/bin/sandesh-mcp" ]; then
