@@ -82,6 +82,20 @@ echo "consolidating legacy per-project stores into the global DB …"
 "$VENV/bin/sandesh" consolidate
 echo "✓ consolidation done"
 
+# CR-SAN-023 §S2b: assign the Sandesh admin from $SANDESH_ADMIN via an inline
+# venv-python call — there is deliberately NO CLI verb for this (PRD O3: no
+# agent-reachable surface may create/change the admin). The name is read from
+# the environment INSIDE python (quote/injection-safe — never interpolated into
+# the code), and the different-name re-assign refusal (ValueError) is caught
+# there and surfaced as a notice, NOT an install abort (the python exits 0, so
+# `set -e` lets the install COMPLETE). Unset → skip with a notice.
+if [ -n "${SANDESH_ADMIN:-}" ]; then
+  SANDESH_ADMIN="$SANDESH_ADMIN" "$VENV/bin/python" -c $'import os\nfrom sandesh import sandesh_db as s\ncon = s.connect()\ntry:\n    s.assign_admin(con, os.environ["SANDESH_ADMIN"])\n    print("✓ Sandesh admin assigned: %r" % s.admin_name(con))\nexcept ValueError as exc:\n    print("  NOTE: %s — keeping %r (install continues)" % (exc, s.admin_name(con)))\nfinally:\n    con.close()'
+else
+  echo "  NOTE: \$SANDESH_ADMIN not set — admin assignment skipped."
+  echo "        assign later by re-running:  SANDESH_ADMIN=<name> ./install.sh"
+fi
+
 echo "✓ venv      → $VENV"
 echo "✓ launcher  → $BINDIR/sandesh"
 if [ -x "$VENV/bin/sandesh-mcp" ]; then

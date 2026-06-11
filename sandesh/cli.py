@@ -205,6 +205,30 @@ def cmd_migrate(args):
     return _migrate.cmd_migrate(args)
 
 
+def cmd_grant(args):
+    con = sdb.connect()
+    try:
+        sdb.grant_xproj(con, args.project, by=args.by)
+    except (ValueError, PermissionError) as exc:
+        # Print explicitly (not via SystemExit's message) so in-process callers
+        # that capture stderr still see the error text.
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"cross-project sending granted to project {args.project!r} (by {args.by})")
+    return 0
+
+
+def cmd_revoke(args):
+    con = sdb.connect()
+    try:
+        sdb.revoke_xproj(con, args.project, by=args.by)
+    except (ValueError, PermissionError) as exc:
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"cross-project sending revoked for project {args.project!r} (by {args.by})")
+    return 0
+
+
 def cmd_consolidate(args):
     summaries = sdb.consolidate()
     if not summaries:
@@ -320,6 +344,27 @@ def build_parser():
                        help="import legacy per-project stores into the global DB "
                             "(one-time; legacy files become sandesh.db.pre-global)")
     p.set_defaults(fn=cmd_consolidate)
+
+    # CR-SAN-023 §S2: admin-only verbs (CLI-only — never MCP). Like migrate/
+    # consolidate, these deliberately do NOT inherit parents=[common]: their
+    # --project is the TARGET project of the grant, not routing context (avoids
+    # the dual-position SUPPRESS trap). There is NO `sandesh admin` subcommand —
+    # admin assignment happens only in install.sh via $SANDESH_ADMIN (PRD O3).
+    p = sub.add_parser("grant",
+                       help="grant cross-project sending to a project (Sandesh admin only)")
+    p.add_argument("--cross-project", dest="cross_project", action="store_true",
+                   required=True, help="the cross-project access grant (required)")
+    p.add_argument("--project", required=True, help="the TARGET project receiving the grant")
+    p.add_argument("--by", required=True, help="your admin name (must match the stored admin)")
+    p.set_defaults(fn=cmd_grant)
+
+    p = sub.add_parser("revoke",
+                       help="revoke a project's cross-project grant (Sandesh admin only)")
+    p.add_argument("--cross-project", dest="cross_project", action="store_true",
+                   required=True, help="the cross-project access grant (required)")
+    p.add_argument("--project", required=True, help="the TARGET project losing the grant")
+    p.add_argument("--by", required=True, help="your admin name (must match the stored admin)")
+    p.set_defaults(fn=cmd_revoke)
     return ap
 
 

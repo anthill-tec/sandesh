@@ -179,6 +179,74 @@ def project_state(con, project_id):
 
 
 # --------------------------------------------------------------------------- #
+# admin + cross-project grant (CR-SAN-023 §S2 / §S2b)
+
+def assign_admin(con, name):
+    """Assign the Sandesh admin (single row, id=1 — enforced by the schema CHECK).
+    Empty table → INSERT; same name already stored → no-op; a DIFFERENT stored
+    name → ValueError (never silently re-assigns). Install-time only — there is
+    deliberately NO CLI/MCP surface for this (PRD O3)."""
+    row = con.execute("SELECT name FROM admin WHERE id=1").fetchone()
+    if row is not None:
+        if row["name"] == name:
+            return
+        raise ValueError("admin already assigned — refusing to silently re-assign")
+    con.execute("INSERT INTO admin (id, name) VALUES (1, ?)", (name,))
+    con.commit()
+
+
+def admin_name(con):
+    """The assigned Sandesh admin name (str), or None when no admin is assigned."""
+    row = con.execute("SELECT name FROM admin WHERE id=1").fetchone()
+    return row["name"] if row is not None else None
+
+
+def _require_admin(con, by):
+    """Guard for admin-only operations: `by` must equal the stored admin name."""
+    stored = admin_name(con)
+    if stored is None:
+        raise PermissionError(
+            "no admin assigned — re-run install.sh with $SANDESH_ADMIN")
+    if by != stored:
+        raise PermissionError(
+            "only the Sandesh admin may grant/revoke cross-project access")
+
+
+def grant_xproj(con, project_id, by):
+    """Grant cross-project sending to a project (admin-only). Idempotent: an
+    already-granted project keeps its original timestamp + grantor."""
+    _require_admin(con, by)
+    if project_state(con, project_id) is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    con.execute(
+        "UPDATE project SET xproj_granted_at=datetime('now'), xproj_granted_by=? "
+        "WHERE project_id=? AND xproj_granted_at IS NULL",
+        (by, project_id))
+    con.commit()
+
+
+def revoke_xproj(con, project_id, by):
+    """Revoke a project's cross-project grant (admin-only, project-wide — every
+    participant loses access at once). Idempotent on an ungranted project."""
+    _require_admin(con, by)
+    if project_state(con, project_id) is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    con.execute(
+        "UPDATE project SET xproj_granted_at=NULL, xproj_granted_by=NULL "
+        "WHERE project_id=?",
+        (project_id,))
+    con.commit()
+
+
+def xproj_granted(con, project_id):
+    """True iff the project currently holds the cross-project grant."""
+    row = con.execute(
+        "SELECT xproj_granted_at FROM project WHERE project_id=?",
+        (project_id,)).fetchone()
+    return bool(row is not None and row["xproj_granted_at"] is not None)
+
+
+# --------------------------------------------------------------------------- #
 # address book
 
 def validate_address(addr, project=None):
