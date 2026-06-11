@@ -110,8 +110,8 @@ requested work. See the sandesh://usage resource for full Model-B scenarios."""
         """
         con = None
         try:
-            _project, _store, con = _ctx(project_id)
-            return sandesh_db.addressbook(con)
+            project, _store, con = _ctx(project_id)
+            return sandesh_db.addressbook(con, project)
         except (ValueError, PermissionError) as e:
             raise ToolError(str(e)) from e
         finally:

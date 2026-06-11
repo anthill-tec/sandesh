@@ -215,9 +215,11 @@ def is_active(con, addr):
     return bool(r and r["active"])
 
 
-def addressbook(con):
-    """All addresses (active first), each annotated with live-notifier status."""
-    rows = con.execute("SELECT * FROM address ORDER BY active DESC, address").fetchall()
+def addressbook(con, project):
+    """The project's addresses (active first), each annotated with live-notifier status."""
+    rows = con.execute(
+        "SELECT * FROM address WHERE project=? ORDER BY active DESC, address",
+        (project,)).fetchall()
     return [{
         "address": r["address"], "kind": r["kind"],
         "active": bool(r["active"]), "registered_at": r["registered_at"],
@@ -225,21 +227,33 @@ def addressbook(con):
     } for r in rows]
 
 
-def active_addresses(con):
-    return [r["address"] for r in
-            con.execute("SELECT address FROM address WHERE active=TRUE ORDER BY address").fetchall()]
+def active_addresses(con, project):
+    """The project's active addresses, sorted — the `all-tracks` expansion pool."""
+    return [r["address"] for r in con.execute(
+        "SELECT address FROM address WHERE active=TRUE AND project=? ORDER BY address",
+        (project,)).fetchall()]
+
+
+def _address_project(con, addr):
+    """The project an address belongs to — its address-row `project` column, falling
+    back to the parsed '<Project>' part when the row is absent or unpopulated."""
+    row = con.execute("SELECT project FROM address WHERE address=?", (addr,)).fetchone()
+    if row is not None and row["project"]:
+        return row["project"]
+    _orch, proj = validate_address(addr)
+    return proj
 
 
 # --------------------------------------------------------------------------- #
 # sending
 
-def _expand_recipients(con, to_list, cc_list, sender):
-    """(recipient, role) pairs: expand `all-tracks`, drop the sender, dedup with To
-    winning over Cc, preserving To-then-Cc order."""
+def _expand_recipients(con, to_list, cc_list, sender, sender_project):
+    """(recipient, role) pairs: expand `all-tracks` (within the sender's project),
+    drop the sender, dedup with To winning over Cc, preserving To-then-Cc order."""
     def expand(lst):
         out = []
         for a in (lst or []):
-            out.extend(active_addresses(con) if a == BROADCAST else [a])
+            out.extend(active_addresses(con, sender_project) if a == BROADCAST else [a])
         return out
 
     tos = [a for a in expand(to_list) if a != sender]
@@ -264,14 +278,19 @@ def send(con, store, from_addr, to=None, cc=None, subject="", kind=None,
     if not subject:
         raise ValueError("subject is required (it is the minimal message content)")
     to, cc = (to or []), (cc or [])
+    sender_proj = project
     if validate:
-        validate_address(from_addr, project)
-        for a in to + cc:
+        _orch, sender_proj = validate_address(from_addr, project)
+        for a in to + cc:                    # complete for ALL recipients BEFORE any insert
             if a == BROADCAST:
                 continue
             if not is_active(con, a):
                 raise ValueError(f"unknown or inactive recipient: {a!r}")
-    recips = _expand_recipients(con, to, cc, from_addr)
+            if _address_project(con, a) != sender_proj:
+                raise ValueError(
+                    f"recipient {a!r} is outside project {sender_proj!r}: "
+                    f"cross-project sending is not enabled (CR-SAN-023)")
+    recips = _expand_recipients(con, to, cc, from_addr, sender_proj)
     if not recips:
         raise ValueError("no recipients (after excluding the sender)")
 
@@ -471,12 +490,17 @@ def notifier_reap_if_stale(con, recipient):
 
 
 def unregister(con, recipient, requester, project=None):
-    """Remove a participant. Auth: Mainline may remove anyone; anyone may remove self.
+    """Remove a participant. Auth: within a project, Mainline may remove anyone and
+    anyone may remove self; a foreign project's address may NOT be removed.
     Live notifier → tombstone it, return ('tombstoned', pid); else reap stale, soft-delete,
     return ('unregistered', None)."""
-    orch_req, _ = validate_address(requester, project)
+    orch_req, req_proj = validate_address(requester, project)
     if recipient != requester and orch_req != "Mainline":
         raise PermissionError("only Mainline may remove another participant")
+    if _address_project(con, recipient) != req_proj:
+        raise PermissionError(
+            f"cannot unregister {recipient!r}: it is not in project {req_proj!r} "
+            f"(cross-project removal is not allowed)")
     live = notifier_live(con, recipient)
     if live is not None:
         notifier_tombstone(con, recipient)

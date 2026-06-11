@@ -80,7 +80,7 @@ class SandeshTest(unittest.TestCase):
 
     def test_addressbook_lists_with_liveness(self):
         self._roster()
-        book = s.addressbook(self.con)
+        book = s.addressbook(self.con, PROJ)
         self.assertEqual({b["address"] for b in book}, {MAINLINE, T1, T2, T3})
         self.assertTrue(all(b["listening"] is False for b in book))
 

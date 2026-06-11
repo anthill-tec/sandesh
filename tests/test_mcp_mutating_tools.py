@@ -147,7 +147,7 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
         )
         con = self._fresh_con()
         try:
-            book = sdb.addressbook(con)
+            book = sdb.addressbook(con, PROJ)
             addresses = [row["address"] for row in book]
             self.assertIn(MAINLINE, addresses)
             # Exactly one entry (we registered one)

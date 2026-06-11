@@ -96,7 +96,7 @@ def cmd_unregister(args):
 
 def cmd_addressbook(args):
     project, _, con = _ctx(args)
-    book = sdb.addressbook(con)
+    book = sdb.addressbook(con, project)
     if not book:
         print(f"addressbook ({project}): empty")
         return 0

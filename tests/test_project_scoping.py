@@ -590,14 +590,6 @@ class AddressbookFilteredTest(_TempDataHome):
     only one argument (con).
     """
 
-    def test_addressbook_with_project_raises_typeerror_today(self):
-        """addressbook(con, 'P1') raises TypeError with the current no-project API.
-
-        This documents the WANT-OF-IMPLEMENTATION. GREEN must add the project param.
-        """
-        with self.assertRaises(TypeError):
-            s.addressbook(self.con, self.P1)
-
     def test_addressbook_p1_returns_only_p1_addresses(self):
         """addressbook(con, 'P1') must return exactly the two P1 addresses.
 

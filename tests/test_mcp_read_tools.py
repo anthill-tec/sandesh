@@ -127,7 +127,7 @@ class McpReadToolsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_addressbook_returns_same_as_direct_call(self):
         """AC2: sandesh_addressbook(project_id) == addressbook(con)."""
-        expected = sdb.addressbook(self.con)
+        expected = sdb.addressbook(self.con, PROJ)
         result = await mcp_server.mcp.call_tool("sandesh_addressbook", {"project_id": PROJ})
         actual = _data(result)
         self.assertIsInstance(actual, list)
