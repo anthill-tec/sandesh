@@ -33,18 +33,7 @@ import uuid
 
 from sandesh import sandesh_db as sdb
 
-POLL_FLOOR_SECS = 3
-DEFAULT_POLL_SECS = 10
 DEFAULT_TIMEOUT_SECS = 14400  # 4h
-
-
-def _interval():
-    raw = os.environ.get("SANDESH_POLL_SECONDS")
-    try:
-        val = int(raw) if raw else DEFAULT_POLL_SECS
-    except ValueError:
-        val = DEFAULT_POLL_SECS
-    return max(val, POLL_FLOOR_SECS)
 
 
 def run(project_id, address, timeout=DEFAULT_TIMEOUT_SECS):
@@ -70,7 +59,7 @@ def run(project_id, address, timeout=DEFAULT_TIMEOUT_SECS):
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(128 + signal.SIGTERM))
     signal.signal(signal.SIGINT, lambda *_: sys.exit(128 + signal.SIGINT))
 
-    interval = _interval()
+    interval = sdb.poll_interval()
     print(f"[notify] watching {address} in {project_id}  (pid {pid}, interval {interval}s, timeout {timeout}s)")
     deadline = time.monotonic() + timeout
     polls = 0

@@ -38,10 +38,13 @@ Semantics:
 
 import os
 import re
+import time
 
 DB_FILE = "sandesh.db"
 MESSAGES_DIR = "messages"
 HEARTBEAT_STALE_SECS = 60             # a notifier silent longer than this is presumed dead
+POLL_FLOOR_SECS = 3                   # minimum watcher poll interval (seconds)
+DEFAULT_POLL_SECS = 10                # default watcher poll interval (seconds)
 BROADCAST = "all-tracks"              # reserved recipient keyword (not a real address)
 
 ADDRESS_RE = re.compile(r"^(?P<orch>Mainline|Track \d+) - (?P<proj>[A-Za-z][A-Za-z0-9_]*)$")
@@ -228,10 +231,10 @@ def _require_admin(con, by):
 
 def grant_xproj(con, project_id, by):
     """Grant cross-project sending to a project (admin-only). Idempotent: an
-    already-granted project keeps its original timestamp + grantor."""
+    already-granted project keeps its original timestamp + grantor. Requires an
+    ACTIVE project (CR-SAN-024 DEC-E): archived/tombstoned are refused."""
     _require_admin(con, by)
-    if project_state(con, project_id) is None:
-        raise ValueError(f"unknown project '{project_id}'")
+    _require_active_project(con, project_id)
     con.execute(
         "UPDATE project SET xproj_granted_at=datetime('now'), xproj_granted_by=? "
         "WHERE project_id=? AND xproj_granted_at IS NULL",
@@ -241,10 +244,11 @@ def grant_xproj(con, project_id, by):
 
 def revoke_xproj(con, project_id, by):
     """Revoke a project's cross-project grant (admin-only, project-wide — every
-    participant loses access at once). Idempotent on an ungranted project."""
+    participant loses access at once). Idempotent on an ungranted project.
+    Requires an ACTIVE project (CR-SAN-024 DEC-E): lifecycle transitions never
+    touch the grant columns, so archived/tombstoned revokes are refused."""
     _require_admin(con, by)
-    if project_state(con, project_id) is None:
-        raise ValueError(f"unknown project '{project_id}'")
+    _require_active_project(con, project_id)
     con.execute(
         "UPDATE project SET xproj_granted_at=NULL, xproj_granted_by=NULL "
         "WHERE project_id=?",
@@ -607,6 +611,98 @@ def unregister(con, recipient, requester, project=None):
     notifier_reap_if_stale(con, recipient)
     deactivate(con, recipient)
     return ("unregistered", None)
+
+
+# project lifecycle (CR-SAN-024 §S1)
+
+def poll_interval():
+    """The watcher poll interval in seconds — $SANDESH_POLL_SECONDS, default 10
+    (also the fallback for a non-numeric value), floor 3. Canonical home
+    (CR-SAN-024 DRIFT-5): `notify` delegates here, and `archive()`'s bounded
+    eviction wait defaults to 2 poll cycles."""
+    raw = os.environ.get("SANDESH_POLL_SECONDS")
+    try:
+        val = int(raw) if raw else DEFAULT_POLL_SECS
+    except ValueError:
+        val = DEFAULT_POLL_SECS
+    return max(val, POLL_FLOOR_SECS)
+
+
+def _require_project_mainline(project_id, by):
+    """Authz guard for archive/unarchive (CR-SAN-024 §S3): `by` must validate
+    to ('Mainline', project_id) — format-based, honor-system (the `unregister`
+    house pattern). Raises PermissionError naming the requirement."""
+    try:
+        orch, proj = validate_address(by)
+    except ValueError as exc:
+        raise PermissionError(
+            f"archive/unarchive of project '{project_id}' requires its own "
+            f"Mainline ('Mainline - {project_id}'); got invalid address "
+            f"{by!r}: {exc}") from exc
+    if orch != "Mainline" or proj != project_id:
+        raise PermissionError(
+            f"only the project's own Mainline ('Mainline - {project_id}') may "
+            f"archive/unarchive project '{project_id}'; got {by!r}")
+
+
+def archive(con, project_id, by, *, force=False, wait_secs=None):
+    """Archive an active project (Mainline-only `by`): cooperatively evict every
+    live notifier of its addresses (notifier_tombstone → bounded wait of
+    `wait_secs`, default 2 poll cycles → notifier_reap_if_stale sweep), then set
+    state='archived' + archived_at. Deletes NOTHING else. Refuses — state
+    unchanged — if a watcher stays live past the wait, unless `force`, which
+    reaps the surviving row(s) anyway."""
+    state = project_state(con, project_id)
+    if state is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    if state != "active":
+        raise ValueError(f"project '{project_id}' is not active")
+    _require_project_mainline(project_id, by)
+
+    if wait_secs is None:
+        wait_secs = 2 * poll_interval()
+    addresses = [r["address"] for r in con.execute(
+        "SELECT address FROM address WHERE project=?", (project_id,))]
+    live = [a for a in addresses if notifier_live(con, a) is not None]
+    for addr in live:
+        notifier_tombstone(con, addr)
+    if live:
+        deadline = time.monotonic() + wait_secs
+        while live and time.monotonic() < deadline:
+            time.sleep(0.05)
+            live = [a for a in live if notifier_live(con, a) is not None]
+    for addr in addresses:
+        notifier_reap_if_stale(con, addr)
+    still_live = [a for a in addresses if notifier_live(con, a) is not None]
+    if still_live:
+        if not force:
+            raise RuntimeError(
+                f"cannot archive project '{project_id}': live notifier(s) for "
+                f"{still_live} ignored the tombstone past the {wait_secs}s wait "
+                f"— retry, or pass force=True to reap them anyway")
+        for addr in still_live:
+            con.execute("DELETE FROM notifier WHERE recipient=?", (addr,))
+        con.commit()
+    con.execute(
+        "UPDATE project SET state='archived', archived_at=datetime('now') "
+        "WHERE project_id=?", (project_id,))
+    con.commit()
+
+
+def unarchive(con, project_id, by):
+    """Reactivate an archived project (Mainline-only `by`): state='active',
+    archived_at cleared. Grant columns are untouched (CR-SAN-024 DEC-E) — a
+    grant set while active survives the archive→unarchive round-trip."""
+    state = project_state(con, project_id)
+    if state is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    if state != "archived":
+        raise ValueError(f"project '{project_id}' is not archived")
+    _require_project_mainline(project_id, by)
+    con.execute(
+        "UPDATE project SET state='active', archived_at=NULL WHERE project_id=?",
+        (project_id,))
+    con.commit()
 
 
 # one-time legacy-store consolidation (CR-SAN-022 §S3)
