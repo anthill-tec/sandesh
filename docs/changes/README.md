@@ -24,8 +24,12 @@ Single source of truth for change requests. Pick the next `PENDING` CR by phase 
 | [CR-SAN-019](CR-SAN-019-pi-tombstone-and-smoke.md) | Pi audit fixes: **tombstone-aware `unregister`** (exit 3 → success result, not thrown; Option A) + **real-binary smoke test** (`--version` + send→fetch round-trip). Audit #1/#7 valid; #2/#3/#4/#5/#6 rejected w/ citations | Wave 4 | COMPLETED | CR-SAN-013, CR-SAN-016 | 2026-06-08 |
 | [CR-SAN-020](CR-SAN-020-pypi-packaging-hardening.md) | PyPI metadata hardening: `license-files`, pin hatchling/hatch-vcs lower bounds, granular Python classifiers. Packaging audit P2/P3; **py.typed rejected** | Wave 4 | COMPLETED | CR-SAN-008 | 2026-06-09 |
 | [CR-SAN-021](CR-SAN-021-npm-pi-packaging-release-integrity.md) | npm/Pi hardening + release integrity: `publish-npm.yml` CI, `prepublishOnly`, `engines`, **version-sync gate** (package.json ↔ server.json ×2 ↔ git tag). Packaging audit P1/P2/P3; **deps-move + exports rejected** w/ citations | Wave 4 | COMPLETED | CR-SAN-015, CR-SAN-011 | 2026-06-09 |
+| [CR-SAN-022](CR-SAN-022-global-db-tracker-consolidation.md) | **Global DB + project tracker + consolidation**: single `sandesh.db` (WAL), `project` table (`active\|archived\|tombstoned`), `setup` enrolls (tombstoned ids retired — O1), legacy stores consolidated (id remap, `.pre-global` backups), `migrate --all` → single target | Wave 6 | PENDING | CR-SAN-017, CR-SAN-018 | — |
+| [CR-SAN-023](CR-SAN-023-cross-project-messaging.md) | **Cross-project messaging + access control**: same-project rule dropped; **admin grant per project, inherited by all participants, revoked project-wide** (D11; CLI-only `grant`/`revoke`); tracker-state errors; `all-tracks` stays in-project; cross-project To-wakes/Cc-silent | Wave 6 | PENDING | CR-SAN-022 | — |
+| [CR-SAN-024](CR-SAN-024-project-lifecycle-verbs.md) | **Lifecycle verbs**: `archive` (read-only, nothing deleted, watchers evicted, reversible) / `unarchive` / `tombstone` (archived-only; internal-row purge + body-folder delete; hidden from standard reads, `thread` warns); confirm/`--yes`/`--dry-run`/`--force`; **super-admin assigned at install** (O3), sole tombstoner | Wave 6 | PENDING | CR-SAN-023 | — |
+| [CR-SAN-025](CR-SAN-025-mcp-surface-update.md) | **MCP surface**: `sandesh_archive`+`sandesh_unarchive` (9→11 tools; tombstone/grant/revoke NEVER exposed), `project_id` optional where derivable, docstrings/`instructions`/usage + stdio E2E cross-project scenario | Wave 6 | PENDING | CR-SAN-024 | — |
 
-Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distribution](../research/PRD-distribution.md) · [PRD-pi-extension](../research/PRD-pi-extension.md) · [PRD-db-migration](../research/PRD-db-migration.md)
+Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distribution](../research/PRD-distribution.md) · [PRD-pi-extension](../research/PRD-pi-extension.md) · [PRD-db-migration](../research/PRD-db-migration.md) · [PRD-global-store](../research/PRD-global-store.md)
 Design notes: [DN-windows-notifier](../research/DN-windows-notifier.md) · [DN-pi-wake](../research/DN-pi-wake.md) (Pi wake spike — RESOLVED: native injection)
 PyPI distribution name: **`sandesh-relay`** (`sandesh` is taken; import package + CLI stay `sandesh`).
 Pi integration: see **[PRD-pi-extension](../research/PRD-pi-extension.md)** — a native Pi *extension* (not MCP); its CRs (scaffold/verbs, wake-spike, packaging) spin from that PRD.
@@ -35,6 +39,10 @@ Wave 5 (schema evolution) — design contract: **[PRD-db-migration](../research/
 (yoyo runner + `[migrate]` extra + derived JSON snapshot; CLI/installer only, no MCP/Pi).
 CR-SAN-012 (core `message.status` retirement) is **no longer a standalone CR — folded into CR-SAN-017**
 as the engine's first real migration / proving case (the `0002` 12-step rebuild). CR-SAN-007 superseded.
+Wave 6 (global store) — design contract: **[PRD-global-store](../research/PRD-global-store.md)** (AGREED
+2026-06-11; supersedes PRD-project-lifecycle): single global DB + project tracker, **cross-project messaging
+behind a per-project admin grant**, `archive → tombstone` lifecycle, **super-admin assigned at install**.
+Strict order CR-SAN-022 → 023 → 024 → 025.
 
 ## Canonical statuses
 `PENDING` / `IN_PROGRESS` / `COMPLETED` / `SUPERSEDED` / `DEFERRED`
