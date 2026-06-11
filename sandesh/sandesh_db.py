@@ -24,8 +24,9 @@ Model — five tables:
 Semantics:
   - To wakes / Cc silent     notify fires only on role='to'; fetch pulls to+cc.
   - all-tracks broadcast      expands to the sender's project's active addresses
-                               minus the sender (cross-project send is blocked
-                               until CR-SAN-023's grant).
+                               minus the sender (never crosses projects).
+  - cross-project grant        sends to another project need the admin's per-project
+                               grant (grant_xproj/revoke_xproj); denied otherwise.
   - per-recipient read         read_at lives on message_recipient, not the message.
   - keep history              nothing deleted; read_at (per recipient) is the only "seen" signal.
   - subject-only               body_path NULL → the subject IS the content.
@@ -86,7 +87,14 @@ CREATE TABLE IF NOT EXISTS project (
                   CHECK (state IN ('active','archived','tombstoned')),
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     archived_at   TEXT,
-    tombstoned_at TEXT
+    tombstoned_at TEXT,
+    xproj_granted_at TEXT,                              -- NULL = cross-project not granted
+    xproj_granted_by TEXT                               -- admin identity that granted it
+);
+CREATE TABLE IF NOT EXISTS admin (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),     -- single row, enforced
+    name        TEXT NOT NULL,
+    assigned_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
 
@@ -171,6 +179,87 @@ def project_state(con, project_id):
     return row["state"] if row is not None else None
 
 
+def _require_active_project(con, project_id):
+    """Tracker-state guard (CR-SAN-023 §S3): the project must be enrolled AND
+    active. Raises a distinct ValueError per state — unknown / archived /
+    tombstoned — so callers surface exact, actionable errors."""
+    state = project_state(con, project_id)
+    if state is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    if state == "archived":
+        raise ValueError(f"project '{project_id}' is archived")
+    if state == "tombstoned":
+        raise ValueError(f"project '{project_id}' is tombstoned")
+
+
+# --------------------------------------------------------------------------- #
+# admin + cross-project grant (CR-SAN-023 §S2 / §S2b)
+
+def assign_admin(con, name):
+    """Assign the Sandesh admin (single row, id=1 — enforced by the schema CHECK).
+    Empty table → INSERT; same name already stored → no-op; a DIFFERENT stored
+    name → ValueError (never silently re-assigns). Install-time only — there is
+    deliberately NO CLI/MCP surface for this (PRD O3)."""
+    row = con.execute("SELECT name FROM admin WHERE id=1").fetchone()
+    if row is not None:
+        if row["name"] == name:
+            return
+        raise ValueError("admin already assigned — refusing to silently re-assign")
+    con.execute("INSERT INTO admin (id, name) VALUES (1, ?)", (name,))
+    con.commit()
+
+
+def admin_name(con):
+    """The assigned Sandesh admin name (str), or None when no admin is assigned."""
+    row = con.execute("SELECT name FROM admin WHERE id=1").fetchone()
+    return row["name"] if row is not None else None
+
+
+def _require_admin(con, by):
+    """Guard for admin-only operations: `by` must equal the stored admin name."""
+    stored = admin_name(con)
+    if stored is None:
+        raise PermissionError(
+            "no admin assigned — re-run install.sh with $SANDESH_ADMIN")
+    if by != stored:
+        raise PermissionError(
+            "only the Sandesh admin may grant/revoke cross-project access")
+
+
+def grant_xproj(con, project_id, by):
+    """Grant cross-project sending to a project (admin-only). Idempotent: an
+    already-granted project keeps its original timestamp + grantor."""
+    _require_admin(con, by)
+    if project_state(con, project_id) is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    con.execute(
+        "UPDATE project SET xproj_granted_at=datetime('now'), xproj_granted_by=? "
+        "WHERE project_id=? AND xproj_granted_at IS NULL",
+        (by, project_id))
+    con.commit()
+
+
+def revoke_xproj(con, project_id, by):
+    """Revoke a project's cross-project grant (admin-only, project-wide — every
+    participant loses access at once). Idempotent on an ungranted project."""
+    _require_admin(con, by)
+    if project_state(con, project_id) is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    con.execute(
+        "UPDATE project SET xproj_granted_at=NULL, xproj_granted_by=NULL "
+        "WHERE project_id=?",
+        (project_id,))
+    con.commit()
+
+
+def xproj_granted(con, project_id):
+    """True iff the project currently holds the cross-project grant."""
+    row = con.execute(
+        "SELECT xproj_granted_at FROM project WHERE project_id=?",
+        (project_id,)).fetchone()
+    return bool(row is not None and row["xproj_granted_at"] is not None)
+
+
 # --------------------------------------------------------------------------- #
 # address book
 
@@ -192,6 +281,7 @@ def register(con, addr, kind=None, display_name=None, by=None, project=None):
     """Self-register an address. Rejects an already-active duplicate; reactivates a
     previously-unregistered one; otherwise inserts."""
     _orch, proj = validate_address(addr, project)
+    _require_active_project(con, proj)       # §S3: enrolled + active before any write
     row = con.execute("SELECT active FROM address WHERE address=?", (addr,)).fetchone()
     if row is not None:
         if row["active"]:
@@ -286,15 +376,19 @@ def send(con, store, from_addr, to=None, cc=None, subject="", kind=None,
     sender_proj = project
     if validate:
         _orch, sender_proj = validate_address(from_addr, project)
+        _require_active_project(con, sender_proj)            # §S3 sender side
         for a in to + cc:                    # complete for ALL recipients BEFORE any insert
             if a == BROADCAST:
                 continue
             if not is_active(con, a):
                 raise ValueError(f"unknown or inactive recipient: {a!r}")
-            if _address_project(con, a) != sender_proj:
-                raise ValueError(
-                    f"recipient {a!r} is outside project {sender_proj!r}: "
-                    f"cross-project sending is not enabled (CR-SAN-023)")
+            rp = _address_project(con, a)
+            if rp != sender_proj:                            # §S2 grant gate, then §S3
+                if not xproj_granted(con, sender_proj):
+                    raise ValueError(
+                        f"cross-project sending not approved for project "
+                        f"'{sender_proj}' — ask the Sandesh admin")
+                _require_active_project(con, rp)
     recips = _expand_recipients(con, to, cc, from_addr, sender_proj)
     if not recips:
         raise ValueError("no recipients (after excluding the sender)")

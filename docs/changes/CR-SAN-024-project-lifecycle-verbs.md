@@ -45,11 +45,11 @@ tombstoned traffic, the CLI verbs with their guards, and the **super-admin perso
   body files to delete, and cross-project messages whose bodies would be lost / threads that would hole —
   **writes nothing**).
 
-### §S4 — super-admin persona (O3)
-- Assigned **during install**: `install.sh` accepts `$SANDESH_ADMIN` (or prompts when interactive) and
-  enrolls one reserved global row (`kind='admin'`, project-less name). **Re-running install must NOT
-  silently re-assign an existing admin.** No agent-reachable surface (MCP or post-install CLI) can create
-  or change the admin. `tombstone --by` (and CR-SAN-023's `grant`/`revoke --by`) must match it.
+### §S4 — super-admin persona (O3) — **CONSUMES the row shipped by CR-SAN-023**
+- _Moved by 023's gap-analysis (DEC-C/DEC-D, user-decided 2026-06-11):_ the dedicated single-row
+  `admin` table, `assign_admin`/`admin_name`, and the `install.sh` `$SANDESH_ADMIN` assignment (with
+  the no-silent-reassign refusal) all SHIP IN CR-SAN-023 (§S2b there). This CR only **reads** it:
+  `tombstone --by` must equal `admin_name(con)`; empty admin table → clear `no admin assigned` error.
 
 ### §S5 — docs
 - `CLAUDE.md` locked semantics: replace the teardown-less lifecycle (#5 keep-history gets the
@@ -81,9 +81,9 @@ tombstoned traffic, the CLI verbs with their guards, and the **super-admin perso
 - [ ] **AC7 — dry-run writes nothing.** `--dry-run` tombstone reports the would-be counts (internal rows,
       body files, cross-project bodies lost) and afterwards: state unchanged, all rows present, folder
       present, notifier rows untouched.
-- [ ] **AC8 — admin assignment at install.** `install.sh` with `$SANDESH_ADMIN=ops` enrolls the admin row
-      (`kind='admin'`); re-running install with a different `$SANDESH_ADMIN` does NOT change the stored
-      admin (asserted); with no admin assigned, `tombstone` fails with a clear "no admin assigned" error.
+- [ ] **AC8 — admin consumption.** (Assignment itself ships in CR-SAN-023 — its AC10.) `tombstone` with
+      `by` ≠ `admin_name(con)` is rejected; with an EMPTY admin table it fails with a clear
+      `no admin assigned` error; with the stored admin it proceeds (state permitting).
 - [ ] **AC9 — O1 retired ids.** After tombstone of P2, `setup('P2')` raises with message containing
       `retired (tombstoned)`.
 - [ ] **AC10 — E2E capstone (the ONE real-subprocess test).** Temp `XDG_DATA_HOME`, real
@@ -96,6 +96,10 @@ Large — three core ops with guard matrix, the read-rule filters touching `inbo
 installer admin hook, and the widest AC set of the wave.
 
 ## Risks / open questions
+- _From CR-SAN-023's VERIFY:_ `grant_xproj`/`revoke_xproj` currently accept an **archived/tombstoned**
+  project (only `unknown` is refused). Decide the interaction at this CR's gap-analysis (lean: archive
+  leaves the grant in place but sends are blocked anyway by state checks; tombstone should clear/ignore
+  it; granting a non-active project should probably refuse).
 - The purge's "internal message" predicate (sender AND all recipients in-project) needs a careful SQL
   shape — verify against multi-recipient mixed messages at gap-analysis.
 - Hidden-traffic filters touch the hottest read queries — keep them index-friendly.

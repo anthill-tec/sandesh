@@ -35,6 +35,11 @@ import unittest
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PYPROJECT_PATH = os.path.join(_REPO_ROOT, "pyproject.toml")
 
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from tests._migrate_helpers import rollback_until  # noqa: E402
+
 # The SYSTEM python3 (not the venv) — used for AC2 friendly-absent test.
 # python-crucible uses the venv; the sys.executable here IS the venv interpreter.
 # We need bare system python3 which has no yoyo/jsonschema.
@@ -2491,16 +2496,18 @@ class MigrateSnapshotContentTest(unittest.TestCase):
             f"columns: {list(self.tables.get('message_recipient', {}).get('columns', {}).keys())!r}",
         )
 
-    def test_exactly_five_tables_in_snapshot(self):
-        """The snapshot must describe exactly 5 tables (post-0003: the four
-        baseline tables + the `project` tracker — CR-SAN-022 C3 conversion of
-        the former exactly-4 assertion).
+    def test_snapshot_contains_required_tables(self):
+        """The snapshot must contain the known business tables (membership).
+
+        CR-SAN-023 C1: deliberately un-pinned from "exactly 5" — future
+        migrations add tables (0004 adds `admin`); this test guards that the
+        known tables are present, not the snapshot's final count.
         """
-        self.assertEqual(
-            len(self.tables), 5,
-            f"current-schema.json must have exactly 5 tables "
-            f"(address, message, message_recipient, notifier, project); "
-            f"found {len(self.tables)}: {list(self.tables.keys())!r}",
+        required = {"address", "message", "message_recipient", "notifier", "project"}
+        self.assertTrue(
+            required.issubset(set(self.tables)),
+            f"current-schema.json must contain at least {sorted(required)}; "
+            f"found: {list(self.tables.keys())!r}",
         )
         self.assertIn(
             "project", self.tables,
@@ -4418,8 +4425,9 @@ class MigrateRollbackTest(unittest.TestCase):
         """After full apply + rolling back PAST 0002, PRAGMA table_info(message)
         must include 'status' again.
 
-        CR-SAN-022: rollback() is one-step (most recent first), so with 0003 in
-        the chain reaching 0002's undo takes TWO rollbacks (0003, then 0002).
+        CR-SAN-023 C1: deliberately un-pinned from "TWO rollbacks" — the
+        rollback count changes whenever the chain grows; roll back until 0002
+        itself is pending (bounded helper).
 
         RED:
           - 0002 absent → after apply() only 0001 is applied; no 0002 to roll
@@ -4443,9 +4451,12 @@ class MigrateRollbackTest(unittest.TestCase):
             f"(so the rollback test is meaningful); columns: {col_names_before!r}",
         )
 
-        # Rollback 0003 (most recent), then 0002 — one step each
-        self._rollback_via_api("RbPragma", data_home)
-        self._rollback_via_api("RbPragma", data_home)
+        # Roll back one step at a time until 0002 itself has been undone.
+        rollback_until(
+            "0002-drop-message-status",
+            rollback_fn=lambda: self._rollback_via_api("RbPragma", data_home),
+            status_fn=lambda: _status_api("RbPragma", data_home),
+        )
 
         col_names_after = [
             c["name"] for c in _pragma_table_info(db_path, "message")
@@ -4458,21 +4469,34 @@ class MigrateRollbackTest(unittest.TestCase):
         )
 
     def test_rollback_makes_0002_pending_again_via_api(self):
-        """rollback() is one-step: the FIRST undoes the most recent step (0003),
-        the SECOND makes 0002 pending again.
+        """rollback() is one-step: the FIRST undoes the CURRENT head (whatever
+        it is); continuing one step at a time eventually makes 0002 pending.
+
+        CR-SAN-023 C1: deliberately un-pinned from "first=0003, second=0002" —
+        the head is discovered from status() and 0002 is reached by id, so the
+        test survives future chain growth.
 
         RED: rollback() absent / 0002 absent.
         """
         data_home = os.path.join(self._tmpdir, "dh_rb_pending_api")
         self._apply_0001_and_0002("RbPendApi", data_home)
 
-        # First rollback undoes the MOST RECENT applied step (0003), not 0002.
+        # Discover the CURRENT head (status() returns applied in migration order).
+        applied, pending = _status_api("RbPendApi", data_home)
+        head = applied[-1]
+        self.assertNotEqual(
+            head, "0002-drop-message-status",
+            "Pre-condition: the chain head must be newer than 0002 (the chain "
+            f"has grown past it); applied={applied!r}",
+        )
+
+        # ONE rollback undoes exactly the most recent step — and ONLY it.
         self._rollback_via_api("RbPendApi", data_home)
         applied, pending = _status_api("RbPendApi", data_home)
         self.assertIn(
-            "0003-project-tracker",
+            head,
             pending,
-            "After one rollback, the most recent step '0003-project-tracker' must be pending;\n"
+            f"After one rollback, the most recent step {head!r} must be pending;\n"
             f"applied={applied!r}, pending={pending!r}",
         )
         self.assertIn(
@@ -4482,24 +4506,36 @@ class MigrateRollbackTest(unittest.TestCase):
             f"applied={applied!r}, pending={pending!r}",
         )
 
-        # Second rollback now undoes 0002.
-        self._rollback_via_api("RbPendApi", data_home)
+        # Continue one step at a time until 0002 itself is pending.
+        rollback_until(
+            "0002-drop-message-status",
+            rollback_fn=lambda: self._rollback_via_api("RbPendApi", data_home),
+            status_fn=lambda: _status_api("RbPendApi", data_home),
+        )
         applied, pending = _status_api("RbPendApi", data_home)
         self.assertIn(
             "0002-drop-message-status",
             pending,
-            "After a second rollback, '0002-drop-message-status' must be in the pending set;\n"
+            "After rolling back to it, '0002-drop-message-status' must be in the pending set;\n"
             f"applied={applied!r}, pending={pending!r}",
         )
 
     def test_rollback_keeps_0001_applied(self):
-        """After rollback of 0002, 0001-baseline must remain applied (rollback=one step).
+        """After rolling back PAST 0002, 0001-baseline must remain applied.
+
+        CR-SAN-023 C1: un-pinned — roll back until 0002 is pending (by id, not
+        a hard-coded step count) so the intent "0001 survives the 0002 undo"
+        keeps being tested as the chain grows.
 
         RED: rollback() absent / 0002 absent.
         """
         data_home = os.path.join(self._tmpdir, "dh_rb_keeps_0001")
         self._apply_0001_and_0002("RbKeeps0001", data_home)
-        self._rollback_via_api("RbKeeps0001", data_home)
+        rollback_until(
+            "0002-drop-message-status",
+            rollback_fn=lambda: self._rollback_via_api("RbKeeps0001", data_home),
+            status_fn=lambda: _status_api("RbKeeps0001", data_home),
+        )
 
         applied, pending = _status_api("RbKeeps0001", data_home)
         self.assertIn(
@@ -4542,6 +4578,14 @@ class MigrateRollbackTest(unittest.TestCase):
             f"stdout: {r_rb.stdout!r}\nstderr: {r_rb.stderr!r}",
         )
 
+        # CR-SAN-023 C1 un-pin: keep rolling back (CLI, one step each) until
+        # 0002 itself is pending — the count is chain-length-dependent.
+        rollback_until(
+            "0002-drop-message-status",
+            rollback_fn=lambda: _run_cli(["migrate", "--rollback"], data_home),
+            status_fn=lambda: _status_api("RbCliStatus", data_home),
+        )
+
         r_st = _run_cli(["migrate", "--status"], data_home)
         combined = r_st.stdout + r_st.stderr
         self.assertIn(
@@ -4561,11 +4605,11 @@ class MigrateRollbackTest(unittest.TestCase):
         )
 
     def test_rollback_via_cli_restores_status_column(self):
-        """CLI: migrate --rollback (run twice — one step each: 0003, then 0002)
+        """CLI: repeated one-step migrate --rollback until 0002 is undone
         restores message.status column (PRAGMA check).
 
-        CR-SAN-022: with 0003 in the chain, reaching 0002's undo takes two
-        one-step CLI rollbacks.
+        CR-SAN-023 C1: deliberately un-pinned from "run twice" — the count is
+        chain-length-dependent; roll back until 0002 is pending (bounded).
 
         RED: --rollback absent / 0002 absent.
         """
@@ -4583,9 +4627,12 @@ class MigrateRollbackTest(unittest.TestCase):
             else:
                 os.environ["XDG_DATA_HOME"] = orig
 
-        # Two one-step rollbacks: first undoes 0003, second undoes 0002.
-        _run_cli(["migrate", "--rollback"], data_home)
-        _run_cli(["migrate", "--rollback"], data_home)
+        # One-step CLI rollbacks until 0002 itself has been undone.
+        rollback_until(
+            "0002-drop-message-status",
+            rollback_fn=lambda: _run_cli(["migrate", "--rollback"], data_home),
+            status_fn=lambda: _status_api("RbCliPragma", data_home),
+        )
 
         col_names = [c["name"] for c in _pragma_table_info(db_path, "message")]
         self.assertIn(

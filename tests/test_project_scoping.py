@@ -112,15 +112,17 @@ class _TempDataHome(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class CrossProjectSendRefusedTest(_TempDataHome):
-    """send() with a cross-project recipient must raise ValueError with the exact
-    error text 'cross-project sending is not enabled (CR-SAN-023)' and must NOT
+    """send() with a cross-project recipient (no grant) must raise ValueError with
+    the exact CR-SAN-023 AC2 error text naming the SENDER's project, and must NOT
     write any message or message_recipient row.
 
     RED: current send() validates only is_active(); it delivers the message to
     the foreign address because the address IS active — the is_active check passes.
     """
 
-    EXPECTED_ERROR = "cross-project sending is not enabled (CR-SAN-023)"
+    EXPECTED_ERROR = (
+        "cross-project sending not approved for project 'P1' — ask the Sandesh admin"
+    )
 
     def test_cross_project_to_raises_valueerror(self):
         """send from Mainline-P1 to Mainline-P2 must raise ValueError.
@@ -254,7 +256,9 @@ class MixedRecipientAtomicityTest(_TempDataHome):
     the P2 address too (no project check at all).
     """
 
-    EXPECTED_ERROR = "cross-project sending is not enabled (CR-SAN-023)"
+    EXPECTED_ERROR = (
+        "cross-project sending not approved for project 'P1' — ask the Sandesh admin"
+    )
 
     def test_mixed_to_list_raises_valueerror(self):
         """to=['Track 1 - P1', 'Mainline - P2'] must raise ValueError.
@@ -326,7 +330,9 @@ class CrossProjectReplyRefusedTest(_TempDataHome):
     today, the reply succeeds and delivers to ML_P2.
     """
 
-    EXPECTED_ERROR = "cross-project sending is not enabled (CR-SAN-023)"
+    EXPECTED_ERROR = (
+        "cross-project sending not approved for project 'P1' — ask the Sandesh admin"
+    )
 
     def _p2_internal_msg(self):
         """Insert a P2→P2 message and return its id."""
