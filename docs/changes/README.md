@@ -42,9 +42,14 @@ as the engine's first real migration / proving case (the `0002` 12-step rebuild)
 Wave 6 (global store) — design contract: **[PRD-global-store](../research/PRD-global-store.md)** (AGREED
 2026-06-11; supersedes PRD-project-lifecycle): single global DB + project tracker, **cross-project messaging
 behind a per-project admin grant**, `archive → tombstone` lifecycle, **super-admin assigned at install**.
-Strict order CR-SAN-022 → 023 → 024 → 025. Scheduling notes: the super-admin storage + installer
-assignment **moved from CR-SAN-024 into CR-SAN-023** at 023's gap-analysis (023 is the first reader;
-024 consumes the row); `migrate --project` removal (022) was a user-approved breaking change.
+Strict order CR-SAN-022 → 023 → 024 → 025 — **Wave 6 COMPLETE (2026-06-12)**. Scheduling notes: the
+super-admin storage + installer assignment moved from CR-SAN-024 into CR-SAN-023 at 023's gap-analysis
+(023 is the first reader; 024 consumes the row); `migrate --project` removal (022) was a user-approved
+breaking change.
+Upcoming (wave-close SCRUM, 2026-06-12): **Wave 7 — inbox filters & FTS5 search** (design contract:
+[PRD-inbox-search](../research/PRD-inbox-search.md), DRAFT pending owner review; CRs allocated after
+agreement) → **Wave 8 — Pi extension catch-up** to the global-store world (design opens at its wave) →
+then the **v0.2.0 release + local reinstall**.
 
 ## Canonical statuses
 `PENDING` / `IN_PROGRESS` / `COMPLETED` / `SUPERSEDED` / `DEFERRED`
