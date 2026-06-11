@@ -441,7 +441,31 @@ def reply(con, store, parent_id, from_addr, subject=None, body_text=None,
 # --------------------------------------------------------------------------- #
 # receiving
 
+THREAD_HOLE_WARNING = "incomplete chain — message(s) removed (project tombstoned)"
+
+
+def _tombstoned_projects(con):
+    """The set of tombstoned project ids — the per-call read-filter set
+    (CR-SAN-024 §S2 / DRIFT-3). Computed ONCE per read call; empty in the
+    common no-tombstones case, which lets readers skip filtering entirely."""
+    return {r["project_id"] for r in con.execute(
+        "SELECT project_id FROM project WHERE state='tombstoned'")}
+
+
+def _is_tombstoned_sender(con, addr, tombstoned):
+    """True iff `addr`'s project is in the `tombstoned` set. Resolution via
+    _address_project — the suffix fallback matters because a tombstoned
+    project's address rows were purged (DRIFT-3)."""
+    if not tombstoned:
+        return False
+    return _address_project(con, addr) in tombstoned
+
+
 def inbox(con, recipient, unread_only=True):
+    """The recipient's messages (to + cc), oldest first. Rows whose SENDER's
+    project is tombstoned are hidden (CR-SAN-024 §S2) — filtered python-side
+    against the per-call tombstoned set; archived projects' traffic displays
+    fully."""
     q = ("SELECT m.id, m.from_addr, m.subject, m.kind, m.in_reply_to, "
          "m.body_path, m.created_at, r.role, r.read_at "
          "FROM message m JOIN message_recipient r ON r.message_id = m.id "
@@ -449,16 +473,29 @@ def inbox(con, recipient, unread_only=True):
     if unread_only:
         q += "AND r.read_at IS NULL "
     q += "ORDER BY m.created_at, m.id"
-    return con.execute(q, (recipient,)).fetchall()
+    rows = con.execute(q, (recipient,)).fetchall()
+    tombstoned = _tombstoned_projects(con)
+    if not tombstoned:                    # hot path: no tombstones → no filtering
+        return rows
+    return [r for r in rows
+            if not _is_tombstoned_sender(con, r["from_addr"], tombstoned)]
 
 
 def unread_to(con, recipient):
     """Ids of unread messages where `recipient` is a 'to' — the NOTIFY/wake filter
-    (Cc is deliberately excluded: cc never wakes, it's swept up by fetch)."""
-    return [r["id"] for r in con.execute(
-        "SELECT m.id FROM message m JOIN message_recipient r ON r.message_id = m.id "
+    (Cc is deliberately excluded: cc never wakes, it's swept up by fetch).
+    Applies the §S2 tombstoned-sender filter — a watcher must not wake for
+    invisible mail."""
+    rows = con.execute(
+        "SELECT m.id, m.from_addr "
+        "FROM message m JOIN message_recipient r ON r.message_id = m.id "
         "WHERE r.recipient = ? AND r.role = 'to' AND r.read_at IS NULL ORDER BY m.id",
-        (recipient,)).fetchall()]
+        (recipient,)).fetchall()
+    tombstoned = _tombstoned_projects(con)
+    if not tombstoned:
+        return [r["id"] for r in rows]
+    return [r["id"] for r in rows
+            if not _is_tombstoned_sender(con, r["from_addr"], tombstoned)]
 
 
 def mark_read(con, recipient, ids):
@@ -500,14 +537,30 @@ def fetch(con, store, recipient, mark=True):
 
 
 def thread(con, msg_id):
-    """The reply chain from the root down to msg_id (ascending by id)."""
+    """The reply chain from the root down to msg_id (ascending by id).
+
+    Nodes whose SENDER's project is tombstoned are replaced by a synthetic
+    warning entry `{"warning": THREAD_HOLE_WARNING}` (CR-SAN-024 §S2);
+    consecutive hidden nodes collapse to ONE warning entry. A requested
+    msg_id that is itself from a tombstoned project yields a chain of just
+    the warning entry (non-empty — the row exists, its sender is invisible)."""
     chain, cur = [], con.execute("SELECT * FROM message WHERE id=?", (msg_id,)).fetchone()
     while cur is not None:
         chain.append(cur)
         cur = (con.execute("SELECT * FROM message WHERE id=?", (cur["in_reply_to"],)).fetchone()
                if cur["in_reply_to"] else None)
     chain.reverse()
-    return chain
+    tombstoned = _tombstoned_projects(con)
+    if not tombstoned:                    # hot path: no tombstones → raw chain
+        return chain
+    out = []
+    for node in chain:
+        if _is_tombstoned_sender(con, node["from_addr"], tombstoned):
+            if not (out and isinstance(out[-1], dict) and "warning" in out[-1]):
+                out.append({"warning": THREAD_HOLE_WARNING})
+        else:
+            out.append(node)
+    return out
 
 
 # --------------------------------------------------------------------------- #

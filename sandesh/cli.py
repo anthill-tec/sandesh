@@ -200,6 +200,9 @@ def cmd_thread(args):
     if not chain:
         sys.exit(f"[sandesh] no such message #{args.id}")
     for m in chain:
+        if isinstance(m, dict) and "warning" in m:   # tombstoned hole (§S2)
+            print(m["warning"])
+            continue
         ind = "  " if m["in_reply_to"] else ""
         print(f"{ind}#{m['id']} {m['from_addr']} · {m['created_at']}")
         print(f"{ind}   {m['subject']}")
