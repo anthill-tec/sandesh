@@ -49,9 +49,11 @@ def _require_deps():
 # this module stays stdlib-pure (AC1). The packaged migrations live alongside
 # this module under sandesh/migrations/.
 
-# The four core tables a pre-yoyo store already has (baseline-adoption probe).
+# The four baseline tables a pre-yoyo store already has. This constant is ONLY
+# the baseline-adoption probe (CR-SAN-022 DRIFT-4): shape functions enumerate
+# sqlite_master dynamically and must never hard-code a table list.
 _BASELINE_ID = "0001-baseline"
-_CORE_TABLES = ("address", "message", "message_recipient", "notifier")
+_BASELINE_TABLES = ("address", "message", "message_recipient", "notifier")
 
 
 def migrations_dir():
@@ -85,23 +87,23 @@ def _snapshot_path():
     return os.path.join(_schema_dir(), "current-schema.json")
 
 
-def _db_path(project_id):
-    """Absolute path to a project store's ``sandesh.db`` file.
+def _db_path():
+    """Absolute path to the single global ``sandesh.db`` (CR-SAN-022 DEC-B).
 
-    Routes through ``sandesh_db`` so the XDG data-home logic (and any
-    ``$XDG_DATA_HOME`` override) is honoured — no path duplication here.
+    Routes through ``sandesh_db.db_path()`` so the XDG data-home logic (and any
+    ``$XDG_DATA_HOME`` override) is honoured — no path duplication here. Ensures
+    the parent directory exists so yoyo can create the file on first apply.
     """
     from . import sandesh_db
-    store = sandesh_db.store_dir(project_id)
-    os.makedirs(store, exist_ok=True)
-    return os.path.join(store, sandesh_db.DB_FILE)
+    db_path = sandesh_db.db_path()
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    return db_path
 
 
-def _backend(project_id):
-    """Open a yoyo SQLite backend for ``project_id``'s store DB."""
+def _backend():
+    """Open a yoyo SQLite backend for the global Sandesh DB."""
     yoyo, _jsonschema = _require_deps()
-    db_path = _db_path(project_id)
-    return yoyo.get_backend("sqlite:///" + db_path)
+    return yoyo.get_backend("sqlite:///" + _db_path())
 
 
 def _read_migrations():
@@ -110,8 +112,8 @@ def _read_migrations():
     return yoyo.read_migrations(migrations_dir())
 
 
-def _core_tables_exist(db_path):
-    """True if all four core tables already exist in ``db_path`` (a pre-yoyo
+def _baseline_tables_exist(db_path):
+    """True if all four baseline tables already exist in ``db_path`` (a pre-yoyo
     store provisioned by ``sandesh_db.setup`` before the migration engine)."""
     import sqlite3
     con = sqlite3.connect(db_path)
@@ -122,27 +124,27 @@ def _core_tables_exist(db_path):
     finally:
         con.close()
     present = {r[0] for r in rows}
-    return all(t in present for t in _CORE_TABLES)
+    return all(t in present for t in _BASELINE_TABLES)
 
 
-def apply(project_id):
-    """Apply pending migrations to ``project_id``'s store.
+def apply():
+    """Apply pending migrations to the global Sandesh DB.
 
-    Baseline-adoption glue (AC4): if the four core tables already exist (a
+    Baseline-adoption glue (AC4): if the four baseline tables already exist (a
     pre-yoyo store) AND ``0001-baseline`` has not yet been recorded, MARK it
     applied — recording it without re-running the CREATE TABLE statements that
     would otherwise collide with the existing tables — then apply any remaining
     pending migrations normally. A brand-new empty store has no tables, so
     ``0001-baseline`` simply applies normally.
     """
-    db_path = _db_path(project_id)
-    backend = _backend(project_id)
+    db_path = _db_path()
+    backend = _backend()
     migrations = _read_migrations()
 
     baseline = next((m for m in migrations if m.id == _BASELINE_ID), None)
     if (
         baseline is not None
-        and _core_tables_exist(db_path)
+        and _baseline_tables_exist(db_path)
         and not backend.is_applied(baseline)
     ):
         # Pre-yoyo store: record the baseline as applied without running it.
@@ -152,8 +154,8 @@ def apply(project_id):
     backend.apply_migrations(backend.to_apply(migrations))
 
 
-def rollback(project_id):
-    """Roll back the single most-recent applied migration for ``project_id``.
+def rollback():
+    """Roll back the single most-recent applied migration on the global DB.
 
     ``backend.to_rollback`` returns the applied migrations in reverse order
     (most-recent first); we take only the first so a ``--rollback`` undoes one
@@ -161,7 +163,7 @@ def rollback(project_id):
     nothing is applied.
     """
     yoyo, _jsonschema = _require_deps()
-    backend = _backend(project_id)
+    backend = _backend()
     migrations = _read_migrations()
     to_rollback = backend.to_rollback(migrations)
     if not to_rollback:
@@ -170,13 +172,13 @@ def rollback(project_id):
     backend.rollback_migrations(MigrationList([to_rollback[0]]))
 
 
-def status(project_id):
-    """Return ``(applied_ids, pending_ids)`` for ``project_id``'s store.
+def status():
+    """Return ``(applied_ids, pending_ids)`` for the global Sandesh DB.
 
     ``applied_ids`` are the migration ids already recorded in yoyo's tracking
     table; ``pending_ids`` are those not yet applied — both in migration order.
     """
-    backend = _backend(project_id)
+    backend = _backend()
     migrations = _read_migrations()
     pending = {m.id for m in backend.to_apply(migrations)}
     applied_ids = [m.id for m in migrations if m.id not in pending]
@@ -189,16 +191,25 @@ def _live_shape(db_path):
 
         {"<table>": {"<col>": {"type", "notnull", "pk", "default"}}}
 
-    derived from ``PRAGMA table_info`` for each of the four core tables. Only
-    the core tables are compared (yoyo's ``_yoyo_migration`` bookkeeping table
-    is intentionally excluded).
+    derived from ``PRAGMA table_info`` for every business table enumerated
+    dynamically from ``sqlite_master`` (CR-SAN-022 DRIFT-4 — no hard-coded
+    table list, so new tables like ``project`` are visible). Internal tables
+    are excluded: ``sqlite_*`` plus yoyo's bookkeeping tables (``_yoyo*`` /
+    ``yoyo*``).
     """
     import sqlite3
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
     try:
+        tables = [
+            r["name"]
+            for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            ).fetchall()
+            if not r["name"].startswith(("sqlite_", "_yoyo", "yoyo"))
+        ]
         shape = {}
-        for table in _CORE_TABLES:
+        for table in tables:
             cols = {}
             for r in con.execute(f"PRAGMA table_info({table})").fetchall():
                 cols[r["name"]] = {
@@ -221,16 +232,15 @@ def _snapshot_from_shape(shape):
     return {"tables": {table: {"columns": cols} for table, cols in shape.items()}}
 
 
-def dump_schema(project_id):
-    """Return the live DB shape of ``project_id``'s store in the §S3 snapshot
+def dump_schema():
+    """Return the live shape of the global Sandesh DB in the §S3 snapshot
     structure ``{"tables": {table: {"columns": {col: {…}}}}}``.
 
-    Read-only: derived purely from ``PRAGMA table_info`` via ``_live_shape``.
-    On a fully-migrated store this equals the committed ``current-schema.json``
-    (modulo key ordering).
+    Read-only: derived purely from ``PRAGMA table_info`` via ``_live_shape``
+    (dynamic ``sqlite_master`` enumeration). On a fully-migrated store this
+    equals the committed ``current-schema.json`` (modulo key ordering).
     """
-    db_path = _db_path(project_id)
-    return _snapshot_from_shape(_live_shape(db_path))
+    return _snapshot_from_shape(_live_shape(_db_path()))
 
 
 def _snapshot_to_tables_dict(snapshot):
@@ -241,9 +251,9 @@ def _snapshot_to_tables_dict(snapshot):
     }
 
 
-def diff(project_id, old_snapshot_path):
-    """Compare an OLD snapshot file against the freshly-dumped CURRENT live shape
-    of ``project_id``'s store.
+def diff(old_snapshot_path):
+    """Compare an OLD snapshot file against the freshly-dumped CURRENT live
+    shape of the global Sandesh DB.
 
     Returns a dict with three lists:
 
@@ -260,7 +270,7 @@ def diff(project_id, old_snapshot_path):
     with open(old_snapshot_path) as fh:
         old_snapshot = json.load(fh)
     old = _snapshot_to_tables_dict(old_snapshot)
-    current = _snapshot_to_tables_dict(dump_schema(project_id))
+    current = _snapshot_to_tables_dict(dump_schema())
 
     added, removed, changed = [], [], []
     tables = sorted(set(old) | set(current))
@@ -346,8 +356,8 @@ def _drift(db_path):
     return drifts
 
 
-def check(project_id):
-    """Run the read-only ``--check`` gate for ``project_id``'s store.
+def check():
+    """Run the read-only ``--check`` gate against the global Sandesh DB.
 
     Returns an exit code (0 success, non-zero on pending) following the
     user-decided strictness:
@@ -359,32 +369,28 @@ def check(project_id):
 
     Performs no writes.
     """
-    applied_ids, pending_ids = status(project_id)
+    _applied_ids, pending_ids = status()
     if pending_ids:
         print(
-            f"[{project_id}] migrations pending (run `sandesh migrate`): "
+            "migrations pending (run `sandesh migrate`): "
             + ", ".join(pending_ids),
             file=sys.stderr,
         )
         return 1
 
-    db_path = _db_path(project_id)
-    drifts = _drift(db_path)
+    drifts = _drift(_db_path())
     if drifts:
-        print(f"[{project_id}] WARNING: schema drift detected (non-fatal):")
+        print("WARNING: schema drift detected (non-fatal):")
         for d in drifts:
             print(f"  - {d}")
         return 0
 
-    # Clean: do not echo the project id here — a project id can incidentally
-    # contain the substring 'drift'/'pending', which a clean-store check must
-    # never surface in its output.
     print("OK: fully migrated, live shape matches the committed snapshot")
     return 0
 
 
-def _format_status(project_id, applied_ids, pending_ids):
-    """Render a single project's migration status as a human-readable line set.
+def _format_status(applied_ids, pending_ids):
+    """Render the global DB's migration status as a human-readable line set.
 
     Names every applied id (e.g. ``0001-baseline``) and conveys the pending
     count/ids — including an explicit "0 pending" when none remain.
@@ -394,31 +400,26 @@ def _format_status(project_id, applied_ids, pending_ids):
         pending_part = f"{len(pending_ids)} pending: " + ", ".join(pending_ids)
     else:
         pending_part = "0 pending"
-    return (
-        f"[{project_id}] applied: {applied_part}\n"
-        f"[{project_id}] {pending_part}"
-    )
+    return f"applied: {applied_part}\n{pending_part}"
 
 
 def cmd_migrate(args):
-    """CLI dispatch entry for `sandesh migrate`.
+    """CLI dispatch entry for `sandesh migrate` (global DB — DEC-B).
 
-    Dispatches on the parsed flags:
-      * default (no ``--status``/``--all``) → apply pending migrations to the
-        single ``--project`` store.
-      * ``--status`` → print applied/pending for the project (read-only).
-      * ``--all`` → operate on every store discovered via
-        ``sandesh_db.list_projects()``. With ``--status`` it reports each store;
-        otherwise it applies to each. Apply is **fail-fast**: the first store
-        whose apply raises aborts the run with a non-zero exit and stores ordered
-        after it are left untouched.
+    The engine targets the single global ``sandesh.db``; no project routing
+    exists on this subcommand. Dispatches on the parsed flags:
+      * default (bare ``migrate``) → apply pending migrations to the global DB.
+      * ``--all`` → an alias of the bare apply (kept for compatibility;
+        identical behaviour — there is only one DB to migrate).
+      * ``--status`` → print applied/pending (read-only).
+      * ``--rollback`` / ``--check`` / ``--dump-schema`` / ``--diff`` →
+        the corresponding engine call, all against the global DB.
 
     The dependency guard runs first — without the [migrate] extra there is
     nothing to do but tell the user how to install it (and exit non-zero).
     """
     _require_deps()
 
-    do_all = getattr(args, "all", False)
     do_status = getattr(args, "status", False)
     do_check = getattr(args, "check", False)
     do_dump = getattr(args, "dump_schema", False)
@@ -427,20 +428,17 @@ def cmd_migrate(args):
     do_json = getattr(args, "json", False)
 
     if do_rollback:
-        project_id = _project_from_args(args)
-        rollback(project_id)
+        rollback()
         return 0
 
     if do_dump:
         import json
-        project_id = _project_from_args(args)
-        print(json.dumps(dump_schema(project_id)))
+        print(json.dumps(dump_schema()))
         return 0
 
     if diff_old is not None:
         import json
-        project_id = _project_from_args(args)
-        report = diff(project_id, diff_old)
+        report = diff(diff_old)
         if do_json:
             print(json.dumps(report))
         else:
@@ -448,51 +446,17 @@ def cmd_migrate(args):
         return 0
 
     if do_check:
-        project_id = _project_from_args(args)
-        return check(project_id)
+        return check()
 
-    if do_all:
-        from . import sandesh_db
-        projects = sandesh_db.list_projects()
-        if do_status:
-            for pid in projects:
-                applied_ids, pending_ids = status(pid)
-                print(_format_status(pid, applied_ids, pending_ids))
-            return 0
-        # Apply to each store, fail-fast on the first error.
-        for pid in projects:
-            try:
-                apply(pid)
-            except Exception as exc:  # noqa: BLE001 — surface which store failed, then abort
-                print(
-                    f"[sandesh] migrate --all aborted: project {pid!r} failed: {exc}",
-                    file=sys.stderr,
-                )
-                return 1
-        return 0
-
-    # Single-project paths.
-    project_id = _project_from_args(args)
     if do_status:
-        applied_ids, pending_ids = status(project_id)
-        print(_format_status(project_id, applied_ids, pending_ids))
+        applied_ids, pending_ids = status()
+        print(_format_status(applied_ids, pending_ids))
         return 0
 
-    apply(project_id)
+    # Apply (bare `migrate`; `--all` is an alias of the same single-DB apply).
+    try:
+        apply()
+    except Exception as exc:  # noqa: BLE001 — surface the failure, exit non-zero
+        print(f"[sandesh] migrate failed: {exc}", file=sys.stderr)
+        return 1
     return 0
-
-
-def _project_from_args(args):
-    """Resolve the project id from parsed CLI args / ``$SANDESH_PROJECT``.
-
-    Mirrors ``cli._project``: ``--project`` (either position) takes precedence,
-    falling back to ``$SANDESH_PROJECT``; absent both, exit with a friendly error.
-    """
-    project_id = getattr(args, "project", None) or os.environ.get("SANDESH_PROJECT")
-    if not project_id:
-        print(
-            "[sandesh] ERROR: pass --project <id> (or set $SANDESH_PROJECT).",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    return project_id

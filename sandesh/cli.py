@@ -277,8 +277,14 @@ def build_parser():
     p.add_argument("--timeout", type=int, default=_notify.DEFAULT_TIMEOUT_SECS)
     p.set_defaults(fn=cmd_notify)
 
-    p = sub.add_parser("migrate", parents=[common],
-                       help="apply/inspect schema migrations (needs the [migrate] extra)")
+    # CR-SAN-022 DEC-B: the migrate engine targets the single global DB, so the
+    # migrate subparser deliberately does NOT inherit the common --project
+    # parent (`sandesh migrate --project X` is an argparse error). The
+    # pre-subcommand `sandesh --project X migrate` form still parses via the
+    # top-level parser; migrate simply ignores the value.
+    p = sub.add_parser("migrate",
+                       help="apply/inspect schema migrations on the global DB "
+                            "(needs the [migrate] extra)")
     p.add_argument("--status", action="store_true", help="report applied vs pending (no writes)")
     p.add_argument("--rollback", action="store_true",
                    help="roll back the single most-recent applied migration")

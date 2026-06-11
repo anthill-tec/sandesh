@@ -99,30 +99,30 @@ class _TempDataHome(unittest.TestCase):
         os.makedirs(p, exist_ok=True)
         return p
 
-    def _db_path(self, project_id, data_home):
-        """Compute the per-project DB path (matches sandesh_db layout)."""
-        return os.path.join(data_home, "sandesh", "projects", project_id, "sandesh.db")
+    def _db_path(self, _project_id, data_home):
+        """Compute the global DB path (CR-SAN-022: one sandesh.db per data home)."""
+        return os.path.join(data_home, "sandesh", "sandesh.db")
 
     def _set_xdg(self, data_home):
         os.environ["XDG_DATA_HOME"] = data_home
 
-    def _apply(self, project_id, data_home):
-        """Call migrate.apply(project_id) with XDG_DATA_HOME set."""
+    def _apply(self, _project_id, data_home):
+        """Call migrate.apply() (global DB) with XDG_DATA_HOME set."""
         self._set_xdg(data_home)
         from sandesh import migrate
-        migrate.apply(project_id)
+        migrate.apply()
 
-    def _status(self, project_id, data_home):
-        """Call migrate.status(project_id) with XDG_DATA_HOME set."""
+    def _status(self, _project_id, data_home):
+        """Call migrate.status() (global DB) with XDG_DATA_HOME set."""
         self._set_xdg(data_home)
         from sandesh import migrate
-        return migrate.status(project_id)
+        return migrate.status()
 
-    def _rollback(self, project_id, data_home):
-        """Call migrate.rollback(project_id) with XDG_DATA_HOME set."""
+    def _rollback(self, _project_id, data_home):
+        """Call migrate.rollback() (global DB) with XDG_DATA_HOME set."""
         self._set_xdg(data_home)
         from sandesh import migrate
-        migrate.rollback(project_id)
+        migrate.rollback()
 
     def _setup_project(self, project_id, data_home):
         """Call sandesh_db.setup(project_id) with XDG_DATA_HOME set."""
@@ -130,12 +130,11 @@ class _TempDataHome(unittest.TestCase):
         from sandesh import sandesh_db
         sandesh_db.setup(project_id)
 
-    def _connect(self, project_id, data_home):
-        """Return an open sqlite3 connection to the project DB (XDG set)."""
+    def _connect(self, _project_id, data_home):
+        """Return an open sqlite3 connection to the global DB (XDG set)."""
         self._set_xdg(data_home)
         from sandesh import sandesh_db
-        store = sandesh_db.store_dir(project_id)
-        return sqlite3.connect(os.path.join(store, sandesh_db.DB_FILE))
+        return sqlite3.connect(sandesh_db.db_path())
 
 
 # ---------------------------------------------------------------------------

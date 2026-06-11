@@ -165,6 +165,40 @@
           "type": "BOOLEAN"
         }
       }
+    },
+    "project": {
+      "columns": {
+        "archived_at": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "created_at": {
+          "default": "datetime('now')",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "project_id": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "TEXT"
+        },
+        "state": {
+          "default": "'active'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "tombstoned_at": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        }
+      }
     }
   }
 }
