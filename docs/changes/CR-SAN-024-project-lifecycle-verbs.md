@@ -1,6 +1,6 @@
 # CR-SAN-024 — Project lifecycle verbs (archive / unarchive / tombstone) + super-admin
 
-**Status:** COMPLETED (2026-06-11)
+**Status:** COMPLETED (shipped 2026-06-11 on develop)
 **Priority:** Medium-High (delivers the lifecycle the wave was designed around)
 **Depends on:** CR-SAN-023 (tracker-state checks + admin identity interplay)
 **Labels:** wave-6, global-store, lifecycle, admin, installer
@@ -23,23 +23,23 @@ tombstoned traffic, the CLI verbs with their guards, and the **super-admin perso
   `notifier_reap_if_stale`); refuses (state unchanged) if a watcher stays live unless `force`; then sets
   `state='archived', archived_at=now`. Deletes **nothing**.
 - `unarchive(con, project_id, by)`: `archived → active` (Mainline-only), clears `archived_at`.
-- `tombstone_project(con, project_id, by, *, force=False, wait_secs=None)` (no `store_root` param —
-  gap-analysis DRIFT-6: the body folder comes from `store_dir(project_id)`, XDG-honouring): requires
+- `tombstone_project(con, project_id, by, *, force=False, wait_secs=None)` (the body folder comes
+  from `store_dir(project_id)`, XDG-honouring): requires
   state **`archived`** (tombstoning an `active` project errors: `archive it first`) and `by` == the
   **super-admin**; purges **project-internal** rows; deletes the whole `projects/<id>/` folder (bodies —
   T1 content-dies-with-origin); sets `state='tombstoned', tombstoned_at=now`.
-- **Purge predicate + ORDERING (gap-analysis DRIFT-2):** internal message = sender's project == `<id>`
+- **Purge predicate + ordering:** internal message = sender's project == `<id>`
   AND no recipient row resolves to another project. Recipient projects resolve via the `address` table,
   so the purge MUST (1) compute the internal message-id set while the project's address rows still
   exist, (2) delete those message + message_recipient rows, (3) THEN delete the project's `address` +
   `notifier` rows. Cross-project message rows AND their recipient rows (including this project's
   recipient rows on surviving messages) SURVIVE — PRD D6 "audit + thread anchoring".
-- **DEC-E (user-decided 2026-06-11):** `grant_xproj`/`revoke_xproj` gain `_require_active_project`
+- `grant_xproj`/`revoke_xproj` gain `_require_active_project`
   (refuse archived/tombstoned with the §S3 state errors); lifecycle transitions NEVER touch the
   `xproj_granted_*` columns (archive↔unarchive leave a grant in place — sends are state-blocked anyway;
   tombstone leaves the columns as part of the permanent marker).
-- **`poll_interval()` helper moves INTO `sandesh_db`** (gap-analysis DRIFT-5: `notify._interval` would
-  be a reversed import; `notify` now imports it) — `wait_secs` default = 2 × `poll_interval()`.
+- **`poll_interval()` helper lives in `sandesh_db`** (`notify` imports it — keeps the layering
+  one-directional) — `wait_secs` default = 2 × `poll_interval()`.
 - State-machine errors are exact: `project '<id>' is not active` / `not archived` / `already tombstoned`.
 
 ### §S2 — read rules (D5/D6)
@@ -48,7 +48,7 @@ tombstoned traffic, the CLI verbs with their guards, and the **super-admin perso
   traffic is NOT affected** — displays fully.
 - `thread`: where a visible chain passes through hidden/purged nodes, render the exact warning line
   `incomplete chain — message(s) removed (project tombstoned)` instead of silently skipping or failing.
-- **Mechanism (gap-analysis DRIFT-3):** the tombstoned project's `address` rows are purged, so the
+- **Mechanism:** the tombstoned project's `address` rows are purged, so the
   filter resolves each `from_addr` (and thread nodes' addresses) via the existing `_address_project`
   suffix-fallback against a once-per-call tombstoned-project set (`SELECT project_id FROM project WHERE
   state='tombstoned'`). Python-side filtering over the fetched rows — agent-scale volumes; no fragile
@@ -61,20 +61,19 @@ tombstoned traffic, the CLI verbs with their guards, and the **super-admin perso
   three accept `--dry-run` (reports watchers to evict; for tombstone additionally: counts of internal
   rows to purge, body files to delete, and cross-project messages whose bodies would be lost / threads
   that would hole — **writes nothing**).
-- **Authz shape (gap-analysis DRIFT-4):** archive/unarchive `by` must `validate_address` to
+- **Authz shape:** archive/unarchive `by` must `validate_address` to
   (`Mainline`, `<project_id>`) — format-based, honor-system, the `unregister` house pattern; tombstone
   `by` must equal `admin_name(con)`.
 
-### §S4 — super-admin persona (O3) — **CONSUMES the row shipped by CR-SAN-023**
-- _Moved by 023's gap-analysis (DEC-C/DEC-D, user-decided 2026-06-11):_ the dedicated single-row
-  `admin` table, `assign_admin`/`admin_name`, and the `install.sh` `$SANDESH_ADMIN` assignment (with
-  the no-silent-reassign refusal) all SHIP IN CR-SAN-023 (§S2b there). This CR only **reads** it:
+### §S4 — super-admin persona (O3)
+- The admin storage and assignment ship in CR-SAN-023 (its §S2b: single-row `admin` table,
+  `assign_admin`/`admin_name`, `install.sh` `$SANDESH_ADMIN`). This CR only **reads** it:
   `tombstone --by` must equal `admin_name(con)`; empty admin table → clear `no admin assigned` error.
 
 ### §S5 — docs
 - `CLAUDE.md` locked semantics: replace the teardown-less lifecycle (#5 keep-history gets the
   archive/tombstone exception note); README lifecycle section; `--dry-run`/admin documented.
-- **PRD D7 terminology disambiguation** (gap-analysis DRIFT-6): docs must distinguish the `notifier`
+- **PRD D7 terminology disambiguation:** docs must distinguish the `notifier`
   table's per-watcher `tombstone` flag (cooperative shutdown, locked semantics #8) from the project
   lifecycle state `tombstoned` — two concepts sharing a word.
 
@@ -114,7 +113,7 @@ tombstoned traffic, the CLI verbs with their guards, and the **super-admin perso
       send P2→P1 → watcher exits 0; relaunch; `archive --project P1 --by 'Mainline - P1' --force` →
       watcher exits 3 (archive takes no `--yes` — it is not destructive); kill-on-timeout guards, no bare
       sleeps.
-- [ ] **AC11 — DEC-E grant×state.** `grant_xproj`/`revoke_xproj` on an archived project raise
+- [ ] **AC11 — grant×state.** `grant_xproj`/`revoke_xproj` on an archived project raise
       `project '<id>' is archived`; on a tombstoned one `project '<id>' is tombstoned`; a grant set
       while active SURVIVES archive→unarchive (cross-project send works again immediately after
       unarchive); after tombstone the `xproj_granted_*` columns are still populated on the marker row
@@ -125,81 +124,8 @@ Large — three core ops with guard matrix, the read-rule filters touching `inbo
 installer admin hook, and the widest AC set of the wave.
 
 ## Risks / open questions
-- ~~grant×state interaction~~ — **DEC-E resolved (user, 2026-06-11)**: grant/revoke require ACTIVE;
-  transitions never touch the grant columns (§S1, AC11).
-- ~~Purge predicate~~ — **pinned at gap-analysis** (DRIFT-2: compute-internal-set-first ordering, §S1).
-- ~~Read-filter shape~~ — **pinned** (DRIFT-3: `_address_project` suffix fallback + tombstoned-set,
-  python-side, §S2).
-- ~~Admin row placement / dependency direction~~ — **resolved in CR-SAN-023** (DEC-C/DEC-D; §S4 here is
-  consume-only).
+- Hidden-traffic read filters sit on the hottest queries — keep the empty-tombstoned-set fast path.
 
 ## Non-goals
 - Any MCP exposure (CR-SAN-025 adds archive/unarchive tools; tombstone NEVER gets one — D9).
 - Message-level retention/purge tools; un-tombstoning; per-address grants.
-
-## Close-out
-_Completed 2026-06-11 (orchestrator: vidushi-sandesh). 5 cycles + VERIFY + 1 FIX._
-- **C1** `1360051`/`cf2b5bd` — `archive`/`unarchive` (state machine, Mainline authz, cooperative
-  eviction with bounded wait + `--force`), `poll_interval()` moved into `sandesh_db` (DRIFT-5), DEC-E
-  guards on grant/revoke. 63/63. AC2/AC3/AC11 (+AC1/AC6 halves).
-- **C2** `3e11a77`/`ff61280` — `tombstone_project` (two-step `archive it first`, admin-only via
-  `_require_admin(action=…)`, shared `_evict_project_notifiers`, **DRIFT-2-ordered purge** in one
-  transaction, body-folder rmtree, marker row keeps grant columns). 56/56. AC1/AC4/AC6/AC8/AC9.
-- **C3** `533b8f9`/`9db393a` — read rules: `inbox`/`fetch`/`unread_to` hide tombstoned-project traffic
-  (DRIFT-3 suffix-fallback + per-call set; hidden mail never marked read; wake suppressed); `thread`
-  warning entry `incomplete chain — message(s) removed (project tombstoned)` (consecutive holes
-  collapse; root case returns the warning); archived contrast intact. 19/19. AC5.
-- **C4** `4bfd36b`/`bf5424c` — CLI `archive|unarchive|tombstone` (confirm/`--yes` non-TTY refusal,
-  `--dry-run` previews via print-free `*_preview` fns sharing the guard code — byte-identical errors);
-  CLAUDE.md locked-semantics #5 exception + D7 terminology disambiguation; README lifecycle. 67/67. AC7.
-- **C5** `355960e` — the ONE real-subprocess E2E (watcher wake exit 0 → relaunch → archive eviction
-  exit 3; poll-with-timeout throughout; 3× stable). AC10.
-- **FIX** `7a373bd` — VERIFY should-fix: `finally: con.close()` in the 5 grant/revoke/lifecycle CLI
-  handlers (backfilled CR-023's pattern).
-- **VERIFY** (python-verify-agent) — **PASS on all 11 ACs**; boundaries clean (`mcp_server.py` diff vs
-  develop EMPTY; notify layer-clean; eviction helper + guard fns shared, no drift); the one SHOULD-FIX
-  fixed above; one NIT noted (state gate precedes authz in tombstone guards — intentional).
-- **Independent verification (orchestrator):** live probes per cycle — wedged-watcher refusal/force,
-  purge selectivity (internal gone, cross+audit rows survive, folder gone, grant marker kept), hidden
-  reads with `read_at` untouched + thread warning, dry-run accurate counts with zero writes; E2E run
-  myself; final clean gate after clearing concurrent-report artifacts.
-- **Pre-merge gate:** **973 passed / 0 failed**, `ok=True`, coverage **81.5% lines / 87.7% funcs**
-  (up from 77.0/83.7 at CR-023). 31/31 test files.
-
-## Gap-analysis findings
-_Completed 2026-06-11 (orchestrator: vidushi-sandesh; gap-analysis skill). Verdict: **SPEC_UPDATE_NEEDED
-→ applied above**. DEC-E escalated → **user-decided 2026-06-11**._
-
-### Dimension 1 (Spec vs PRD)
-D4–D8 map onto §S1–§S5 cleanly after the updates; PRD D7's terminology note added to §S5. The §S4
-assignment scope had already moved to 023 (DEC-D). No PRD requirement unmet; nothing unsupported.
-
-### Dimension 2 (Spec vs Code)
-- **DRIFT-2** — purge predicate needs the address rows to resolve recipient projects → ordering pinned
-  (compute internal set → delete messages/recipients → delete address/notifier rows); surviving
-  cross-project recipient rows kept (PRD D6 audit).
-- **DRIFT-3** — at read time the purged address rows force suffix resolution: `_address_project`
-  (`sandesh_db.py:332-339`, fallback already present) + per-call tombstoned-set; python-side filter.
-- **DRIFT-4** — archive/unarchive authz pinned to `validate_address(by) == ('Mainline', <id>)` (the
-  `unregister` pattern); tombstone `by == admin_name(con)`.
-- **DRIFT-5** — `wait_secs` needs the poll interval; `notify._interval` would invert the layer →
-  `poll_interval()` moves into `sandesh_db`, `notify` imports it.
-- **DRIFT-6** — stale spec bits fixed: `store_root` param dropped (use `store_dir`); AC10's spurious
-  `--yes` on archive removed; resolved risk bullets cleaned.
-
-### Dimension 3 (Code vs PRD)
-- **DRIFT-1 / DEC-E (user-decided)** — grant×lifecycle was undefined (023 VERIFY): grant/revoke gain
-  `_require_active_project`; transitions never touch `xproj_granted_*` (tombstoned marker keeps them).
-- **Verified:** eviction seam ready (address rows alive at archive time → project→watchers join works);
-  `setup` already refuses tombstoned ids (AC9 pins it); 023's state checks already yield AC2's
-  send/register errors for archived projects.
-
-### Summary table
-| # | Dim | Finding | Fix scope | Blocking? |
-|---|-----|---------|-----------|-----------|
-| DRIFT-1 | 3 | grant×lifecycle undefined | DEC-E (user-decided) | Yes |
-| DRIFT-2 | 2 | purge predicate/ordering | SPEC_UPDATE (§S1) | No |
-| DRIFT-3 | 2 | read-filter mechanism | SPEC_UPDATE (§S2) | No |
-| DRIFT-4 | 2 | authz shape | SPEC_UPDATE (§S3) | No |
-| DRIFT-5 | 2 | poll-interval layering | SPEC_UPDATE (§S1) | No |
-| DRIFT-6 | 2 | store_root param, AC10 --yes, stale risks | SPEC_UPDATE | No |
