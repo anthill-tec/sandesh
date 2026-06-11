@@ -4,3 +4,13 @@ __pycache__/
 .pytest_cache/
 # runtime data lives under $XDG_DATA_HOME/sandesh/, never in the repo
 *.db
+# dev/test tooling — not part of the stdlib-only deliverable
+.venv/
+.env
+test-reports/
+.coverage
+coverage.lcov
+# Codacy CLI scaffolding (local static-analysis tooling, not part of the repo)
+.codacy/
+# Kiro IDE steering / lean-ctx agent tooling (local, not part of the deliverable)
+.kiro/

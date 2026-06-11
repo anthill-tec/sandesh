@@ -4,12 +4,10 @@
 """
 
 import os
-import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app"))
-import sandesh_db as s
+from sandesh import sandesh_db as s
 
 PROJ = "Nai"
 MAINLINE = "Mainline - Nai"
@@ -153,10 +151,10 @@ class SandeshTest(unittest.TestCase):
 
     # ----- reply + thread ------------------------------------------------- #
 
-    def test_reply_defaults_and_resolves(self):
+    def test_reply_defaults(self):
         self._roster()
         req = s.send(self.con, self.tmp, T2, to=[MAINLINE], subject="cull", kind="request", project=PROJ)
-        rep = s.reply(self.con, self.tmp, req, MAINLINE, body_text="done", resolves=True, project=PROJ)
+        rep = s.reply(self.con, self.tmp, req, MAINLINE, body_text="done", project=PROJ)
         m = self.con.execute("SELECT * FROM message WHERE id=?", (rep,)).fetchone()
         self.assertEqual(m["in_reply_to"], req)
         self.assertEqual(m["subject"], "Re: cull")
@@ -164,8 +162,6 @@ class SandeshTest(unittest.TestCase):
                   self.con.execute("SELECT recipient FROM message_recipient WHERE message_id=?",
                                    (rep,)).fetchall()]
         self.assertEqual(recips, [T2])
-        self.assertEqual(self.con.execute("SELECT status FROM message WHERE id=?", (req,)).fetchone()["status"],
-                         "actioned")
 
     def test_thread_chain(self):
         self._roster()

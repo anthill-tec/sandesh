@@ -1,0 +1,72 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:        # manual TestPyPI dry-run
+  pull_request:             # build-check only (no publish)
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # hatch-vcs needs tags for the version
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Schema snapshot-sync gate (migrations ↔ current-schema.json)
+        run: |
+          python -m pip install --quiet '.[migrate]'
+          export XDG_DATA_HOME="$(mktemp -d)"
+          sandesh setup --project ci
+          sandesh migrate --all
+          sandesh migrate --dump-schema --project ci > "$XDG_DATA_HOME/dumped.json"
+          python -c "import json,sys; a=json.load(open('$XDG_DATA_HOME/dumped.json')); b=json.load(open('sandesh/schema/current-schema.json')); sys.exit(0 if a==b else 1)"
+          echo "✓ current-schema.json in sync with migrations"
+
+  publish-pypi:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write           # OIDC trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        # no password / no token — trusted publishing; attestations default-on
+
+  publish-testpypi:
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/

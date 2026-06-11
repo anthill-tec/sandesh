@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://sandesh-relay/schema/schema.meta.json",
+  "title": "Sandesh schema snapshot meta-schema",
+  "description": "Validates the FORMAT of sandesh/schema/current-schema.json: a derived PRAGMA table_info snapshot (tables -> columns -> {type, notnull, pk, default}). It is the guard for the snapshot's own shape, NOT the source of truth for the DB schema (that is the yoyo migrations).",
+  "type": "object",
+  "required": ["tables"],
+  "additionalProperties": false,
+  "properties": {
+    "tables": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["columns"],
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": ["type", "notnull", "pk", "default"],
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "notnull": {
+                  "type": "integer",
+                  "enum": [0, 1]
+                },
+                "pk": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "default": {
+                  "type": ["string", "null"]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+---
+# Codacy analysis config — paths to exclude (Java glob syntax).
+# Keeps static analysis focused on Sandesh's own code, not dev/test scaffolding
+# or vendored dependencies. (The .codacy/ CLI cache itself is gitignored.)
+exclude_paths:
+  - ".venv/**"
+  - "test-reports/**"
+  - "**/__pycache__/**"
+  - ".codacy/**"
