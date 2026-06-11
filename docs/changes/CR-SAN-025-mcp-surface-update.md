@@ -1,6 +1,6 @@
 # CR-SAN-025 — MCP surface update (archive/unarchive tools, cross-project docs)
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-12 on develop)
 **Priority:** Medium (agent-facing polish over the wave's core)
 **Depends on:** CR-SAN-024 (lifecycle ops)
 **Labels:** wave-6, global-store, mcp
@@ -19,14 +19,21 @@ revoke**) are deliberately **absent**, and the tool docs teach agents the new cr
 ### §S1 — the two new tools (D9)
 - `sandesh_archive(project_id, by, force=False)` and `sandesh_unarchive(project_id, by)` in
   `mcp_server.py`, thin adapters over the CR-SAN-024 core ops. **`project_id` is REQUIRED** (no
-  `$SANDESH_PROJECT` fallback on lifecycle ops). Annotations: `sandesh_archive` is reversible —
-  `destructiveHint=False` + `idempotentHint=False`; errors map via the existing `ToolError` pattern.
+  `$SANDESH_PROJECT` fallback on lifecycle ops — they must not use `_resolve_project`). Annotations:
+  `sandesh_archive` is reversible — `destructiveHint=False` + `idempotentHint=False`. Error mapping:
+  the house `(ValueError, PermissionError)` → `ToolError` pattern **plus `RuntimeError`** (the
+  wedged-watcher eviction refusal from `archive` raises it — must surface as a `ToolError`, not a raw
+  traceback). `sandesh_archive`'s docstring notes the call may block up to ~2× the poll interval while
+  watchers are cooperatively evicted, and that `force=True` reaps a non-cooperating watcher.
 - **No `sandesh_tombstone`, no grant/revoke tools — ever** (D9/D11: backend-admin, CLI-only).
 
-### §S2 — `project_id` optionality on existing verbs
-- Where the project is derivable from addresses (`send`, `reply`, `fetch`, `inbox`, `thread`),
-  `project_id` becomes optional context (kept as an arg for compatibility); `setup`/`addressbook`/
-  `register` keep it as today.
+### §S2 — `project_id` derivation on existing verbs
+- `project_id` is already optional on every tool (explicit arg → `$SANDESH_PROJECT`); the change is
+  the **fallback chain when BOTH are absent** — instead of erroring, derive the context per tool:
+  `send`/`reply` from `from_addr`'s `<Project>` part; `fetch` from `recipient`'s; `inbox`/`thread`
+  need no project at all (recipient-/id-keyed queries on the global DB — absent project is simply
+  unused). An explicit/env project still wins, and the existing sender-must-match-context validation
+  is unchanged. `setup`/`addressbook`/`register` keep today's explicit-or-env requirement.
 
 ### §S3 — docs the agent reads
 - Tool docstrings + the server `instructions` + the `sandesh://usage` resource updated for: cross-project
@@ -49,7 +56,7 @@ revoke**) are deliberately **absent**, and the tool docs teach agents the new cr
       error even with `$SANDESH_PROJECT` set (the env fallback must NOT apply to lifecycle tools).
 - [ ] **AC4 — authz mapped.** `sandesh_archive(by='Track 1 - P2')` (not Mainline) surfaces the rejection
       as a `ToolError` (not a crash) with the authz message.
-- [ ] **AC5 — optionality.** `sandesh_send` works without `project_id` (derived from `from_addr`);
+- [ ] **AC5 — derivation.** With neither `project_id` nor $SANDESH_PROJECT set: `sandesh_send` works (context derived from `from_addr`), `sandesh_fetch` works (from `recipient`), `sandesh_inbox`/`sandesh_thread` work (no project needed);
       `sandesh_setup` still requires/uses it as today.
 - [ ] **AC6 — docs updated.** The server `instructions` and the `sandesh://usage` resource mention
       cross-project sending, the admin grant error, and the archive lifecycle (content/grep markers).

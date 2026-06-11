@@ -10,8 +10,10 @@ Return-shape reference (mcp 1.27.2):
   _data()   extracted from test_mcp_read_tools.py for list-returning tools.
 
 CR-SAN-005 contract: sandesh_actioned has been removed (10 → 9 tools).
-  - AC1/AC2 list_tools tests assert exactly 9 tools; sandesh_actioned must NOT be present.
+  - AC1/AC2 list_tools tests assert the original 9 tools; sandesh_actioned must NOT be present.
   - sandesh_reply has no resolves/reply_all parameters (invariant lock, AC3).
+  - CR-SAN-025 (AC1): tool count is now 11 (archive + unarchive added); exact count
+    asserted in test_mcp_lifecycle_tools.py.
 
   python-crucible.py test --tests tests.test_mcp_mutating_tools --agent CR-SAN-005-C0-RED
 """
@@ -122,17 +124,28 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("sandesh_actioned", names)
 
     # ------------------------------------------------------------------
-    # AC2 — exactly 9 tools total (CR-SAN-005: sandesh_actioned removed)
+    # AC2 — original 9 tools present (CR-SAN-005: sandesh_actioned removed)
 
-    async def test_list_tools_returns_exactly_nine_tools(self):
-        """AC2 (CR-SAN-005): list_tools() returns exactly 9 tools total
-        (sandesh_setup + 4 read tools + 4 mutating tools = 9).
-        RED driver: currently 10 — assertEqual(9) will FAIL."""
+    async def test_list_tools_contains_the_original_nine_tools(self):
+        """AC2 (CR-SAN-005): list_tools() includes the original 9 tools
+        (sandesh_setup + 4 read tools + 4 mutating tools)."""
         tools = await mcp_server.mcp.list_tools()
-        names = [t.name for t in tools]
-        self.assertEqual(
-            len(names), 9,
-            f"expected exactly 9 tools but got {len(names)}: {sorted(names)}",
+        names = {t.name for t in tools}
+        expected_names = {
+            "sandesh_setup",
+            "sandesh_addressbook",
+            "sandesh_inbox",
+            "sandesh_fetch",
+            "sandesh_thread",
+            "sandesh_register",
+            "sandesh_unregister",
+            "sandesh_send",
+            "sandesh_reply",
+        }
+        # Exact-count contract lives in test_mcp_lifecycle_tools (CR-SAN-025 AC1).
+        self.assertTrue(
+            expected_names <= names,
+            f"Missing original tools: {sorted(expected_names - names)}; got={sorted(names)}",
         )
 
     # ------------------------------------------------------------------

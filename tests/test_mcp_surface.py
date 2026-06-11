@@ -47,11 +47,11 @@ class McpSurfaceTest(unittest.IsolatedAsyncioTestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     # -------------------------------------------------------------------------
-    # AC1 — contract preserved: exactly 9 tools; sandesh_reply signature locked
+    # AC1 — contract preserved: original 9 tools present; sandesh_reply signature locked
     # -------------------------------------------------------------------------
 
-    async def test_ac1_list_tools_returns_exactly_nine_tools(self):
-        """AC1: list_tools() returns exactly 9 tools; sandesh_actioned must NOT be present."""
+    async def test_ac1_list_tools_contains_the_original_nine_tools(self):
+        """AC1: the original 9 tool names are all listed; sandesh_actioned must NOT be present."""
         tools = await mcp_server.mcp.list_tools()
         names = {t.name for t in tools}
         expected_names = {
@@ -65,13 +65,10 @@ class McpSurfaceTest(unittest.IsolatedAsyncioTestCase):
             "sandesh_send",
             "sandesh_reply",
         }
-        self.assertEqual(
-            len(tools), 9,
-            f"Expected exactly 9 tools, got {len(tools)}: {sorted(names)}",
-        )
-        self.assertEqual(
-            names, expected_names,
-            f"Tool name mismatch. got={sorted(names)}, expected={sorted(expected_names)}",
+        # Exact-count contract lives in test_mcp_lifecycle_tools (CR-SAN-025 AC1).
+        self.assertTrue(
+            expected_names <= names,
+            f"Missing original tools: {sorted(expected_names - names)}; got={sorted(names)}",
         )
         self.assertNotIn(
             "sandesh_actioned", names,

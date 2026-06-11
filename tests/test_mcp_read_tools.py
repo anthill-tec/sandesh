@@ -198,11 +198,6 @@ class McpReadToolsTest(unittest.IsolatedAsyncioTestCase):
         # so MAINLINE is sender not recipient there — only 2 rows.
         self.assertGreaterEqual(len(actual), 2)
 
-    async def test_inbox_no_project_raises_toolerror(self):
-        """AC3 error path: no project_id and no $SANDESH_PROJECT raises ToolError."""
-        with self.assertRaises(ToolError):
-            await mcp_server.mcp.call_tool("sandesh_inbox", {"recipient": MAINLINE})
-
     async def test_inbox_cc_recipient_stays_unread_after_to_recipient_reads(self):
         """AC3 / locked semantic: TRACK1 was cc'd on mid_body. Its unread state is
         independent of MAINLINE reading it."""
@@ -271,10 +266,14 @@ class McpReadToolsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(subj_messages), 1)
         self.assertIsNone(subj_messages[0]["body"])
 
-    async def test_fetch_no_project_raises_toolerror(self):
-        """AC4 error path: no project_id and no $SANDESH_PROJECT raises ToolError."""
-        with self.assertRaises(ToolError):
-            await mcp_server.mcp.call_tool("sandesh_fetch", {"recipient": MAINLINE})
+    async def test_fetch_no_project_malformed_recipient_raises_toolerror(self):
+        """AC4 error path (CR-SAN-025 §S2): no project_id, no $SANDESH_PROJECT, and a
+        malformed recipient — derivation fails with the bad-address ToolError."""
+        # The valid-recipient no-project path (successful derivation) is covered in
+        # test_mcp_project_derivation.py.
+        with self.assertRaises(ToolError) as cm:
+            await mcp_server.mcp.call_tool("sandesh_fetch", {"recipient": "not-an-address"})
+        self.assertIn("bad address", str(cm.exception))
 
     # ------------------------------------------------------------------
     # AC5 — sandesh_thread parity (list[sqlite3.Row] → list[dict])
@@ -315,12 +314,6 @@ class McpReadToolsTest(unittest.IsolatedAsyncioTestCase):
         actual = _data(result)
         self.assertEqual(len(actual), 1)
         self.assertEqual(actual[0]["id"], self.mid_subj)
-
-    async def test_thread_no_project_raises_toolerror(self):
-        """AC5 error path: no project_id and no $SANDESH_PROJECT raises ToolError."""
-        with self.assertRaises(ToolError):
-            await mcp_server.mcp.call_tool("sandesh_thread", {"msg_id": self.mid_subj})
-
 
 if __name__ == "__main__":
     unittest.main()
