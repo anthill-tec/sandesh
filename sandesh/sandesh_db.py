@@ -24,8 +24,9 @@ Model — five tables:
 Semantics:
   - To wakes / Cc silent     notify fires only on role='to'; fetch pulls to+cc.
   - all-tracks broadcast      expands to the sender's project's active addresses
-                               minus the sender (cross-project send is blocked
-                               until CR-SAN-023's grant).
+                               minus the sender (never crosses projects).
+  - cross-project grant        sends to another project need the admin's per-project
+                               grant (grant_xproj/revoke_xproj); denied otherwise.
   - per-recipient read         read_at lives on message_recipient, not the message.
   - keep history              nothing deleted; read_at (per recipient) is the only "seen" signal.
   - subject-only               body_path NULL → the subject IS the content.

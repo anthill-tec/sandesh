@@ -61,8 +61,20 @@ def cmd_setup(args):
 
 
 def cmd_projects(args):
-    ps = sdb.list_projects()
-    print("\n".join(ps) if ps else "(no projects set up)")
+    con = sdb.connect()
+    try:
+        rows = con.execute(
+            "SELECT project_id, state, xproj_granted_at FROM project "
+            "WHERE state != 'tombstoned' ORDER BY project_id").fetchall()
+        if not rows:
+            print("(no projects set up)")
+            return 0
+        print(f"{'PROJECT':20} {'STATE':10} CROSS-PROJECT")
+        for r in rows:
+            print(f"{r['project_id']:20} {r['state']:10} "
+                  f"{'✓' if r['xproj_granted_at'] else '-'}")
+    finally:
+        con.close()
     return 0
 
 

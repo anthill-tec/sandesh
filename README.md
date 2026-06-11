@@ -140,6 +140,17 @@ sandesh --project Nai addressbook
 `$SANDESH_PROJECT` and `$SANDESH_ADDRESS` default `--project` and the caller's own
 address. `$SANDESH_POLL_SECONDS` sets the watcher cadence (default 10, floor 3).
 
+### Cross-project messaging
+
+All projects share the one global DB, but sending **across** projects is **admin-gated**:
+the sender's project needs a one-time grant — `sandesh grant --cross-project --project <id>
+--by <admin>` (revoke with `sandesh revoke --cross-project …`; project-wide, inherited by
+every participant of the granted project). Without it, the send fails with
+`cross-project sending not approved for project '<id>' — ask the Sandesh admin`. The admin
+is assigned **only at install** via `$SANDESH_ADMIN` (`install.sh`) — there is no CLI or MCP
+surface to set it. `all-tracks` broadcasts never cross projects, grant or not.
+`sandesh projects` shows each project's state and grant (`PROJECT  STATE  CROSS-PROJECT`).
+
 ## Schema migrations
 
 `sandesh migrate` is the schema-migration command — it brings an existing store up to the

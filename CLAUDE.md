@@ -50,12 +50,15 @@ but nothing is Claude-specific anymore — it's a general agent-messaging primit
   (Wave 1), the MCP server `sandesh-mcp` (Wave 2 — the verbs as MCP tools; the watcher
   stays the wake path), packaging/PyPI workflow, and the schema-migration subsystem +
   installer auto-migrate (Wave 5, CR-SAN-017/018).
-- **Wave 6 — IN PROGRESS: the global store.** **CR-SAN-022 done (pending merge)** — one
+- **Wave 6 — IN PROGRESS: the global store.** **CR-SAN-022 done (merged)** — one
   global `sandesh.db` (WAL) for all projects, the `project` tracker table +
   `address.project`, global-target `migrate`, explicit project scoping, legacy-store
-  `consolidate`. Next: CR-SAN-023 (cross-project grant), CR-SAN-024 (lifecycle verbs),
-  CR-SAN-025 (MCP surface). Design contract: `docs/research/PRD-global-store.md`
-  (AGREED 2026-06-11).
+  `consolidate`. **CR-SAN-023 done (pending merge)** — cross-project messaging behind
+  the admin's per-project grant (`grant`/`revoke --cross-project`), the single-row
+  `admin` table (assigned at install via `$SANDESH_ADMIN`), tracker-state checks on
+  `send`/`reply`/`register`, the 3-column `projects` listing. Next: CR-SAN-024
+  (lifecycle verbs), CR-SAN-025 (MCP surface). Design contract:
+  `docs/research/PRD-global-store.md` (AGREED 2026-06-11).
 - **Not yet adopted** by the originating orchestration workflow — that's a separate,
   deliberate step (seed an addressbook, sessions run `notify`, migrate off the old
   file-note relay).
@@ -137,9 +140,13 @@ tombstoned id).
    sender gets none). *Re-opened by design (CR-SAN-022):* the original wording relied on
    per-project stores for isolation; `docs/research/PRD-global-store.md` (AGREED
    2026-06-11) replaced those with the single global DB, so the scoping is now explicit
-   via `address.project` — and cross-project messaging is EXPLICITLY BLOCKED until
-   CR-SAN-023's grant: `send` to a foreign project fails with
-   `cross-project sending is not enabled (CR-SAN-023)`.
+   via `address.project` — and **cross-project messaging requires the admin's
+   per-project grant** (CR-SAN-023): `sandesh grant --cross-project --project <id>
+   --by <admin>` — one-time, inherited by every participant of the granted project,
+   revoked project-wide (`revoke --cross-project`). Without it, `send` to a foreign
+   project fails with `cross-project sending not approved for project '<id>' — ask the
+   Sandesh admin`. The `all-tracks` broadcast stays sender-project-scoped regardless of
+   grant.
 3. **Per-recipient read.** `read_at` lives on `message_recipient`, not `message` — a
    broadcast/cc stays unread for the others after one reads it.
 4. **Subject-only ⟷ file-body.** `subject` is mandatory (the minimal content). No
@@ -250,6 +257,13 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
   `projects/<id>/sandesh.db` into the global DB (ids remapped, reply chains relinked,
   body files unmoved), enrolls the project, and keeps the legacy file as
   `sandesh.db.pre-global`.
+- **The super-admin is NOT an address.** A single-row `admin` table (`CHECK (id = 1)`)
+  holds the Sandesh admin's name — never messageable, registrable, or listable. It is
+  assigned ONLY at install time via `$SANDESH_ADMIN` (an inline venv-python call in
+  `install.sh`); there is deliberately NO CLI or MCP surface to create/change it, and a
+  different-name re-assign is refused (`refusing to silently re-assign`).
+- **`register` requires enrollment.** Registering into a project with no tracker row
+  fails with `unknown project '<id>'` — run `setup` first (it enrolls the project).
 
 ---
 
