@@ -349,47 +349,39 @@ class Migration0003AddressProjectBackfillTest(_TempDataHome):
     """AC1: 0003 adds address.project column and backfills it from the address
     suffix ('Mainline - Demo' → 'Demo').
 
-    Fixture strategy: build a LEGACY store that has no project column.
-    Since 0003 does not yet exist, sandesh_db.setup() today does not include
-    address.project.  After setup() + register() we verify the column is absent,
-    then apply 0003 and assert the column appears with correct backfill values.
-
-    RED: 0003 absent → address.project column never created → assertions fail.
+    Fixture strategy (post-GREEN): build a legacy store by rolling back 0003.
+      1. setup() + apply() provisions the full chain (incl. 0003).
+      2. rollback() undoes exactly 0003 — address table rebuilt WITHOUT project
+         column; project table dropped; address rows preserved.
+      3. Hard-assert (no skip) that address.project is absent after rollback —
+         if it is still present the rollback itself is broken.
+      4. Insert two legacy rows via raw SQL (kind column survives rollback).
+    Tests then call apply() to re-apply 0003 and assert the backfill semantics.
     """
-
-    # Verbatim address DDL from current _SCHEMA (no project column).
-    # Used to rebuild the address table from scratch in the legacy-fixture path.
-    _LEGACY_ADDRESS_DDL = """
-CREATE TABLE address (
-    address       TEXT PRIMARY KEY,
-    kind          TEXT,
-    display_name  TEXT,
-    active        BOOLEAN NOT NULL DEFAULT TRUE,
-    registered_at TEXT NOT NULL DEFAULT (datetime('now')),
-    registered_by TEXT
-);
-"""
 
     def setUp(self):
         super().setUp()
         self._dh = self._data_home("backfill")
         self._pid = "Demo"
-        # Step 1: provision a store with the current (pre-0003) sandesh_db.setup()
-        # and apply 0001+0002 only (the current migration chain).
+
+        # Step 1: full provisioning — setup() + apply() including 0003.
         self._setup_project(self._pid, self._dh)
         self._apply(self._pid, self._dh)
         self._db = self._db_path(self._pid, self._dh)
 
-        # Step 2: verify no project column exists yet (pre-condition check)
-        cols = _column_map(self._db, "address")
-        if "project" in cols:
-            self.skipTest(
-                "address.project already present before 0003 — GREEN already shipped; "
-                "this fixture requires a pre-0003 store."
-            )
+        # Step 2: roll back exactly one step (0003) to get a pre-0003 address table.
+        self._rollback(self._pid, self._dh)
 
-        # Step 3: insert two address rows directly (register() may or may not
-        # populate project in future GREEN; we use raw SQL to build the legacy fixture).
+        # Step 3: hard-assert the rollback worked — no skip, no soft conditional.
+        cols = _column_map(self._db, "address")
+        self.assertNotIn(
+            "project",
+            cols,
+            "FIXTURE BUG: address.project still present after rollback(). "
+            "The 0003 rollback SQL did not remove the column — fix the rollback.",
+        )
+
+        # Step 4: insert two legacy rows directly (kind column survives rollback).
         with sqlite3.connect(self._db) as con:
             con.execute(
                 "INSERT INTO address (address, kind) VALUES (?, ?)",
@@ -400,21 +392,6 @@ CREATE TABLE address (
                 ("Track 1 - Demo", "track"),
             )
             con.commit()
-
-    def test_address_has_no_project_column_before_0003(self):
-        """Pre-condition: address table must NOT have a project column before 0003.
-
-        This confirms the fixture is correctly set up as a legacy store.
-        If this test PASSES, the migration hasn't been applied yet (correct).
-        If this test FAILS, the GREEN already shipped — wrong test ordering.
-        """
-        cols = _column_map(self._db, "address")
-        self.assertNotIn(
-            "project",
-            cols,
-            "address table must NOT have 'project' column before 0003 is applied; "
-            "fixture is broken or GREEN already shipped.",
-        )
 
     def test_address_project_column_exists_after_0003(self):
         """After applying 0003, address.project column must exist.
