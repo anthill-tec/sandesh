@@ -89,21 +89,16 @@ class T2InMemoryClientServerTest(unittest.IsolatedAsyncioTestCase):
                 os.environ[k] = v
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    # -- AC1: list_tools returns exactly 9 tools (CR-SAN-005: sandesh_actioned removed) ----
+    # -- AC1: list_tools contains the original 9 tools (CR-SAN-005: sandesh_actioned removed) ----
 
-    async def test_ac1_list_tools_returns_exactly_9(self):
-        """AC1 (CR-SAN-005) — session.list_tools() returns exactly 9 tools by name.
-        RED driver: currently 10 (sandesh_actioned still present) — both assertions will FAIL."""
+    async def test_ac1_list_tools_contains_the_original_nine_tools(self):
+        """AC1 (CR-SAN-005) — session.list_tools() includes the original 9 tool names."""
         # Import here so collection still works when HAS_MCP is False at module level
         from sandesh import mcp_server  # noqa: F401
 
         async with create_connected_server_and_client_session(mcp_server.mcp) as session:
             list_result = await session.list_tools()
-            names = [t.name for t in list_result.tools]
-            self.assertEqual(
-                len(names), 9,
-                f"Expected 9 tools, got {len(names)}: {names}",
-            )
+            names = {t.name for t in list_result.tools}
             expected_names = {
                 "sandesh_setup",
                 "sandesh_addressbook",
@@ -115,9 +110,10 @@ class T2InMemoryClientServerTest(unittest.IsolatedAsyncioTestCase):
                 "sandesh_send",
                 "sandesh_reply",
             }
-            self.assertEqual(
-                set(names), expected_names,
-                f"Tool name mismatch. got={set(names)}, expected={expected_names}",
+            # Exact-count contract lives in test_mcp_lifecycle_tools (CR-SAN-025 AC1).
+            self.assertTrue(
+                expected_names <= names,
+                f"Missing original tools: {sorted(expected_names - names)}; got={sorted(names)}",
             )
 
     # -- AC2a: read tool (sandesh_addressbook) matches seeded library state --
@@ -404,11 +400,11 @@ class T3SubprocessStdioTest(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(msg["from"], sender)
 
-    # -- AC5: list_tools over stdio returns 9 tools (CR-SAN-005) ------------
+    # -- AC5: list_tools over stdio contains the original 9 tools (CR-SAN-005) ------------
 
-    async def test_ac5_list_tools_over_stdio_returns_9(self):
-        """AC5 (CR-SAN-005) — list_tools over subprocess stdio yields 9 tool names.
-        RED driver: currently 10 — both assertions will FAIL."""
+    async def test_ac5_list_tools_over_stdio_contains_the_original_nine_tools(self):
+        """AC5 (CR-SAN-005) — list_tools over subprocess stdio includes the original
+        9 tool names."""
         params = StdioServerParameters(
             command=_VENV_PYTHON,
             args=["-m", "sandesh.mcp_server"],
@@ -419,7 +415,6 @@ class T3SubprocessStdioTest(unittest.IsolatedAsyncioTestCase):
                 await session.initialize()
                 list_result = await session.list_tools()
                 names = {t.name for t in list_result.tools}
-                self.assertEqual(len(list_result.tools), 9, f"Expected 9 tools, got {names}")
                 expected = {
                     "sandesh_setup",
                     "sandesh_addressbook",
@@ -431,7 +426,11 @@ class T3SubprocessStdioTest(unittest.IsolatedAsyncioTestCase):
                     "sandesh_send",
                     "sandesh_reply",
                 }
-                self.assertEqual(names, expected)
+                # Exact-count contract lives in test_mcp_lifecycle_tools (CR-SAN-025 AC1).
+                self.assertTrue(
+                    expected <= names,
+                    f"Missing original tools: {sorted(expected - names)}; got={sorted(names)}",
+                )
 
     # -- AC5 extended: error path over stdio ---------------------------------
 
