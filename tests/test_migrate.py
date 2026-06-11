@@ -740,12 +740,9 @@ class MigrateBaselineEqualsSchemaTest(unittest.TestCase):
             0,
             f"status() must report 0 pending after apply(); got pending={pending!r}",
         )
-        # Exact count: exactly 2 applied (0001-baseline + 0002-drop-message-status)
-        self.assertEqual(
-            len(applied),
-            2,
-            f"Exactly 2 migrations must be applied (0001-baseline + 0002-drop-message-status); got {applied!r}",
-        )
+        # CR-SAN-022: chain length deliberately NOT pinned — membership +
+        # zero-pending assert the contract without re-breaking on each new
+        # migration (0003+).
 
 
 # ---------------------------------------------------------------------------
@@ -1126,11 +1123,9 @@ class MigrateCliApplyTest(unittest.TestCase):
             "0002-drop-message-status", applied,
             f"After 2 applies, 0002-drop-message-status must still be applied; got {applied!r}",
         )
-        # Exact count: exactly 2 applied (0001-baseline + 0002-drop-message-status)
-        self.assertEqual(
-            len(applied), 2,
-            f"Exactly 2 migrations applied (0001-baseline + 0002-drop-message-status); got {applied!r}",
-        )
+        # CR-SAN-022: chain length deliberately NOT pinned — membership +
+        # zero-pending assert idempotency without re-breaking on each new
+        # migration (0003+).
 
 
 # ---------------------------------------------------------------------------
@@ -1472,8 +1467,8 @@ class MigrateCliAllFlagTest(unittest.TestCase):
             applied, pending = _status_api(pid, data_home)
             self.assertEqual(len(pending), 0,
                              f"{pid}: still 0 pending after 2nd --all; pending={pending!r}")
-            self.assertEqual(len(applied), 2,
-                             f"{pid}: exactly 2 applied after 2nd --all (0001+0002); applied={applied!r}")
+            # CR-SAN-022: chain length deliberately NOT pinned — membership +
+            # zero-pending assert idempotency without re-breaking on 0003+.
             self.assertIn("0001-baseline", applied,
                           f"{pid}: 0001-baseline must be applied; applied={applied!r}")
             self.assertIn("0002-drop-message-status", applied,
@@ -4565,14 +4560,18 @@ class MigrateRollbackTest(unittest.TestCase):
         )
 
     def test_rollback_restores_status_column_pragma(self):
-        """After apply(0001+0002) + rollback, PRAGMA table_info(message) must
-        include 'status' again.
+        """After full apply + rolling back PAST 0002, PRAGMA table_info(message)
+        must include 'status' again.
+
+        CR-SAN-022: rollback() is one-step (most recent first), so with 0003 in
+        the chain reaching 0002's undo takes TWO rollbacks (0003, then 0002).
 
         RED:
           - 0002 absent → after apply() only 0001 is applied; no 0002 to roll
             back; rollback() may raise or be a no-op; status column state
             doesn't change (was already present from 0001); but the FOLLOWING
-            test (status shows 0002 pending) will catch the real missing piece.
+            test (status shows the rolled-back step pending) will catch the
+            real missing piece.
           - rollback() absent → AttributeError.
         """
         data_home = os.path.join(self._tmpdir, "dh_rb_pragma")
@@ -4585,11 +4584,12 @@ class MigrateRollbackTest(unittest.TestCase):
         self.assertNotIn(
             "status",
             col_names_before,
-            "Pre-condition: after applying 0001+0002, message.status must be ABSENT "
+            "Pre-condition: after applying the full chain, message.status must be ABSENT "
             f"(so the rollback test is meaningful); columns: {col_names_before!r}",
         )
 
-        # Rollback 0002
+        # Rollback 0003 (most recent), then 0002 — one step each
+        self._rollback_via_api("RbPragma", data_home)
         self._rollback_via_api("RbPragma", data_home)
 
         col_names_after = [
@@ -4603,19 +4603,37 @@ class MigrateRollbackTest(unittest.TestCase):
         )
 
     def test_rollback_makes_0002_pending_again_via_api(self):
-        """After rollback, migrate.status() must show 0002 as pending (not applied).
+        """rollback() is one-step: the FIRST undoes the most recent step (0003),
+        the SECOND makes 0002 pending again.
 
         RED: rollback() absent / 0002 absent.
         """
         data_home = os.path.join(self._tmpdir, "dh_rb_pending_api")
         self._apply_0001_and_0002("RbPendApi", data_home)
-        self._rollback_via_api("RbPendApi", data_home)
 
+        # First rollback undoes the MOST RECENT applied step (0003), not 0002.
+        self._rollback_via_api("RbPendApi", data_home)
+        applied, pending = _status_api("RbPendApi", data_home)
+        self.assertIn(
+            "0003-project-tracker",
+            pending,
+            "After one rollback, the most recent step '0003-project-tracker' must be pending;\n"
+            f"applied={applied!r}, pending={pending!r}",
+        )
+        self.assertIn(
+            "0002-drop-message-status",
+            applied,
+            "After one rollback, '0002-drop-message-status' must STILL be applied (one-step);\n"
+            f"applied={applied!r}, pending={pending!r}",
+        )
+
+        # Second rollback now undoes 0002.
+        self._rollback_via_api("RbPendApi", data_home)
         applied, pending = _status_api("RbPendApi", data_home)
         self.assertIn(
             "0002-drop-message-status",
             pending,
-            "After rollback, '0002-drop-message-status' must be in the pending set;\n"
+            "After a second rollback, '0002-drop-message-status' must be in the pending set;\n"
             f"applied={applied!r}, pending={pending!r}",
         )
 
@@ -4688,7 +4706,11 @@ class MigrateRollbackTest(unittest.TestCase):
         )
 
     def test_rollback_via_cli_restores_status_column(self):
-        """CLI: migrate --rollback restores message.status column (PRAGMA check).
+        """CLI: migrate --rollback (run twice — one step each: 0003, then 0002)
+        restores message.status column (PRAGMA check).
+
+        CR-SAN-022: with 0003 in the chain, reaching 0002's undo takes two
+        one-step CLI rollbacks.
 
         RED: --rollback absent / 0002 absent.
         """
@@ -4707,6 +4729,8 @@ class MigrateRollbackTest(unittest.TestCase):
             else:
                 os.environ["XDG_DATA_HOME"] = orig
 
+        # Two one-step rollbacks: first undoes 0003, second undoes 0002.
+        _run_cli(["migrate", "--rollback", "--project", "RbCliPragma"], data_home)
         _run_cli(["migrate", "--rollback", "--project", "RbCliPragma"], data_home)
 
         col_names = [c["name"] for c in _pragma_table_info(db_path, "message")]
@@ -5493,15 +5517,13 @@ class MigrateDiffStatusRemovedTest(unittest.TestCase):
             f"message.status old type must be 'TEXT'; got {status_entry.get('old', {})!r}",
         )
 
-    def test_diff_added_and_changed_are_empty_for_pre0002_vs_post0002(self):
-        """When the old snapshot is pre-0002 (only status removed), 'added' and
-        'changed' lists must be empty (only a removal, nothing added or changed).
+    def test_diff_pre0002_vs_post0002_message_table_only_drops_status(self):
+        """When the old snapshot is pre-0002, the 'message' table's only diff
+        must be the removal of message.status — nothing added or changed on it.
 
-        RED: 0002 absent → live store still has status → diff shows no difference
-        at all → added=[], removed=[], changed=[] → 'removed' is empty → the
-        above tests fail, but this test would PASS (vacuously) at RED time.
-        This test is therefore a GREEN-guaranteeing assertion: it should pass
-        once 0002 exists AND the snapshot only changed by removing status.
+        Assertions are scoped to the 'message' table (the table 0002 is about);
+        other tables' evolution (later migrations, e.g. 0003) is deliberately
+        un-pinned so this test survives future schema growth.
         """
         data_home = os.path.join(self._tmpdir, "dh_ac9_add_chg")
         _make_fully_migrated_store("AC9AddChg", data_home)
@@ -5515,17 +5537,36 @@ class MigrateDiffStatusRemovedTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0,
                          f"Exit 0 required.\nstdout: {r.stdout!r}\nstderr: {r.stderr!r}")
         parsed = _json.loads(r.stdout)
+        added_message = [
+            e for e in parsed.get("added", [])
+            if isinstance(e, dict) and e.get("table") == "message"
+        ]
         self.assertEqual(
-            parsed.get("added", "MISSING"),
+            added_message,
             [],
-            f"'added' must be empty when old=pre-0002 and current=post-0002; "
-            f"got: {parsed.get('added')!r}",
+            f"no 'added' entry may reference table 'message' when old=pre-0002 "
+            f"and current=post-0002; got: {added_message!r}",
         )
+        changed_message = [
+            e for e in parsed.get("changed", [])
+            if isinstance(e, dict) and e.get("table") == "message"
+        ]
         self.assertEqual(
-            parsed.get("changed", "MISSING"),
+            changed_message,
             [],
-            f"'changed' must be empty when only status was removed; "
-            f"got: {parsed.get('changed')!r}",
+            f"no 'changed' entry may reference table 'message' when only status "
+            f"was removed; got: {changed_message!r}",
+        )
+        removed_message = [
+            (e.get("table"), e.get("column"))
+            for e in parsed.get("removed", [])
+            if isinstance(e, dict) and e.get("table") == "message"
+        ]
+        self.assertEqual(
+            removed_message,
+            [("message", "status")],
+            f"'removed' must contain exactly the ('message','status') entry for "
+            f"the message table; got: {removed_message!r}",
         )
 
 

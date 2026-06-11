@@ -26,6 +26,12 @@
           "pk": 0,
           "type": "TEXT"
         },
+        "project": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
         "registered_at": {
           "default": "datetime('now')",
           "notnull": 1,
