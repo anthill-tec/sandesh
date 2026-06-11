@@ -560,5 +560,31 @@ class McpLifecycleToolsTest(unittest.IsolatedAsyncioTestCase):
         )
 
 
+    # -------------------------------------------------------------------------
+    # sandesh_unarchive error mapping: active project → ToolError "is not archived"
+    # -------------------------------------------------------------------------
+
+    async def test_unarchive_on_active_project_raises_toolerror_with_is_not_archived(self):
+        """sandesh_unarchive on an ACTIVE project (i.e. never archived) must raise a
+        ToolError whose message contains 'is not archived'.
+
+        The underlying library raises ValueError("project 'P2' is not archived");
+        mcp_server.py maps (ValueError, PermissionError, RuntimeError) → ToolError.
+        This pins that error-mapping path for unarchive (dispatch-approved follow-up
+        from C1 review)."""
+        # P2 is provisioned by setUp and is in state 'active' — never archived.
+        with self.assertRaises(ToolError) as ctx:
+            await mcp_server.mcp.call_tool(
+                "sandesh_unarchive",
+                {"project_id": PROJ2, "by": MAINLINE_P2},
+            )
+        err_msg = str(ctx.exception)
+        self.assertIn(
+            "is not archived", err_msg,
+            f"ToolError from unarchive on active project must contain 'is not archived'; "
+            f"got: {err_msg!r}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -10,8 +10,10 @@ Return-shape reference (mcp 1.27.2):
   _data()   extracted from test_mcp_read_tools.py for list-returning tools.
 
 CR-SAN-005 contract: sandesh_actioned has been removed (10 → 9 tools).
-  - AC1/AC2 list_tools tests assert exactly 9 tools; sandesh_actioned must NOT be present.
+  - AC1/AC2 list_tools tests assert the original 9 tools; sandesh_actioned must NOT be present.
   - sandesh_reply has no resolves/reply_all parameters (invariant lock, AC3).
+  - CR-SAN-025 (AC1): tool count is now 11 (archive + unarchive added); exact count
+    asserted in test_mcp_lifecycle_tools.py.
 
   python-crucible.py test --tests tests.test_mcp_mutating_tools --agent CR-SAN-005-C0-RED
 """
