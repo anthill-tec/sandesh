@@ -109,8 +109,11 @@ sandesh/
 ## 5. Verification (informs the CRs' ACs)
 
 Deterministic lib/CLI tests per filter + composition (incl. tombstone-hidden + archived-visible
-contrast); FTS: indexing at send, subject-only messages, reindex over a consolidated fixture, bm25
-ordering sanity, snippet presence, malformed-query error, read-state untouched; snapshot-sync gate
+contrast); FTS: indexing at send, subject-only messages, reindex over a consolidated fixture, the
+lazy auto-reindex heuristic (fires once on empty-index + non-empty store; never on a sparse index),
+bm25 ordering sanity, snippet presence, pagination (limit/offset/total), the own-mailbox boundary
+(a Mainline cannot search another recipient's mail), malformed-query error, read-state untouched;
+snapshot-sync gate
 green WITH the FTS exclusion (dump == committed snapshot on a fully-migrated store); MCP in-process +
 one stdio E2E scenario; the `projects`/`migrate` regression suites untouched.
 
