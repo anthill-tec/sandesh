@@ -1,6 +1,6 @@
 # CR-SAN-025 — MCP surface update (archive/unarchive tools, cross-project docs)
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-12 on develop)
 **Priority:** Medium (agent-facing polish over the wave's core)
 **Depends on:** CR-SAN-024 (lifecycle ops)
 **Labels:** wave-6, global-store, mcp
