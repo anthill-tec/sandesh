@@ -151,6 +151,40 @@ is assigned **only at install** via `$SANDESH_ADMIN` (`install.sh`) — there is
 surface to set it. `all-tracks` broadcasts never cross projects, grant or not.
 `sandesh projects` shows each project's state and grant (`PROJECT  STATE  CROSS-PROJECT`).
 
+### Project lifecycle
+
+A project moves `active → archived → tombstoned` — strictly two-step, with two-tier
+authorization:
+
+```bash
+# read-only freeze — reversible, deletes NOTHING (project's own Mainline only)
+sandesh archive   --project Nai --by "Mainline - Nai"
+sandesh unarchive --project Nai --by "Mainline - Nai"
+
+# permanent retirement — ARCHIVED projects only (the install-assigned super-admin only)
+sandesh tombstone --project Nai --by <admin>          # prompts y/N; --yes to skip
+```
+
+- **`archive`** evicts the project's live `notify` watchers (cooperatively; `--force`
+  reaps stragglers) and freezes it: sends from/to it and new registrations are refused,
+  but every message, body, and thread stays fully readable. **`unarchive`** reverses it.
+- **`tombstone`** is destructive and irreversible: it purges the project's *internal*
+  messages (sender and all recipients inside the project) and deletes its
+  `projects/<id>/` body folder. What survives: cross-project envelopes (rows stay for
+  audit + thread anchoring — their bodies are lost), and the tracker row itself as a
+  permanent `tombstoned` marker (the project id is retired; `setup` refuses to reuse it).
+  Afterwards `inbox`/`fetch` hide the tombstoned project's traffic, and `thread` marks
+  holes with `incomplete chain — message(s) removed (project tombstoned)`.
+- **Who may do what:** `archive`/`unarchive` take the project's **own Mainline** as
+  `--by`; `tombstone` takes only the **super-admin** assigned at install via
+  `$SANDESH_ADMIN`. Without `--yes`, `tombstone` asks for interactive confirmation
+  (and refuses when stdin is not a terminal).
+- **`--dry-run`** (all three verbs) reports what would happen — watchers to evict,
+  the would-be state, and for `tombstone` the purge counts (`internal messages`,
+  `body files`, `cross-project messages` whose bodies would be lost) — and writes
+  nothing. Guards still apply: a dry-run on the wrong state or with the wrong `--by`
+  errors exactly like the real command.
+
 ## Schema migrations
 
 `sandesh migrate` is the schema-migration command — it brings an existing store up to the

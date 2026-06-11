@@ -56,8 +56,10 @@ but nothing is Claude-specific anymore — it's a general agent-messaging primit
   `consolidate`. **CR-SAN-023 done (pending merge)** — cross-project messaging behind
   the admin's per-project grant (`grant`/`revoke --cross-project`), the single-row
   `admin` table (assigned at install via `$SANDESH_ADMIN`), tracker-state checks on
-  `send`/`reply`/`register`, the 3-column `projects` listing. Next: CR-SAN-024
-  (lifecycle verbs), CR-SAN-025 (MCP surface). Design contract:
+  `send`/`reply`/`register`, the 3-column `projects` listing. **CR-SAN-024 done
+  (pending merge)** — project lifecycle verbs (`archive`/`unarchive`/`tombstone`,
+  two-step + two-tier authz, eviction, purge, read rules, `--dry-run` previews).
+  Next: CR-SAN-025 (MCP surface). Design contract:
   `docs/research/PRD-global-store.md` (AGREED 2026-06-11).
 - **Not yet adopted** by the originating orchestration workflow — that's a separate,
   deliberate step (seed an addressbook, sessions run `notify`, migrate off the old
@@ -157,7 +159,13 @@ tombstoned id).
    `message.status` disposition machine (no open/actioned/closed). A request stays
    visible in history; whether it has been *acted on* is conveyed by replies, not a
    status column. (CR-SAN-017 0002 dropped `message.status`; new≡migrated stores have
-   no status column.)
+   no status column.) **Lifecycle exception (CR-SAN-024):** `archive` still deletes
+   nothing (read-only, reversible), but `tombstone` is the deliberate, admin-only
+   exception — it purges the project's *internal* messages + recipient rows and
+   deletes its body folder (cross-project envelopes survive; their bodies are lost).
+   Standard reads then hide the tombstoned project's traffic: `inbox`/`fetch` filter
+   it out, and `thread` renders the exact warning `incomplete chain — message(s)
+   removed (project tombstoned)` where a chain passes through purged nodes.
 6. **Reply threading.** `message.in_reply_to` links a reply to its parent; `reply`
    defaults `to`=parent's sender and subject=`Re: …` (no `Re: Re:`). `thread` walks the
    chain. `fetch` shows `↳ re #N "<parent subject>"`. (`reply` has no `--resolves`
@@ -170,6 +178,11 @@ tombstoned id).
    `notifier_tombstone(recipient)` sets a flag the watcher sees on its next poll →
    it self-terminates (exit 3). `unregister` of a *live* address tombstones first,
    returns `('tombstoned', pid)`; the caller retries once it's offline, then soft-deletes.
+   **Terminology (two concepts, one word):** the `notifier.tombstone` column here is the
+   *per-watcher cooperative-shutdown flag*; the project lifecycle state `tombstoned`
+   (CR-SAN-024, see #5) is the *permanent retirement of a whole project*. They are
+   unrelated mechanisms — `archive`/`tombstone` merely *use* the per-watcher flag to
+   evict live watchers before changing the project state.
 9. **Removal authorization.** `Mainline` may unregister anyone; any address may
    unregister itself. (Honor-system; all-local cooperative orchestrators.)
 10. **Validated address format** — `'<Orchestrator> - <Project>'`, regex
@@ -210,6 +223,14 @@ sandesh --project Demo register --address "Mainline - Demo" --kind mainline
 sandesh --project Demo send --from "Track 1 - Demo" --to "Mainline - Demo" --subject "ping"
 sandesh --project Demo notify --to "Mainline - Demo"     # blocks; run in background
 sandesh --project Demo fetch  --to "Mainline - Demo"
+
+# project lifecycle (CR-SAN-024) — two-tier authz, all three accept --dry-run
+sandesh archive   --project Demo --by "Mainline - Demo"   # read-only, reversible (own Mainline)
+sandesh unarchive --project Demo --by "Mainline - Demo"   # back to active (own Mainline)
+sandesh tombstone --project Demo --by <admin> --yes       # PERMANENT; archived-only;
+                                                          # ONLY the install-assigned super-admin;
+                                                          # interactive confirm unless --yes
+sandesh tombstone --project Demo --by <admin> --dry-run   # purge counts, writes nothing
 ```
 Env: `$SANDESH_PROJECT`, `$SANDESH_ADDRESS` (caller's own address),
 `$SANDESH_POLL_SECONDS`. `notify` exit codes: `0` mail / `2` timeout / `3` tombstoned /

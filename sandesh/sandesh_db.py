@@ -38,10 +38,14 @@ Semantics:
 
 import os
 import re
+import shutil
+import time
 
 DB_FILE = "sandesh.db"
 MESSAGES_DIR = "messages"
 HEARTBEAT_STALE_SECS = 60             # a notifier silent longer than this is presumed dead
+POLL_FLOOR_SECS = 3                   # minimum watcher poll interval (seconds)
+DEFAULT_POLL_SECS = 10                # default watcher poll interval (seconds)
 BROADCAST = "all-tracks"              # reserved recipient keyword (not a real address)
 
 ADDRESS_RE = re.compile(r"^(?P<orch>Mainline|Track \d+) - (?P<proj>[A-Za-z][A-Za-z0-9_]*)$")
@@ -215,23 +219,22 @@ def admin_name(con):
     return row["name"] if row is not None else None
 
 
-def _require_admin(con, by):
+def _require_admin(con, by, action="grant/revoke cross-project access"):
     """Guard for admin-only operations: `by` must equal the stored admin name."""
     stored = admin_name(con)
     if stored is None:
         raise PermissionError(
             "no admin assigned — re-run install.sh with $SANDESH_ADMIN")
     if by != stored:
-        raise PermissionError(
-            "only the Sandesh admin may grant/revoke cross-project access")
+        raise PermissionError(f"only the Sandesh admin may {action}")
 
 
 def grant_xproj(con, project_id, by):
     """Grant cross-project sending to a project (admin-only). Idempotent: an
-    already-granted project keeps its original timestamp + grantor."""
+    already-granted project keeps its original timestamp + grantor. Requires an
+    ACTIVE project (CR-SAN-024 DEC-E): archived/tombstoned are refused."""
     _require_admin(con, by)
-    if project_state(con, project_id) is None:
-        raise ValueError(f"unknown project '{project_id}'")
+    _require_active_project(con, project_id)
     con.execute(
         "UPDATE project SET xproj_granted_at=datetime('now'), xproj_granted_by=? "
         "WHERE project_id=? AND xproj_granted_at IS NULL",
@@ -241,10 +244,11 @@ def grant_xproj(con, project_id, by):
 
 def revoke_xproj(con, project_id, by):
     """Revoke a project's cross-project grant (admin-only, project-wide — every
-    participant loses access at once). Idempotent on an ungranted project."""
+    participant loses access at once). Idempotent on an ungranted project.
+    Requires an ACTIVE project (CR-SAN-024 DEC-E): lifecycle transitions never
+    touch the grant columns, so archived/tombstoned revokes are refused."""
     _require_admin(con, by)
-    if project_state(con, project_id) is None:
-        raise ValueError(f"unknown project '{project_id}'")
+    _require_active_project(con, project_id)
     con.execute(
         "UPDATE project SET xproj_granted_at=NULL, xproj_granted_by=NULL "
         "WHERE project_id=?",
@@ -437,7 +441,31 @@ def reply(con, store, parent_id, from_addr, subject=None, body_text=None,
 # --------------------------------------------------------------------------- #
 # receiving
 
+THREAD_HOLE_WARNING = "incomplete chain — message(s) removed (project tombstoned)"
+
+
+def _tombstoned_projects(con):
+    """The set of tombstoned project ids — the per-call read-filter set
+    (CR-SAN-024 §S2 / DRIFT-3). Computed ONCE per read call; empty in the
+    common no-tombstones case, which lets readers skip filtering entirely."""
+    return {r["project_id"] for r in con.execute(
+        "SELECT project_id FROM project WHERE state='tombstoned'")}
+
+
+def _is_tombstoned_sender(con, addr, tombstoned):
+    """True iff `addr`'s project is in the `tombstoned` set. Resolution via
+    _address_project — the suffix fallback matters because a tombstoned
+    project's address rows were purged (DRIFT-3)."""
+    if not tombstoned:
+        return False
+    return _address_project(con, addr) in tombstoned
+
+
 def inbox(con, recipient, unread_only=True):
+    """The recipient's messages (to + cc), oldest first. Rows whose SENDER's
+    project is tombstoned are hidden (CR-SAN-024 §S2) — filtered python-side
+    against the per-call tombstoned set; archived projects' traffic displays
+    fully."""
     q = ("SELECT m.id, m.from_addr, m.subject, m.kind, m.in_reply_to, "
          "m.body_path, m.created_at, r.role, r.read_at "
          "FROM message m JOIN message_recipient r ON r.message_id = m.id "
@@ -445,16 +473,29 @@ def inbox(con, recipient, unread_only=True):
     if unread_only:
         q += "AND r.read_at IS NULL "
     q += "ORDER BY m.created_at, m.id"
-    return con.execute(q, (recipient,)).fetchall()
+    rows = con.execute(q, (recipient,)).fetchall()
+    tombstoned = _tombstoned_projects(con)
+    if not tombstoned:                    # hot path: no tombstones → no filtering
+        return rows
+    return [r for r in rows
+            if not _is_tombstoned_sender(con, r["from_addr"], tombstoned)]
 
 
 def unread_to(con, recipient):
     """Ids of unread messages where `recipient` is a 'to' — the NOTIFY/wake filter
-    (Cc is deliberately excluded: cc never wakes, it's swept up by fetch)."""
-    return [r["id"] for r in con.execute(
-        "SELECT m.id FROM message m JOIN message_recipient r ON r.message_id = m.id "
+    (Cc is deliberately excluded: cc never wakes, it's swept up by fetch).
+    Applies the §S2 tombstoned-sender filter — a watcher must not wake for
+    invisible mail."""
+    rows = con.execute(
+        "SELECT m.id, m.from_addr "
+        "FROM message m JOIN message_recipient r ON r.message_id = m.id "
         "WHERE r.recipient = ? AND r.role = 'to' AND r.read_at IS NULL ORDER BY m.id",
-        (recipient,)).fetchall()]
+        (recipient,)).fetchall()
+    tombstoned = _tombstoned_projects(con)
+    if not tombstoned:
+        return [r["id"] for r in rows]
+    return [r["id"] for r in rows
+            if not _is_tombstoned_sender(con, r["from_addr"], tombstoned)]
 
 
 def mark_read(con, recipient, ids):
@@ -496,14 +537,30 @@ def fetch(con, store, recipient, mark=True):
 
 
 def thread(con, msg_id):
-    """The reply chain from the root down to msg_id (ascending by id)."""
+    """The reply chain from the root down to msg_id (ascending by id).
+
+    Nodes whose SENDER's project is tombstoned are replaced by a synthetic
+    warning entry `{"warning": THREAD_HOLE_WARNING}` (CR-SAN-024 §S2);
+    consecutive hidden nodes collapse to ONE warning entry. A requested
+    msg_id that is itself from a tombstoned project yields a chain of just
+    the warning entry (non-empty — the row exists, its sender is invisible)."""
     chain, cur = [], con.execute("SELECT * FROM message WHERE id=?", (msg_id,)).fetchone()
     while cur is not None:
         chain.append(cur)
         cur = (con.execute("SELECT * FROM message WHERE id=?", (cur["in_reply_to"],)).fetchone()
                if cur["in_reply_to"] else None)
     chain.reverse()
-    return chain
+    tombstoned = _tombstoned_projects(con)
+    if not tombstoned:                    # hot path: no tombstones → raw chain
+        return chain
+    out = []
+    for node in chain:
+        if _is_tombstoned_sender(con, node["from_addr"], tombstoned):
+            if not (out and isinstance(out[-1], dict) and "warning" in out[-1]):
+                out.append({"warning": THREAD_HOLE_WARNING})
+        else:
+            out.append(node)
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -607,6 +664,234 @@ def unregister(con, recipient, requester, project=None):
     notifier_reap_if_stale(con, recipient)
     deactivate(con, recipient)
     return ("unregistered", None)
+
+
+# project lifecycle (CR-SAN-024 §S1)
+
+def poll_interval():
+    """The watcher poll interval in seconds — $SANDESH_POLL_SECONDS, default 10
+    (also the fallback for a non-numeric value), floor 3. Canonical home
+    (CR-SAN-024 DRIFT-5): `notify` delegates here, and `archive()`'s bounded
+    eviction wait defaults to 2 poll cycles."""
+    raw = os.environ.get("SANDESH_POLL_SECONDS")
+    try:
+        val = int(raw) if raw else DEFAULT_POLL_SECS
+    except ValueError:
+        val = DEFAULT_POLL_SECS
+    return max(val, POLL_FLOOR_SECS)
+
+
+def _require_project_mainline(project_id, by):
+    """Authz guard for archive/unarchive (CR-SAN-024 §S3): `by` must validate
+    to ('Mainline', project_id) — format-based, honor-system (the `unregister`
+    house pattern). Raises PermissionError naming the requirement."""
+    try:
+        orch, proj = validate_address(by)
+    except ValueError as exc:
+        raise PermissionError(
+            f"archive/unarchive of project '{project_id}' requires its own "
+            f"Mainline ('Mainline - {project_id}'); got invalid address "
+            f"{by!r}: {exc}") from exc
+    if orch != "Mainline" or proj != project_id:
+        raise PermissionError(
+            f"only the project's own Mainline ('Mainline - {project_id}') may "
+            f"archive/unarchive project '{project_id}'; got {by!r}")
+
+
+def _evict_project_notifiers(con, project_id, *, force, wait_secs, op):
+    """Cooperatively evict every live notifier of the project's addresses:
+    notifier_tombstone → bounded wait of `wait_secs` (default 2 poll cycles) →
+    notifier_reap_if_stale sweep. Raises RuntimeError (naming `op`) if a watcher
+    stays live past the wait, unless `force`, which reaps the surviving row(s)
+    anyway. Shared seam for archive() and tombstone_project()."""
+    if wait_secs is None:
+        wait_secs = 2 * poll_interval()
+    addresses = [r["address"] for r in con.execute(
+        "SELECT address FROM address WHERE project=?", (project_id,))]
+    live = [a for a in addresses if notifier_live(con, a) is not None]
+    for addr in live:
+        notifier_tombstone(con, addr)
+    if live:
+        deadline = time.monotonic() + wait_secs
+        while live and time.monotonic() < deadline:
+            time.sleep(0.05)
+            live = [a for a in live if notifier_live(con, a) is not None]
+    for addr in addresses:
+        notifier_reap_if_stale(con, addr)
+    still_live = [a for a in addresses if notifier_live(con, a) is not None]
+    if still_live:
+        if not force:
+            raise RuntimeError(
+                f"cannot {op} project '{project_id}': live notifier(s) for "
+                f"{still_live} ignored the tombstone past the {wait_secs}s wait "
+                f"— retry, or pass force=True to reap them anyway")
+        for addr in still_live:
+            con.execute("DELETE FROM notifier WHERE recipient=?", (addr,))
+        con.commit()
+
+
+def _archive_guards(con, project_id, by):
+    """State + authz guards shared by archive() and archive_preview() — the
+    dry-run raises exactly the same errors as the real operation."""
+    state = project_state(con, project_id)
+    if state is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    if state != "active":
+        raise ValueError(f"project '{project_id}' is not active")
+    _require_project_mainline(project_id, by)
+
+
+def _unarchive_guards(con, project_id, by):
+    """State + authz guards shared by unarchive() and unarchive_preview()."""
+    state = project_state(con, project_id)
+    if state is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    if state != "archived":
+        raise ValueError(f"project '{project_id}' is not archived")
+    _require_project_mainline(project_id, by)
+
+
+def _tombstone_guards(con, project_id, by):
+    """State + authz guards shared by tombstone_project() and
+    tombstone_preview(): archived-only (the two-step), super-admin-only `by`."""
+    state = project_state(con, project_id)
+    if state is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    if state == "tombstoned":
+        raise ValueError(f"project '{project_id}' is already tombstoned")
+    if state == "active":
+        raise ValueError(
+            f"project '{project_id}' is active — archive it first")
+    _require_admin(con, by, action="tombstone a project")
+
+
+def _live_watchers(con, project_id):
+    """The project's addresses whose notifier rows are genuinely live (fresh
+    heartbeat + live pid) — the watchers an archive/tombstone would evict."""
+    return [r["address"] for r in con.execute(
+        "SELECT address FROM address WHERE project=?", (project_id,))
+        if notifier_live(con, r["address"]) is not None]
+
+
+def _internal_message_ids(con, project_id):
+    """The internal-message id set (DRIFT-2 step 1), computed while the
+    project's address rows still exist: internal = sender's project ==
+    `project_id` AND no recipient row resolves to another project."""
+    return [r["id"] for r in con.execute(
+        "SELECT m.id FROM message m"
+        "  JOIN address sa ON sa.address = m.from_addr"
+        " WHERE sa.project = ?"
+        "   AND NOT EXISTS ("
+        "       SELECT 1 FROM message_recipient mr"
+        "         JOIN address ra ON ra.address = mr.recipient"
+        "        WHERE mr.message_id = m.id AND ra.project != ?)",
+        (project_id, project_id))]
+
+
+def archive(con, project_id, by, *, force=False, wait_secs=None):
+    """Archive an active project (Mainline-only `by`): cooperatively evict every
+    live notifier of its addresses (notifier_tombstone → bounded wait of
+    `wait_secs`, default 2 poll cycles → notifier_reap_if_stale sweep), then set
+    state='archived' + archived_at. Deletes NOTHING else. Refuses — state
+    unchanged — if a watcher stays live past the wait, unless `force`, which
+    reaps the surviving row(s) anyway."""
+    _archive_guards(con, project_id, by)
+    _evict_project_notifiers(
+        con, project_id, force=force, wait_secs=wait_secs, op="archive")
+    con.execute(
+        "UPDATE project SET state='archived', archived_at=datetime('now') "
+        "WHERE project_id=?", (project_id,))
+    con.commit()
+
+
+def unarchive(con, project_id, by):
+    """Reactivate an archived project (Mainline-only `by`): state='active',
+    archived_at cleared. Grant columns are untouched (CR-SAN-024 DEC-E) — a
+    grant set while active survives the archive→unarchive round-trip."""
+    _unarchive_guards(con, project_id, by)
+    con.execute(
+        "UPDATE project SET state='active', archived_at=NULL WHERE project_id=?",
+        (project_id,))
+    con.commit()
+
+
+def tombstone_project(con, project_id, by, *, force=False, wait_secs=None):
+    """Tombstone an ARCHIVED project (super-admin-only `by` — CR-SAN-024 §S1):
+    evict any live notifiers (the archive() seam, same `force` semantics), then
+    purge in DRIFT-2 order within ONE transaction:
+      1. compute the internal message-id set WHILE the address rows still exist
+         (internal = sender's project == project_id AND no recipient resolves
+         to another project),
+      2. delete those messages' message_recipient rows, then the message rows
+         (cross-project rows AND their recipient rows — including this
+         project's recipient rows on surviving messages — SURVIVE: PRD D6),
+      3. delete the project's notifier + address rows,
+      4. delete the projects/<id>/ folder entirely (bodies — T1
+         content-dies-with-origin),
+      5. set state='tombstoned' + tombstoned_at (the permanent marker row —
+         created_at and xproj_granted_* untouched).
+    Refusals (state/authz) change nothing."""
+    _tombstone_guards(con, project_id, by)
+
+    _evict_project_notifiers(
+        con, project_id, force=force, wait_secs=wait_secs, op="tombstone")
+
+    # DRIFT-2 step 1: internal ids computed while address rows still exist.
+    internal_ids = _internal_message_ids(con, project_id)
+    # Step 2: internal message_recipient rows, then internal message rows.
+    if internal_ids:
+        placeholders = ",".join("?" * len(internal_ids))
+        con.execute(
+            f"DELETE FROM message_recipient WHERE message_id IN ({placeholders})",
+            internal_ids)
+        con.execute(
+            f"DELETE FROM message WHERE id IN ({placeholders})", internal_ids)
+    # Step 3: notifier rows (resolved via address) THEN the address rows.
+    con.execute(
+        "DELETE FROM notifier WHERE recipient IN "
+        "(SELECT address FROM address WHERE project=?)", (project_id,))
+    con.execute("DELETE FROM address WHERE project=?", (project_id,))
+    # Step 4: the whole body folder (a missing dir is fine — already gone).
+    shutil.rmtree(store_dir(project_id), ignore_errors=True)
+    # Step 5: the permanent marker.
+    con.execute(
+        "UPDATE project SET state='tombstoned', tombstoned_at=datetime('now') "
+        "WHERE project_id=?", (project_id,))
+    con.commit()
+
+
+def archive_preview(con, project_id, by):
+    """Dry-run report for archive() (CR-SAN-024 §S3): runs the SAME state +
+    authz guards (errors still raise), then returns the list of live-watcher
+    addresses an actual archive would evict. Writes nothing."""
+    _archive_guards(con, project_id, by)
+    return _live_watchers(con, project_id)
+
+
+def unarchive_preview(con, project_id, by):
+    """Dry-run for unarchive(): the same guards (errors still raise); a clean
+    return means the project would become active. Writes nothing."""
+    _unarchive_guards(con, project_id, by)
+
+
+def tombstone_preview(con, project_id, by):
+    """Dry-run report for tombstone_project() (CR-SAN-024 AC7): the same state
+    + authz guards, then — WITHOUT writing — what an actual tombstone would
+    destroy: internal message rows purged, body files deleted, and the
+    cross-project messages whose bodies would be lost (their rows survive).
+    Returns {'internal_messages', 'body_files', 'cross_project_messages'}."""
+    _tombstone_guards(con, project_id, by)
+    internal = len(_internal_message_ids(con, project_id))
+    sent_total = con.execute(
+        "SELECT COUNT(*) FROM message m JOIN address sa ON sa.address = m.from_addr"
+        " WHERE sa.project = ?", (project_id,)).fetchone()[0]
+    messages_dir = os.path.join(store_dir(project_id), "messages")
+    body_files = len(os.listdir(messages_dir)) if os.path.isdir(messages_dir) else 0
+    return {
+        "internal_messages": internal,
+        "body_files": body_files,
+        "cross_project_messages": sent_total - internal,
+    }
 
 
 # one-time legacy-store consolidation (CR-SAN-022 §S3)
