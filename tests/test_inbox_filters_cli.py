@@ -416,27 +416,21 @@ class MalformedUntilTest(_TempDataHome):
     """
 
     def test_malformed_until_exits_nonzero_with_sandesh_prefix(self):
-        """inbox --until 12/06/2026 (DD/MM/YYYY) exits non-zero.
+        """inbox --until 12/06/2026 (DD/MM/YYYY) exits 1 with a [sandesh] error.
 
-        RED: SystemExit(2) — --until not yet registered, argparse bails first.
-        GREEN: exit 1 + stderr contains '[sandesh]' and 'invalid timestamp'.
-
-        This test asserts non-zero exit always; the stderr content assertion is
-        only reached once the flag exists (GREEN+).
+        GREEN: exit 1 + stderr contains '[sandesh]' and 'invalid timestamp'
+        (the lib ValueError mapped through the house error pattern).
         """
         rc, _out, err = self._run_cli([
             "--project", self.P1,
             "inbox", "--to", self.ML_P1, "--until", "12/06/2026",
         ])
-        self.assertNotEqual(rc, 0,
-                            f"malformed --until must exit non-zero; got rc={rc!r}")
-        # Once the flag is wired (GREEN), these stderr assertions must also hold.
-        # In RED they won't be reached because the test exits at the assertEqual above.
-        if rc == 1:
-            self.assertIn("[sandesh]", err,
-                          f"stderr must contain '[sandesh]' prefix; got:\n{err}")
-            self.assertIn("invalid timestamp", err,
-                          f"stderr must contain 'invalid timestamp'; got:\n{err}")
+        self.assertEqual(rc, 1,
+                         f"malformed --until must exit 1; got rc={rc!r}\nerr={err!r}")
+        self.assertIn("[sandesh]", err,
+                      f"stderr must contain '[sandesh]' prefix; got:\n{err}")
+        self.assertIn("invalid timestamp", err,
+                      f"stderr must contain 'invalid timestamp'; got:\n{err}")
 
 
 # ---------------------------------------------------------------------------

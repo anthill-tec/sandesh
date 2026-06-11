@@ -173,7 +173,14 @@ def cmd_inbox(args):
     who = _self_addr(args, "to")
     if not who:
         sys.exit("[sandesh] ERROR: pass --to '<address>' (or set $SANDESH_ADDRESS).")
-    rows = sdb.inbox(con, who, unread_only=not args.all)
+    try:
+        rows = sdb.inbox(con, who, unread_only=not args.all,
+                         sender=args.from_, sender_project=args.from_project,
+                         kind=args.kind, since=args.since, until=args.until,
+                         subject_like=args.subject)
+    except ValueError as exc:
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        sys.exit(1)
     print(f"{'#':>5} {'FROM':16} {'ROLE':4} {'READ':5} SUBJECT")
     for r in rows:
         print(f"{r['id']:>5} {r['from_addr']:16} {r['role']:4} "
@@ -187,7 +194,14 @@ def cmd_fetch(args):
     who = _self_addr(args, "to")
     if not who:
         sys.exit("[sandesh] ERROR: pass --to '<address>' (or set $SANDESH_ADDRESS).")
-    items = sdb.fetch(con, store, who, mark=not args.peek)
+    try:
+        items = sdb.fetch(con, store, who, mark=not args.peek,
+                          sender=args.from_, sender_project=args.from_project,
+                          kind=args.kind, since=args.since, until=args.until,
+                          subject_like=args.subject)
+    except ValueError as exc:
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        sys.exit(1)
     _render(items, who)
     if items and not args.peek:
         print(f"(marked {len(items)} read)")
@@ -391,14 +405,40 @@ def build_parser():
     p.add_argument("--all", action="store_true", help="reply-all (cc the parent's recipients)")
     p.set_defaults(fn=cmd_reply)
 
+    # CR-SAN-026 §S3: server-side filter flags, mapped 1:1 onto the lib's
+    # inbox/fetch filter params. --from-project is the headline — the
+    # cross-project proxy stream (only mail whose SENDER belongs to that
+    # sibling project).
     p = sub.add_parser("inbox", parents=[common], help="list a recipient's messages")
     p.add_argument("--to")
     p.add_argument("--all", action="store_true", help="include already-read")
+    p.add_argument("--from-project", dest="from_project",
+                   help="only mail whose sender belongs to this project "
+                        "(the cross-project proxy stream)")
+    p.add_argument("--from", dest="from_", help="only mail from this exact sender address")
+    p.add_argument("--kind", help="only this message kind (request/directive/fyi)")
+    p.add_argument("--since", help="only mail at/after this time "
+                                   "(YYYY-MM-DD or 'YYYY-MM-DD HH:MM:SS', inclusive)")
+    p.add_argument("--until", help="only mail at/before this time "
+                                   "(YYYY-MM-DD or 'YYYY-MM-DD HH:MM:SS', inclusive; "
+                                   "date-only means end of that day)")
+    p.add_argument("--subject", help="case-insensitive substring match on subject")
     p.set_defaults(fn=cmd_inbox)
 
     p = sub.add_parser("fetch", parents=[common], help="consolidate + read unread messages")
     p.add_argument("--to")
     p.add_argument("--peek", action="store_true", help="render without marking read")
+    p.add_argument("--from-project", dest="from_project",
+                   help="only mail whose sender belongs to this project "
+                        "(the cross-project proxy stream)")
+    p.add_argument("--from", dest="from_", help="only mail from this exact sender address")
+    p.add_argument("--kind", help="only this message kind (request/directive/fyi)")
+    p.add_argument("--since", help="only mail at/after this time "
+                                   "(YYYY-MM-DD or 'YYYY-MM-DD HH:MM:SS', inclusive)")
+    p.add_argument("--until", help="only mail at/before this time "
+                                   "(YYYY-MM-DD or 'YYYY-MM-DD HH:MM:SS', inclusive; "
+                                   "date-only means end of that day)")
+    p.add_argument("--subject", help="case-insensitive substring match on subject")
     p.set_defaults(fn=cmd_fetch)
 
     p = sub.add_parser("thread", parents=[common], help="show a message's reply chain")
