@@ -82,6 +82,14 @@ echo "consolidating legacy per-project stores into the global DB …"
 "$VENV/bin/sandesh" consolidate
 echo "✓ consolidation done"
 
+# CR-SAN-027 §S2: rebuild the full-text search index once on install/update —
+# covers pre-FTS history and freshly consolidated stores. Stdlib-only (FTS5 is
+# compiled into the interpreter), so it needs no extra and runs unconditionally.
+# Idempotent. Under `set -e` a genuine error ABORTS the install.
+echo "rebuilding the full-text search index …"
+"$VENV/bin/sandesh" reindex
+echo "✓ search index rebuilt"
+
 # CR-SAN-023 §S2b: assign the Sandesh admin from $SANDESH_ADMIN via an inline
 # venv-python call — there is deliberately NO CLI verb for this (PRD O3: no
 # agent-reachable surface may create/change the admin). The name is read from

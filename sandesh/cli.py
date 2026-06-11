@@ -354,6 +354,40 @@ def cmd_consolidate(args):
 
 # --------------------------------------------------------------------------- #
 
+def cmd_search(args):
+    con = sdb.connect()
+    try:
+        try:
+            result = sdb.search(con, args.to, args.query, limit=args.limit,
+                                offset=args.offset,
+                                sender_project=args.from_project)
+        except ValueError as exc:
+            print(f"[sandesh] {exc}", file=sys.stderr)
+            sys.exit(1)
+    finally:
+        con.close()
+    if result.get("reindexed"):
+        print("(index was empty — reindexed before searching)")
+    if not result["hits"]:
+        print(f"(no matches for {args.query!r})")
+    for h in result["hits"]:
+        print(f"[#{h['id']}] {h['from']} · {h['created_at']}")
+        print(f"   {h['subject']}")
+        print(f"   {h['snippet']}")
+    print(f"total: {result['total']}")
+    return 0
+
+
+def cmd_reindex(args):
+    con = sdb.connect()
+    try:
+        n = sdb.reindex(con)
+    finally:
+        con.close()
+    print(f"reindexed {n} message(s)")
+    return 0
+
+
 def build_parser():
     # --project is shared so it works BOTH before and after the subcommand:
     #   sandesh --project X setup    AND    sandesh setup --project X
@@ -481,6 +515,26 @@ def build_parser():
                        help="import legacy per-project stores into the global DB "
                             "(one-time; legacy files become sandesh.db.pre-global)")
     p.set_defaults(fn=cmd_consolidate)
+
+    # CR-SAN-027 §S3: full-text search over the caller's OWN mail. Parentless
+    # like migrate/consolidate — the engine targets the single global DB, so
+    # `search --project X` is an argparse error (no per-project routing).
+    p = sub.add_parser("search",
+                       help="full-text search over your own mail (FTS5 syntax: "
+                           "\"quoted phrases\", AND/OR/NOT)")
+    p.add_argument("query", help="the FTS5 query")
+    p.add_argument("--to", required=True, help="your address (whose mail to search)")
+    p.add_argument("--from-project", dest="from_project",
+                   help="only hits whose sender belongs to this project")
+    p.add_argument("--limit", type=int, default=20, help="page size (default 20)")
+    p.add_argument("--offset", type=int, default=0, help="page start (default 0)")
+    p.set_defaults(fn=cmd_search)
+
+    # CR-SAN-027 §S2: rebuild the whole FTS index from the message rows + body
+    # files. Parentless and arg-free — global DB, plumbing only.
+    p = sub.add_parser("reindex",
+                       help="rebuild the full-text search index from messages + bodies")
+    p.set_defaults(fn=cmd_reindex)
 
     # CR-SAN-023 §S2: admin-only verbs (CLI-only — never MCP). Like migrate/
     # consolidate, these deliberately do NOT inherit parents=[common]: their
