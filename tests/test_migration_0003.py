@@ -32,6 +32,8 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+from tests._migrate_helpers import rollback_until  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers (mirror the patterns in test_migrate.py)
@@ -123,6 +125,19 @@ class _TempDataHome(unittest.TestCase):
         self._set_xdg(data_home)
         from sandesh import migrate
         migrate.rollback()
+
+    def _rollback_until(self, migration_id, project_id, data_home):
+        """Roll back one step at a time until `migration_id` is pending.
+
+        CR-SAN-023 C1 un-pinning: fixtures target the migration they MEAN
+        instead of hard-coding the rollback count (which changes whenever the
+        chain grows — e.g. 0004 made "one rollback reaches pre-0003" false).
+        """
+        rollback_until(
+            migration_id,
+            rollback_fn=lambda: self._rollback(project_id, data_home),
+            status_fn=lambda: self._status(project_id, data_home),
+        )
 
     def _setup_project(self, project_id, data_home):
         """Call sandesh_db.setup(project_id) with XDG_DATA_HOME set."""
@@ -245,17 +260,18 @@ class Migration0003ProjectTableShapeTest(_TempDataHome):
         self.assertEqual(c["notnull"], 0,
                          f"tombstoned_at must be nullable (notnull=0); got {c['notnull']}")
 
-    def test_project_table_has_exactly_five_columns(self):
-        """project table must have exactly 5 columns per spec.
+    def test_project_table_has_required_columns(self):
+        """project table must contain the 5 columns 0003 specifies.
 
-        RED: table absent; also guards against accidental extras.
+        CR-SAN-023 C1: deliberately un-pinned from "exactly 5" to MEMBERSHIP —
+        later migrations may append columns (0004 adds xproj_granted_at/_by);
+        this test guards 0003's contribution, not the table's final shape.
         """
         cols = _column_map(self._db, "project")
         expected = {"project_id", "state", "created_at", "archived_at", "tombstoned_at"}
-        self.assertEqual(
-            set(cols.keys()),
-            expected,
-            f"project table must have exactly {expected}; got {set(cols.keys())!r}",
+        self.assertTrue(
+            expected.issubset(set(cols.keys())),
+            f"project table must contain at least {expected}; got {set(cols.keys())!r}",
         )
 
     def test_project_state_check_rejects_bogus_value(self):
@@ -348,10 +364,12 @@ class Migration0003AddressProjectBackfillTest(_TempDataHome):
     """AC1: 0003 adds address.project column and backfills it from the address
     suffix ('Mainline - Demo' → 'Demo').
 
-    Fixture strategy (post-GREEN): build a legacy store by rolling back 0003.
+    Fixture strategy (post-GREEN): build a legacy store by rolling back PAST 0003.
       1. setup() + apply() provisions the full chain (incl. 0003).
-      2. rollback() undoes exactly 0003 — address table rebuilt WITHOUT project
+      2. rollback until 0003 is pending — address table rebuilt WITHOUT project
          column; project table dropped; address rows preserved.
+         (CR-SAN-023 C1 un-pin: "one rollback reaches pre-0003" stopped being
+         true once 0004 joined the chain — target the migration by id instead.)
       3. Hard-assert (no skip) that address.project is absent after rollback —
          if it is still present the rollback itself is broken.
       4. Insert two legacy rows via raw SQL (kind column survives rollback).
@@ -368,8 +386,9 @@ class Migration0003AddressProjectBackfillTest(_TempDataHome):
         self._apply(self._pid, self._dh)
         self._db = self._db_path(self._pid, self._dh)
 
-        # Step 2: roll back exactly one step (0003) to get a pre-0003 address table.
-        self._rollback(self._pid, self._dh)
+        # Step 2: roll back one step at a time until 0003 is pending
+        # (pre-0003 address table) — durable against future chain growth.
+        self._rollback_until("0003-project-tracker", self._pid, self._dh)
 
         # Step 3: hard-assert the rollback worked — no skip, no soft conditional.
         cols = _column_map(self._db, "address")
@@ -533,8 +552,9 @@ class Migration0003RollbackTest(_TempDataHome):
             "0003 not yet written.",
         )
 
-        # Then: rollback one step (should undo 0003).
-        self._rollback(self._pid, self._dh)
+        # Then: roll back until 0003 is pending (CR-SAN-023 C1 un-pin — the
+        # one-step assumption broke when 0004 joined the chain).
+        self._rollback_until("0003-project-tracker", self._pid, self._dh)
         tables_after_rollback = _table_names(self._db)
         self.assertNotIn(
             "project",
@@ -556,7 +576,8 @@ class Migration0003RollbackTest(_TempDataHome):
             "address.project must exist after apply() (pre-condition); 0003 not written.",
         )
 
-        self._rollback(self._pid, self._dh)
+        # CR-SAN-023 C1 un-pin: target 0003 by id, not by rollback count.
+        self._rollback_until("0003-project-tracker", self._pid, self._dh)
         cols_after_rollback = _column_map(self._db, "address")
         self.assertNotIn(
             "project",
@@ -572,7 +593,9 @@ class Migration0003RollbackTest(_TempDataHome):
         pre-condition failure will already signal RED for this test.
         """
         self._apply(self._pid, self._dh)
-        self._rollback(self._pid, self._dh)
+        # CR-SAN-023 C1 un-pin: the intent is "the 0003 table-rebuild rollback
+        # preserves rows" — reach it by id, not by a hard-coded step count.
+        self._rollback_until("0003-project-tracker", self._pid, self._dh)
 
         con = sqlite3.connect(self._db)
         con.row_factory = sqlite3.Row
@@ -607,7 +630,9 @@ class Migration0003RollbackTest(_TempDataHome):
         this is a secondary RED signal.
         """
         self._apply(self._pid, self._dh)
-        self._rollback(self._pid, self._dh)
+        # CR-SAN-023 C1 un-pin: roll back until 0003 is pending (bounded helper
+        # hard-fails if rollback can never get there).
+        self._rollback_until("0003-project-tracker", self._pid, self._dh)
         applied, pending = self._status(self._pid, self._dh)
         self.assertNotIn(
             "0003-project-tracker",
@@ -631,7 +656,7 @@ class Migration0003FreshSchemaParity(_TempDataHome):
 
     Then migrate.apply() on that fresh setup() store must be a harmless re-run:
     - 0001 marked (adoption glue), 0002 and 0003 applied as IF NOT EXISTS → no error
-    - status() shows all three applied, 0 pending
+    - status() shows the chain applied (incl. 0003), 0 pending
 
     RED: _SCHEMA does not include project table or address.project → the fresh
     store lacks both → every assertion below fails.
@@ -687,10 +712,12 @@ class Migration0003FreshSchemaParity(_TempDataHome):
                 "Expected: harmless re-run (0001 marked, 0002+0003 IF NOT EXISTS).",
             )
 
-    def test_apply_on_fresh_setup_store_shows_three_applied_zero_pending(self):
-        """After apply() on a fresh setup() store, status() must show all 3 applied, 0 pending.
+    def test_apply_on_fresh_setup_store_shows_chain_applied_zero_pending(self):
+        """After apply() on a fresh setup() store, status() must show the chain
+        applied (0001..0003 by MEMBERSHIP) and 0 pending.
 
-        RED: 0003 absent → status shows only 2 applied (0001+0002) or raises.
+        CR-SAN-023 C1: deliberately un-pinned from len(applied)==3 — the chain
+        grows (0004+); this test guards 0003's presence + a fully-applied store.
         """
         self._apply(self._pid, self._dh)
         applied, pending = self._status(self._pid, self._dh)
@@ -711,14 +738,9 @@ class Migration0003FreshSchemaParity(_TempDataHome):
             f"0003-project-tracker must be in applied; got applied={applied!r}",
         )
         self.assertEqual(
-            len(pending),
-            0,
-            f"pending must be 0 after apply() on fresh store; got pending={pending!r}",
-        )
-        self.assertEqual(
-            len(applied),
-            3,
-            f"Exactly 3 migrations must be applied (0001+0002+0003); got {applied!r}",
+            pending,
+            [],
+            f"pending must be empty after apply() on fresh store; got pending={pending!r}",
         )
 
 

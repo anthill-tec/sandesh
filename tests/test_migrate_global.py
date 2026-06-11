@@ -142,12 +142,17 @@ class MigrateGlobalTargetTest(unittest.TestCase):
         self.assertEqual(pending_ids, [],
                          "All three migrations must be applied — 0 pending.")
 
-    def test_status_reports_three_applied_zero_pending(self):
-        """After setup('P1') + apply(), status reports all 3 migrations applied, 0 pending."""
+    def test_status_reports_chain_applied_zero_pending(self):
+        """After setup('P1') + apply(), status reports the chain applied, 0 pending.
+
+        CR-SAN-023 C1: deliberately un-pinned from len(applied)==3 — membership
+        of the known steps + an empty pending list survives future migrations.
+        """
         self._migrate.apply()
         applied_ids, pending_ids = self._migrate.status()
-        self.assertEqual(len(applied_ids), 3,
-                         f"Expected 3 applied migrations, got {applied_ids}")
+        for mid in ("0001-baseline", "0002-drop-message-status", "0003-project-tracker"):
+            self.assertIn(mid, applied_ids,
+                          f"Expected {mid} in applied, got {applied_ids}")
         self.assertEqual(pending_ids, [],
                          f"Expected 0 pending, got {pending_ids}")
 
@@ -468,6 +473,11 @@ class MigrateAllAliasTest(unittest.TestCase):
         applied, _ = self._migrate.status()
         return set(applied)
 
+    # CR-SAN-023 C1: the known steps every "fully migrated" store must contain.
+    # Deliberately a SUBSET check (not equality) so the assertion survives
+    # future chain growth; "fully migrated" itself is asserted via pending==[].
+    _KNOWN_STEPS = {"0001-baseline", "0002-drop-message-status", "0003-project-tracker"}
+
     def test_bare_migrate_applies_all_migrations(self):
         """bare migrate (no --all) fully migrates the global DB."""
         try:
@@ -475,11 +485,14 @@ class MigrateAllAliasTest(unittest.TestCase):
         except SystemExit as exc:
             if exc.code != 0:
                 self.fail(f"`migrate` raised SystemExit({exc.code}) — expected 0")
-        applied = self._applied_ids()
+        applied, pending = self._migrate.status()
+        self.assertTrue(
+            self._KNOWN_STEPS.issubset(set(applied)),
+            f"bare migrate must apply at least {sorted(self._KNOWN_STEPS)}; applied: {applied}"
+        )
         self.assertEqual(
-            applied,
-            {"0001-baseline", "0002-drop-message-status", "0003-project-tracker"},
-            f"bare migrate must apply all 3 migrations; applied: {applied}"
+            pending, [],
+            f"bare migrate must leave nothing pending; pending: {pending}"
         )
 
     def test_migrate_all_applies_all_migrations(self):
@@ -489,11 +502,14 @@ class MigrateAllAliasTest(unittest.TestCase):
         except SystemExit as exc:
             if exc.code != 0:
                 self.fail(f"`migrate --all` raised SystemExit({exc.code}) — expected 0")
-        applied = self._applied_ids()
+        applied, pending = self._migrate.status()
+        self.assertTrue(
+            self._KNOWN_STEPS.issubset(set(applied)),
+            f"migrate --all must apply at least {sorted(self._KNOWN_STEPS)}; applied: {applied}"
+        )
         self.assertEqual(
-            applied,
-            {"0001-baseline", "0002-drop-message-status", "0003-project-tracker"},
-            f"migrate --all must apply all 3 migrations; applied: {applied}"
+            pending, [],
+            f"migrate --all must leave nothing pending; pending: {pending}"
         )
 
     def test_bare_and_all_produce_identical_state(self):
