@@ -178,6 +178,19 @@ def project_state(con, project_id):
     return row["state"] if row is not None else None
 
 
+def _require_active_project(con, project_id):
+    """Tracker-state guard (CR-SAN-023 §S3): the project must be enrolled AND
+    active. Raises a distinct ValueError per state — unknown / archived /
+    tombstoned — so callers surface exact, actionable errors."""
+    state = project_state(con, project_id)
+    if state is None:
+        raise ValueError(f"unknown project '{project_id}'")
+    if state == "archived":
+        raise ValueError(f"project '{project_id}' is archived")
+    if state == "tombstoned":
+        raise ValueError(f"project '{project_id}' is tombstoned")
+
+
 # --------------------------------------------------------------------------- #
 # admin + cross-project grant (CR-SAN-023 §S2 / §S2b)
 
@@ -267,6 +280,7 @@ def register(con, addr, kind=None, display_name=None, by=None, project=None):
     """Self-register an address. Rejects an already-active duplicate; reactivates a
     previously-unregistered one; otherwise inserts."""
     _orch, proj = validate_address(addr, project)
+    _require_active_project(con, proj)       # §S3: enrolled + active before any write
     row = con.execute("SELECT active FROM address WHERE address=?", (addr,)).fetchone()
     if row is not None:
         if row["active"]:
@@ -361,15 +375,19 @@ def send(con, store, from_addr, to=None, cc=None, subject="", kind=None,
     sender_proj = project
     if validate:
         _orch, sender_proj = validate_address(from_addr, project)
+        _require_active_project(con, sender_proj)            # §S3 sender side
         for a in to + cc:                    # complete for ALL recipients BEFORE any insert
             if a == BROADCAST:
                 continue
             if not is_active(con, a):
                 raise ValueError(f"unknown or inactive recipient: {a!r}")
-            if _address_project(con, a) != sender_proj:
-                raise ValueError(
-                    f"recipient {a!r} is outside project {sender_proj!r}: "
-                    f"cross-project sending is not enabled (CR-SAN-023)")
+            rp = _address_project(con, a)
+            if rp != sender_proj:                            # §S2 grant gate, then §S3
+                if not xproj_granted(con, sender_proj):
+                    raise ValueError(
+                        f"cross-project sending not approved for project "
+                        f"'{sender_proj}' — ask the Sandesh admin")
+                _require_active_project(con, rp)
     recips = _expand_recipients(con, to, cc, from_addr, sender_proj)
     if not recips:
         raise ValueError("no recipients (after excluding the sender)")

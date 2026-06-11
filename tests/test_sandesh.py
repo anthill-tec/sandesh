@@ -19,6 +19,7 @@ class SandeshTest(unittest.TestCase):
         self.tmp = tempfile.mkdtemp(prefix="sandesh-test-")
         self._prev_xdg = os.environ.get("XDG_DATA_HOME")
         os.environ["XDG_DATA_HOME"] = self.tmp
+        s.setup(PROJ)        # CR-SAN-023 §S3: register requires an enrolled project
         self.con = s.connect()
 
     def tearDown(self):
