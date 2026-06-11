@@ -1,6 +1,6 @@
 # CR-SAN-024 — Project lifecycle verbs (archive / unarchive / tombstone) + super-admin
 
-**Status:** PENDING
+**Status:** COMPLETED (2026-06-11)
 **Priority:** Medium-High (delivers the lifecycle the wave was designed around)
 **Depends on:** CR-SAN-023 (tracker-state checks + admin identity interplay)
 **Labels:** wave-6, global-store, lifecycle, admin, installer
@@ -136,6 +136,35 @@ installer admin hook, and the widest AC set of the wave.
 ## Non-goals
 - Any MCP exposure (CR-SAN-025 adds archive/unarchive tools; tombstone NEVER gets one — D9).
 - Message-level retention/purge tools; un-tombstoning; per-address grants.
+
+## Close-out
+_Completed 2026-06-11 (orchestrator: vidushi-sandesh). 5 cycles + VERIFY + 1 FIX._
+- **C1** `1360051`/`cf2b5bd` — `archive`/`unarchive` (state machine, Mainline authz, cooperative
+  eviction with bounded wait + `--force`), `poll_interval()` moved into `sandesh_db` (DRIFT-5), DEC-E
+  guards on grant/revoke. 63/63. AC2/AC3/AC11 (+AC1/AC6 halves).
+- **C2** `3e11a77`/`ff61280` — `tombstone_project` (two-step `archive it first`, admin-only via
+  `_require_admin(action=…)`, shared `_evict_project_notifiers`, **DRIFT-2-ordered purge** in one
+  transaction, body-folder rmtree, marker row keeps grant columns). 56/56. AC1/AC4/AC6/AC8/AC9.
+- **C3** `533b8f9`/`9db393a` — read rules: `inbox`/`fetch`/`unread_to` hide tombstoned-project traffic
+  (DRIFT-3 suffix-fallback + per-call set; hidden mail never marked read; wake suppressed); `thread`
+  warning entry `incomplete chain — message(s) removed (project tombstoned)` (consecutive holes
+  collapse; root case returns the warning); archived contrast intact. 19/19. AC5.
+- **C4** `4bfd36b`/`bf5424c` — CLI `archive|unarchive|tombstone` (confirm/`--yes` non-TTY refusal,
+  `--dry-run` previews via print-free `*_preview` fns sharing the guard code — byte-identical errors);
+  CLAUDE.md locked-semantics #5 exception + D7 terminology disambiguation; README lifecycle. 67/67. AC7.
+- **C5** `355960e` — the ONE real-subprocess E2E (watcher wake exit 0 → relaunch → archive eviction
+  exit 3; poll-with-timeout throughout; 3× stable). AC10.
+- **FIX** `7a373bd` — VERIFY should-fix: `finally: con.close()` in the 5 grant/revoke/lifecycle CLI
+  handlers (backfilled CR-023's pattern).
+- **VERIFY** (python-verify-agent) — **PASS on all 11 ACs**; boundaries clean (`mcp_server.py` diff vs
+  develop EMPTY; notify layer-clean; eviction helper + guard fns shared, no drift); the one SHOULD-FIX
+  fixed above; one NIT noted (state gate precedes authz in tombstone guards — intentional).
+- **Independent verification (orchestrator):** live probes per cycle — wedged-watcher refusal/force,
+  purge selectivity (internal gone, cross+audit rows survive, folder gone, grant marker kept), hidden
+  reads with `read_at` untouched + thread warning, dry-run accurate counts with zero writes; E2E run
+  myself; final clean gate after clearing concurrent-report artifacts.
+- **Pre-merge gate:** **973 passed / 0 failed**, `ok=True`, coverage **81.5% lines / 87.7% funcs**
+  (up from 77.0/83.7 at CR-023). 31/31 test files.
 
 ## Gap-analysis findings
 _Completed 2026-06-11 (orchestrator: vidushi-sandesh; gap-analysis skill). Verdict: **SPEC_UPDATE_NEEDED
