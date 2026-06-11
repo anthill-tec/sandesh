@@ -46,13 +46,16 @@ but nothing is Claude-specific anymore — it's a general agent-messaging primit
 
 ## Status & Roadmap
 
-- **Wave 1 — DONE (this repo).** Standalone CLI: store, addressbook, send/reply/
-  inbox/fetch/thread, `setup`, the `notify` watcher, installer. 24 unit tests green.
-- **Wave 2 — NEXT: an MCP server** (`app/mcp_server.py`). Expose the verbs as MCP
-  tools (each taking `project_id`) so an agent calls them instead of shelling out.
-  **The `notify` watcher stays the wake path** (an MCP server can't re-invoke a sleeping
-  agent — see "The wake mechanism"). **Before building it, verify the current MCP
-  Python SDK API** (read its real source / docs) — don't assume from memory.
+- **Waves 1–5 — DONE** (through **v0.1.0**): the standalone CLI + `notify` watcher
+  (Wave 1), the MCP server `sandesh-mcp` (Wave 2 — the verbs as MCP tools; the watcher
+  stays the wake path), packaging/PyPI workflow, and the schema-migration subsystem +
+  installer auto-migrate (Wave 5, CR-SAN-017/018).
+- **Wave 6 — IN PROGRESS: the global store.** **CR-SAN-022 done (pending merge)** — one
+  global `sandesh.db` (WAL) for all projects, the `project` tracker table +
+  `address.project`, global-target `migrate`, explicit project scoping, legacy-store
+  `consolidate`. Next: CR-SAN-023 (cross-project grant), CR-SAN-024 (lifecycle verbs),
+  CR-SAN-025 (MCP surface). Design contract: `docs/research/PRD-global-store.md`
+  (AGREED 2026-06-11).
 - **Not yet adopted** by the originating orchestration workflow — that's a separate,
   deliberate step (seed an addressbook, sessions run `notify`, migrate off the old
   file-note relay).
@@ -76,9 +79,11 @@ sandesh/                         (this repo — source of truth)
 Installed (by install.sh) + runtime data:
 ~/.local/share/sandesh/          ($XDG_DATA_HOME/sandesh)
 ├── app/  bin/sandesh            the installed code + launcher
+├── sandesh.db                   the ONE global DB (WAL) — all projects; five tables:
+│                                address, message, message_recipient, notifier, project
 └── projects/<project_id>/
-    ├── sandesh.db               address, message, message_recipient, notifier
-    └── messages/msg-<id>.md     message bodies (full absolute paths stored in the DB)
+    ├── messages/msg-<id>.md     message bodies (full absolute paths stored in the DB)
+    └── sandesh.db.pre-global    legacy per-project DB, kept as backup after consolidation
 ~/.local/bin/sandesh             symlink → ~/.local/share/sandesh/bin/sandesh (PATH entry)
 ```
 
@@ -86,21 +91,27 @@ Installed (by install.sh) + runtime data:
 
 ## Architecture
 
-### The store — XDG, per-project, projectid-routed
-Every operation carries a **`project_id`**; it routes to that project's own store at
-`<data_home>/sandesh/projects/<project_id>/` (`data_home` = `$XDG_DATA_HOME` or
-`~/.local/share`). There is **no git/CWD inference** — projectid is explicit (an MCP
-daemon has no CWD). The CLI accepts `--project` (before *or* after the subcommand) or
-`$SANDESH_PROJECT`. `sandesh_db.store_dir(project_id)` builds the path;
-`sandesh_db.setup(project_id)` provisions it (idempotent).
+### The store — XDG, one global DB, projectid-scoped
+Every operation carries a **`project_id`**, but all projects share **ONE global
+database** at `<data_home>/sandesh/sandesh.db` (WAL mode; `data_home` =
+`$XDG_DATA_HOME` or `~/.local/share`). The `project` tracker table enrolls each
+project; per-project body files live under
+`<data_home>/sandesh/projects/<project_id>/messages/`. There is **no git/CWD
+inference** — projectid is explicit (an MCP daemon has no CWD). The CLI accepts
+`--project` (before *or* after the subcommand) or `$SANDESH_PROJECT`.
+`sandesh_db.db_path()`/`connect()` open the global DB;
+`sandesh_db.store_dir(project_id)` builds the body-folder path;
+`sandesh_db.setup(project_id)` enrolls + provisions (idempotent; refuses a
+tombstoned id).
 
-### Four tables (`sandesh_db._SCHEMA`)
+### Five tables (`sandesh_db._SCHEMA`)
 | table | holds |
 |---|---|
-| `address` | the **addressbook** — durable identities, PK `address` (rejects dupes), `active` soft-delete |
+| `address` | the **addressbook** — durable identities, PK `address` (rejects dupes), `active` soft-delete, `project` (the address's `<Project>` part — the exact-match scoping key) |
 | `message` | the **envelope** — `subject` (NOT NULL), `kind`, `in_reply_to`, `body_path` (NULL = subject-only; else a FULL absolute path) |
 | `message_recipient` | **per-message addressees** — (`message_id`, `recipient`, `role` to/cc, `read_at`); PK `(message_id, recipient)` |
 | `notifier` | **per-session watcher liveness** — PK `recipient`, `pid`, `token` (uuid/launch), `heartbeat_at`, `tombstone` |
+| `project` | the **project tracker** — PK `project_id`, `state` (CHECK `active`\|`archived`\|`tombstoned`), `created_at`/`archived_at`/`tombstoned_at` |
 
 ### Modules
 - **`sandesh_db.py`** — the entire model + operations. Stateless functions taking a
@@ -120,9 +131,15 @@ daemon has no CWD). The CLI accepts `--project` (before *or* after the subcomman
    read by `fetch`; the difference is the **wake**: `notify` polls
    `unread_to()` = `role='to' AND read_at IS NULL`. Cc is delivered + readable but
    never wakes — it's swept up on the recipient's next `fetch`. Conserves agent turns.
-2. **`all-tracks` broadcast.** A reserved recipient keyword; `send` expands it to all
-   **active** addresses **minus the sender**. Per-recipient rows mean every recipient's
-   watcher fires on its own row (the sender gets none).
+2. **`all-tracks` broadcast — sender-project-scoped.** A reserved recipient keyword;
+   `send` expands it to all **active** addresses **in the sender's project**, minus the
+   sender. Per-recipient rows mean every recipient's watcher fires on its own row (the
+   sender gets none). *Re-opened by design (CR-SAN-022):* the original wording relied on
+   per-project stores for isolation; `docs/research/PRD-global-store.md` (AGREED
+   2026-06-11) replaced those with the single global DB, so the scoping is now explicit
+   via `address.project` — and cross-project messaging is EXPLICITLY BLOCKED until
+   CR-SAN-023's grant: `send` to a foreign project fails with
+   `cross-project sending is not enabled (CR-SAN-023)`.
 3. **Per-recipient read.** `read_at` lives on `message_recipient`, not `message` — a
    broadcast/cc stays unread for the others after one reads it.
 4. **Subject-only ⟷ file-body.** `subject` is mandatory (the minimal content). No
@@ -219,10 +236,20 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
 - **Schema changes ship via the migration subsystem.** Don't hand-evolve a store's schema —
   add a migration. The `sandesh migrate` CLI command (gated behind the optional **`[migrate]`**
   extra — `yoyo` + `jsonschema`) applies pending migrations; `--status`/`--rollback`/`--check`
-  inspect and reverse them. On update the installer **auto-migrates** existing stores
+  inspect and reverse them. On update the installer **auto-migrates** the global DB
   (`install.sh` runs `sandesh migrate --all`), and the committed
   `sandesh/schema/current-schema.json` snapshot must stay in sync with `migrations/` — the CI
   gate in `publish-pypi.yml` asserts `migrate --dump-schema` equals that snapshot.
+- **`migrate` no longer accepts `--project`** (CR-SAN-022): the global DB is the single
+  migration target, so the subcommand has no per-project routing — `sandesh migrate
+  --project X` is a CLI error.
+- **`setup` of a tombstoned project refuses** (PRD O1): the tracker row is terminal; the
+  raised error message contains `retired (tombstoned)` and the row is left unchanged.
+- **Legacy per-project stores are auto-consolidated by the installer.** `install.sh` runs
+  `sandesh consolidate` (stdlib-only, idempotent) after the migrate block: it imports each
+  `projects/<id>/sandesh.db` into the global DB (ids remapped, reply chains relinked,
+  body files unmoved), enrolls the project, and keeps the legacy file as
+  `sandesh.db.pre-global`.
 
 ---
 

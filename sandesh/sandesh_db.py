@@ -2,10 +2,13 @@
 
 'Sandesh' (संदेश, Sanskrit/Hindi: *message / dispatch*) is a SQLite-backed maildir
 for cooperating agent/orchestrator sessions. It is **standalone** (pure Python
-stdlib — no third-party deps) and **multi-project**: every call carries a
-`project_id` that routes to that project's own store under the XDG data dir.
+stdlib — no third-party deps) and **multi-project**: all projects share ONE
+global DB (WAL) under the XDG data dir; every call carries a `project_id` that
+scopes it (enrolled in the `project` tracker table) and routes body files to
+that project's folder.
 
-  <data_home>/sandesh/sandesh.db                                 (data_home = $XDG_DATA_HOME or ~/.local/share)
+  <data_home>/sandesh/sandesh.db                                 (the ONE global DB, WAL — all projects;
+                                                                  data_home = $XDG_DATA_HOME or ~/.local/share)
   <data_home>/sandesh/projects/<project_id>/                     (per-project body folder)
   <data_home>/sandesh/projects/<project_id>/messages/msg-<id>.md
 
@@ -20,7 +23,9 @@ Model — five tables:
 
 Semantics:
   - To wakes / Cc silent     notify fires only on role='to'; fetch pulls to+cc.
-  - all-tracks broadcast      expands to active addresses minus the sender.
+  - all-tracks broadcast      expands to the sender's project's active addresses
+                               minus the sender (cross-project send is blocked
+                               until CR-SAN-023's grant).
   - per-recipient read         read_at lives on message_recipient, not the message.
   - keep history              nothing deleted; read_at (per recipient) is the only "seen" signal.
   - subject-only               body_path NULL → the subject IS the content.

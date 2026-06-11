@@ -1112,5 +1112,107 @@ class InstallShConsolidateTest(unittest.TestCase):
         )
 
 
+# T11: GREEN pin — legacy address.project COLUMN honoured (post-0003 legacy store)
+
+# Post-0003 legacy DDL: address table HAS the project column (0003 already
+# applied to the per-project store before consolidation).
+_LEGACY_DDL_POST0003 = """
+CREATE TABLE IF NOT EXISTS address (
+    address       TEXT PRIMARY KEY,
+    kind          TEXT,
+    display_name  TEXT,
+    active        BOOLEAN NOT NULL DEFAULT TRUE,
+    registered_at TEXT NOT NULL DEFAULT (datetime('now')),
+    registered_by TEXT,
+    project       TEXT
+);
+CREATE TABLE IF NOT EXISTS message (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_addr   TEXT NOT NULL,
+    subject     TEXT NOT NULL,
+    kind        TEXT,
+    in_reply_to INTEGER REFERENCES message(id),
+    body_path   TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS message_recipient (
+    message_id INTEGER NOT NULL REFERENCES message(id),
+    recipient  TEXT NOT NULL,
+    role       TEXT NOT NULL DEFAULT 'to',
+    read_at    TEXT,
+    PRIMARY KEY (message_id, recipient)
+);
+"""
+
+
+def _build_legacy_store_gamma(data_home):
+    """Build legacy store for project 'Gamma' with a post-0003 address table.
+
+    Seeds two addresses:
+      - 'Mainline - Gamma' with project COLUMN populated as 'GammaLegacy'
+        (deliberately ≠ the derived suffix 'Gamma' so the test can prove the
+        column value wins over text derivation), and
+      - 'Track 1 - Gamma' with project NULL (must fall back to derivation).
+    No messages — this fixture pins only the address.project branch.
+    """
+    project_id = "Gamma"
+    db_path = _legacy_db_path(data_home, project_id)
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    os.makedirs(_legacy_msg_dir(data_home, project_id), exist_ok=True)
+
+    con = sqlite3.connect(db_path)
+    con.executescript(_LEGACY_DDL_POST0003)
+    con.execute(
+        "INSERT INTO address (address, kind, active, project) VALUES (?,?,?,?)",
+        ("Mainline - Gamma", "mainline", 1, "GammaLegacy"))
+    con.execute(
+        "INSERT INTO address (address, kind, active, project) VALUES (?,?,?,?)",
+        ("Track 1 - Gamma", "track", 1, None))
+    con.commit()
+    con.close()
+    return db_path
+
+
+class LegacyAddressProjectColumnTest(_TempDataHome):
+    """Pin (green-on-arrival): `_legacy_address_project` must read the legacy
+    `address.project` COLUMN when it is present and non-NULL (a post-0003
+    legacy store), and fall back to deriving from the address text when the
+    column value is NULL.
+    """
+
+    def setUp(self):
+        super().setUp()
+        _build_legacy_store_gamma(self.tmp)
+        s.consolidate()
+
+    def test_populated_project_column_carried_verbatim(self):
+        """An address whose legacy project COLUMN is populated must carry that
+        exact value into the global DB (column wins over text derivation)."""
+        row = self.con.execute(
+            "SELECT project FROM address WHERE address=?",
+            ("Mainline - Gamma",),
+        ).fetchone()
+        self.assertIsNotNone(row, "Mainline - Gamma not imported into the global DB")
+        self.assertEqual(
+            row["project"], "GammaLegacy",
+            f"Expected the legacy column value 'GammaLegacy' verbatim "
+            f"(NOT the derived suffix), got {row['project']!r}",
+        )
+
+    def test_null_project_column_falls_back_to_derivation(self):
+        """An address whose legacy project COLUMN is NULL must get the project
+        derived from the address text (suffix after the first ' - ')."""
+        row = self.con.execute(
+            "SELECT project FROM address WHERE address=?",
+            ("Track 1 - Gamma",),
+        ).fetchone()
+        self.assertIsNotNone(row, "Track 1 - Gamma not imported into the global DB")
+        self.assertEqual(
+            row["project"], "Gamma",
+            f"Expected the derived project 'Gamma' for a NULL legacy column, "
+            f"got {row['project']!r}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
