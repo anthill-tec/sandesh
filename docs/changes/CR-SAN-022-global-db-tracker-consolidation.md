@@ -1,6 +1,6 @@
 # CR-SAN-022 — Global DB, project tracker & store consolidation
 
-**Status:** PENDING
+**Status:** COMPLETED (2026-06-11)
 **Priority:** High (the Wave 6 foundation — everything else in the wave builds on the single DB)
 **Depends on:** CR-SAN-017/018 (migration engine + installer hook)
 **Labels:** wave-6, global-store, schema, migration, installer
@@ -138,6 +138,35 @@ adaptation. The largest CR of the wave; everything downstream depends on it.
   CR *blocks* cross-project explicitly; 023 relaxes that behind the D11 grant).
 - The lifecycle verbs archive/unarchive/tombstone (CR-SAN-024).
 - Any MCP surface change (CR-SAN-025).
+
+## Close-out
+_Completed 2026-06-11 (orchestrator: vidushi-sandesh). 6 cycles + VERIFY. Opens Wave 6._
+- **C1** `fd02a23`/`de4c2a4`/`ebbb237`/`f68b812` — `0003-project-tracker` migration (project table +
+  `address.project` via 12-step rebuild, suffix backfill) + `_SCHEMA` parity + `register` populates;
+  authorized test refresh (un-pinned chain-length assertions, snapshot regen #1); RED-fixture repair so
+  the backfill class runs post-GREEN (orchestrator-caught: it self-skipped → AC hole). AC1.
+- **C2** `da178dd`/`e4414e7` — no-arg `connect()` (WAL) + `db_path()`, `setup` enrolls (O1 refusal),
+  tracker-backed `list_projects(include_tombstoned)`, `project_state()`; 4 callers + fixture sweep
+  (516/516). AC2/3/4.
+- **C3** `023f7dd`/`1941085` — migrate engine global target (DEC-B: `--project` REMOVED — parser,
+  engine, CI yml, gate test), DRIFT-4 dynamic `sqlite_master` shape, snapshot regen #2 (5 tables);
+  11 meaning-level test conversions ratified. AC6.
+- **C4** `135639b`/`0342679` — explicit scoping (DRIFT-1): atomic cross-project send refusal (exact
+  error, zero rows), sender-project `all-tracks`, `addressbook(con, project)`, project-scoped
+  `unregister`. AC7.
+- **C5** `9737753`/`6f6a431` — `consolidate()` (stdlib; id remap incl. dangling `in_reply_to`→NULL,
+  read_at/role verbatim, `.pre-global` backups, idempotent, notifier rows skipped) + `sandesh
+  consolidate` CLI + unconditional installer hook. AC5.
+- **C6** `351a04a` — CLAUDE.md global-store rewrite (locked semantics #2 re-opened with PRD citation),
+  module docstrings, README path/flag updates; pinned the legacy `address.project`-column branch. AC8.
+- **VERIFY** (python-verify-agent) — **PASS on all 8 ACs**, zero BLOCKING/SHOULD-FIX; boundaries clean
+  (`sandesh_db` stdlib-pure, lazy yoyo imports, no 023/024/025 scope leak); all live-exercised
+  (round-trip, refusal, `--project` rejection, snapshot equality, legacy consolidation).
+- **Independent verification (orchestrator):** full 22-file sweep green; live probes — cross-project
+  refusal + zero-row atomicity, scoped `all-tracks`, forced id-collision consolidation (ids 1,2→3,4,
+  chain intact), `.pre-global` rename, idempotent re-run.
+- **Pre-merge gate:** `python-crucible.py pre-merge-gate` → **611 passed / 0 failed**, `py_compile`
+  clean, `ok=True`, coverage **74.9% lines / 81.1% funcs** (up from 52.1/58.4 at CR-018).
 
 ## Gap-analysis findings
 _Completed 2026-06-11 (orchestrator: vidushi-sandesh; gap-analysis skill). Verdict: **SPEC_UPDATE_NEEDED
