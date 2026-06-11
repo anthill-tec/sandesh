@@ -33,7 +33,7 @@ def _ctx(args):
     """(project_id, store_dir, connection)."""
     project = _project(args)
     store = sdb.store_dir(project)
-    return project, store, sdb.connect(store)
+    return project, store, sdb.connect()
 
 
 def _self_addr(args, flag):

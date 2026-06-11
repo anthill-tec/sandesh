@@ -644,7 +644,8 @@ class Migration0003FreshSchemaParity(_TempDataHome):
         self._pid = "ParityTest"
         # Provision a fresh store via setup() — does NOT go through migrations.
         self._setup_project(self._pid, self._dh)
-        self._db = self._db_path(self._pid, self._dh)
+        # CR-SAN-022 C2: setup() provisions the GLOBAL DB, not a per-project file.
+        self._db = os.path.join(self._dh, "sandesh", "sandesh.db")
 
     def test_fresh_setup_creates_project_table(self):
         """sandesh_db.setup() must create the project table (via _SCHEMA).
@@ -752,7 +753,7 @@ class Migration0003RegisterPopulatesProjectTest(_TempDataHome):
         self._set_xdg(self._dh)
         from sandesh import sandesh_db
 
-        con = sandesh_db.connect(sandesh_db.store_dir(self._pid))
+        con = sandesh_db.connect()
         try:
             sandesh_db.register(con, "Mainline - Demo", kind="mainline", project=self._pid)
             row = con.execute(
@@ -780,7 +781,7 @@ class Migration0003RegisterPopulatesProjectTest(_TempDataHome):
         self._set_xdg(self._dh)
         from sandesh import sandesh_db
 
-        con = sandesh_db.connect(sandesh_db.store_dir(self._pid))
+        con = sandesh_db.connect()
         try:
             sandesh_db.register(con, "Track 1 - Demo", kind="track", project=self._pid)
             row = con.execute(
@@ -808,7 +809,7 @@ class Migration0003RegisterPopulatesProjectTest(_TempDataHome):
         self._set_xdg(self._dh)
         from sandesh import sandesh_db
 
-        con = sandesh_db.connect(sandesh_db.store_dir(self._pid))
+        con = sandesh_db.connect()
         try:
             sandesh_db.register(con, "Mainline - Demo", kind="mainline", project=self._pid)
             row = con.execute(
@@ -840,7 +841,7 @@ class Migration0003RegisterPopulatesProjectTest(_TempDataHome):
         self._set_xdg(self._dh)
         from sandesh import sandesh_db
 
-        con = sandesh_db.connect(sandesh_db.store_dir(self._pid))
+        con = sandesh_db.connect()
         try:
             sandesh_db.register(con, "Track 1 - Demo", kind="track", project=self._pid)
             row = con.execute(

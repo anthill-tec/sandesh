@@ -5,7 +5,8 @@ for cooperating agent/orchestrator sessions. It is **standalone** (pure Python
 stdlib — no third-party deps) and **multi-project**: every call carries a
 `project_id` that routes to that project's own store under the XDG data dir.
 
-  <data_home>/sandesh/projects/<project_id>/sandesh.db          (data_home = $XDG_DATA_HOME or ~/.local/share)
+  <data_home>/sandesh/sandesh.db                                 (data_home = $XDG_DATA_HOME or ~/.local/share)
+  <data_home>/sandesh/projects/<project_id>/                     (per-project body folder)
   <data_home>/sandesh/projects/<project_id>/messages/msg-<id>.md
 
 `body_path` is stored as a FULL absolute path.
@@ -105,33 +106,64 @@ def store_dir(project_id):
     return os.path.join(root_dir(), "projects", project_id)
 
 
-def connect(store):
-    """Open (creating tables if absent) the Sandesh DB at <store>/sandesh.db."""
+def db_path():
+    """The global Sandesh DB file — <data_home>/sandesh/sandesh.db."""
+    return os.path.join(root_dir(), DB_FILE)
+
+
+def connect():
+    """Open (creating tables if absent) the global Sandesh DB at db_path(), WAL mode."""
     import sqlite3
-    os.makedirs(store, exist_ok=True)
-    con = sqlite3.connect(os.path.join(store, DB_FILE))
+    os.makedirs(root_dir(), exist_ok=True)
+    con = sqlite3.connect(db_path())
     con.row_factory = sqlite3.Row
     con.executescript(_SCHEMA)
+    con.execute("PRAGMA journal_mode=WAL")
     con.commit()
     return con
 
 
 def setup(project_id):
-    """Provision a project: create its store dir + messages/ and initialise the DB
-    tables. Idempotent — safe to re-run. Returns the store dir."""
-    store = store_dir(project_id)
+    """Provision a project: enroll it in the tracker (INSERT 'active' if absent;
+    no-op if already active/archived; refuse a tombstoned id) and create its
+    messages/ body dir. Idempotent — safe to re-run. Returns the store dir."""
+    store = store_dir(project_id)                 # validates project_id non-empty
+    con = connect()
+    try:
+        state = project_state(con, project_id)
+        if state == "tombstoned":
+            raise ValueError("project id retired (tombstoned) — choose a new id")
+        if state is None:
+            con.execute(
+                "INSERT INTO project (project_id, state) VALUES (?, 'active')",
+                (project_id,))
+            con.commit()
+    finally:
+        con.close()
     os.makedirs(os.path.join(store, MESSAGES_DIR), exist_ok=True)
-    connect(store).close()
     return store
 
 
-def list_projects():
-    """project_ids that have been set up (a projects/<id>/sandesh.db exists)."""
-    base = os.path.join(root_dir(), "projects")
-    if not os.path.isdir(base):
-        return []
-    return sorted(p for p in os.listdir(base)
-                  if os.path.isfile(os.path.join(base, p, DB_FILE)))
+def list_projects(include_tombstoned=False):
+    """Enrolled project_ids from the tracker, sorted — active+archived by default;
+    tombstoned ids only with include_tombstoned=True."""
+    sql = "SELECT project_id FROM project"
+    if not include_tombstoned:
+        sql += " WHERE state != 'tombstoned'"
+    sql += " ORDER BY project_id"
+    con = connect()
+    try:
+        return [row["project_id"] for row in con.execute(sql).fetchall()]
+    finally:
+        con.close()
+
+
+def project_state(con, project_id):
+    """The tracker state for a project — 'active' | 'archived' | 'tombstoned' —
+    or None if it has never been enrolled."""
+    row = con.execute(
+        "SELECT state FROM project WHERE project_id=?", (project_id,)).fetchone()
+    return row["state"] if row is not None else None
 
 
 # --------------------------------------------------------------------------- #

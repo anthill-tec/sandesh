@@ -49,7 +49,7 @@ def _ctx(project_id=None):
     `cli.py::_ctx`. `project_id` falls back to `$SANDESH_PROJECT` (D4)."""
     project = _resolve_project(project_id)
     store = sandesh_db.store_dir(project)
-    con = sandesh_db.connect(store)
+    con = sandesh_db.connect()
     return project, store, con
 
 

@@ -49,7 +49,7 @@ def _interval():
 
 def run(project_id, address, timeout=DEFAULT_TIMEOUT_SECS):
     """Block until `address` has unread 'to' mail in `project_id`. Returns an exit code."""
-    con = sdb.connect(sdb.store_dir(project_id))
+    con = sdb.connect()
     try:
         sdb.validate_address(address, project_id)
     except ValueError as exc:

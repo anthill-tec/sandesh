@@ -41,6 +41,20 @@ _PYPROJECT_PATH = os.path.join(_REPO_ROOT, "pyproject.toml")
 _SYSTEM_PYTHON = "/usr/bin/python3"
 
 
+def _legacy_connect(store):
+    """Open the legacy per-project DB at <store>/sandesh.db (the pre-CR-SAN-022
+    connect(store) semantics: row factory + _SCHEMA). Used by fixtures that seed
+    or read a per-project store for the migration-engine tests — sandesh_db.connect()
+    is global-DB-only since CR-SAN-022 C2."""
+    from sandesh import sandesh_db
+    os.makedirs(store, exist_ok=True)
+    con = sqlite3.connect(os.path.join(store, sandesh_db.DB_FILE))
+    con.row_factory = sqlite3.Row
+    con.executescript(sandesh_db._SCHEMA)
+    con.commit()
+    return con
+
+
 # ---------------------------------------------------------------------------
 # AC1 — import purity (clean subprocess per module to avoid cross-contamination)
 # ---------------------------------------------------------------------------
@@ -608,10 +622,13 @@ class MigrateBaselineEqualsSchemaTest(unittest.TestCase):
         return os.path.join(data_home_a, "sandesh", "projects", "AC3Test", "sandesh.db"), data_home_a
 
     def _store_b_path(self):
-        """DB file for a sandesh_db.setup()-provisioned store."""
+        """DB file for a sandesh_db.setup()-provisioned store.
+
+        Since CR-SAN-022 C2, setup() provisions the GLOBAL DB at
+        <data_home>/sandesh/sandesh.db (not a per-project file)."""
         import os
         data_home_b = os.path.join(self._tmpdir, "data_b")
-        return os.path.join(data_home_b, "sandesh", "projects", "AC3Test", "sandesh.db"), data_home_b
+        return os.path.join(data_home_b, "sandesh", "sandesh.db"), data_home_b
 
     def _provision_via_migrations(self, data_home_a):
         """Apply 0001-baseline to a brand-new empty store."""
@@ -1863,10 +1880,11 @@ class MigrateCliAllFailFastTest(unittest.TestCase):
             f"(alphabetical); got order: {projects!r}",
         )
 
-        # 3. Corrupt FailAlpha's DB (overwrite with garbage so sqlite3.connect raises)
+        # 3. Corrupt FailAlpha's DB (write garbage so sqlite3.connect raises).
+        # Since CR-SAN-022 C2, setup() no longer creates the per-project DB file;
+        # migrate.apply() creates it on demand — plant the garbage file it will hit.
         fail_db = self._db_path(self._FAIL_PROJ, data_home)
-        self.assertTrue(os.path.isfile(fail_db),
-                        f"Expected {fail_db!r} to exist after setup")
+        os.makedirs(os.path.dirname(fail_db), exist_ok=True)
         with open(fail_db, "wb") as fh:
             fh.write(b"THIS IS NOT A SQLITE DATABASE -- garbage bytes to force an error")
 
@@ -4860,8 +4878,8 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         try:
             from sandesh import sandesh_db
             sandesh_db.setup("AC11New")
-            store = sandesh_db.store_dir("AC11New")
-            db_path = os.path.join(store, sandesh_db.DB_FILE)
+            # CR-SAN-022 C2: setup() provisions the GLOBAL DB, not a per-project file.
+            db_path = sandesh_db.db_path()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -4897,8 +4915,8 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         try:
             from sandesh import sandesh_db
             sandesh_db.setup("AC11ConvNew")
-            store_new = sandesh_db.store_dir("AC11ConvNew")
-            db_new = os.path.join(store_new, sandesh_db.DB_FILE)
+            # CR-SAN-022 C2: setup() provisions the GLOBAL DB, not a per-project file.
+            db_new = sandesh_db.db_path()
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -4943,7 +4961,7 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
             store = sandesh_db.store_dir(project_id)
             db_path = os.path.join(store, sandesh_db.DB_FILE)
 
-            con = sandesh_db.connect(store)
+            con = _legacy_connect(store)
             # Register addresses (validate=False avoids project_id check in send)
             sandesh_db.register(con, f"Mainline - {project_id}", kind="mainline",
                                 project=project_id)
@@ -5163,7 +5181,7 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         try:
             from sandesh import sandesh_db, migrate
             migrate.apply("AC11Thread")
-            con = sandesh_db.connect(store)
+            con = _legacy_connect(store)
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -5203,7 +5221,7 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         try:
             from sandesh import sandesh_db, migrate
             migrate.apply("AC11Inbox")
-            con = sandesh_db.connect(store)
+            con = _legacy_connect(store)
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -5247,7 +5265,7 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         try:
             from sandesh import sandesh_db, migrate
             migrate.apply("AC11Fetch")
-            con = sandesh_db.connect(store)
+            con = _legacy_connect(store)
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -5278,7 +5296,7 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import sandesh_db
-            con2 = sandesh_db.connect(store)
+            con2 = _legacy_connect(store)
             remaining = sandesh_db.inbox(con2, mainline, unread_only=True)
             con2.close()
         finally:
@@ -5310,7 +5328,7 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         try:
             from sandesh import sandesh_db, migrate
             migrate.apply("AC11CCUnread")
-            con = sandesh_db.connect(store)
+            con = _legacy_connect(store)
         finally:
             if orig is None:
                 os.environ.pop("XDG_DATA_HOME", None)
@@ -5329,7 +5347,7 @@ class MigrateStatusDropEndToEndTest(unittest.TestCase):
         os.environ["XDG_DATA_HOME"] = data_home
         try:
             from sandesh import sandesh_db
-            con2 = sandesh_db.connect(store)
+            con2 = _legacy_connect(store)
             track2_unread = sandesh_db.inbox(con2, track2, unread_only=True)
             con2.close()
         finally:

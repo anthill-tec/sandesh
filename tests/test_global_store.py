@@ -600,7 +600,6 @@ class ListProjectsTrackerTest(_GlobalTempDataHome):
         row not visible in the filesystem-based scan AT ALL (no dir created for it).
         """
         self._seed_project_row("ArchProject", "archived")
-        result = sandesh_db.list_projects()
         from sandesh import sandesh_db
         result = sandesh_db.list_projects()
         self.assertIn(

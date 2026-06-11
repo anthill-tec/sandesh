@@ -694,6 +694,27 @@ def _make_pre_migration_store(xdg_data, project_id):
     con.executescript(_PRE_MIGRATION_SCHEMA)
     con.commit()
     con.close()
+    # CR-SAN-022 C2: `migrate --all` discovers projects via the global tracker
+    # (sandesh_db.list_projects()), no longer a filesystem scan — enroll the
+    # legacy project so the installer's migrate --all finds it.  (CR-SAN-022 C5
+    # consolidation will do this enrollment for real-world legacy stores.)
+    global_db = os.path.join(xdg_data, "sandesh", "sandesh.db")
+    gcon = sqlite3.connect(global_db)
+    try:
+        gcon.execute(
+            "CREATE TABLE IF NOT EXISTS project ("
+            " project_id    TEXT PRIMARY KEY,"
+            " state         TEXT NOT NULL DEFAULT 'active'"
+            "               CHECK (state IN ('active','archived','tombstoned')),"
+            " created_at    TEXT NOT NULL DEFAULT (datetime('now')),"
+            " archived_at   TEXT,"
+            " tombstoned_at TEXT)")
+        gcon.execute(
+            "INSERT OR IGNORE INTO project (project_id, state) VALUES (?, 'active')",
+            (project_id,))
+        gcon.commit()
+    finally:
+        gcon.close()
     return db_path
 
 

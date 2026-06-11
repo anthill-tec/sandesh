@@ -105,7 +105,7 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
 
     def _fresh_con(self):
         """Open a fresh DB connection to read back side-effects."""
-        return sdb.connect(self.store)
+        return sdb.connect()
 
     # ------------------------------------------------------------------
     # AC1 — list_tools includes all four mutating tools; sandesh_actioned is gone
