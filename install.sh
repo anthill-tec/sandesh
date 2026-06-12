@@ -98,7 +98,18 @@ echo "✓ search index rebuilt"
 # there and surfaced as a notice, NOT an install abort (the python exits 0, so
 # `set -e` lets the install COMPLETE). Unset → skip with a notice.
 if [ -n "${SANDESH_ADMIN:-}" ]; then
-  SANDESH_ADMIN="$SANDESH_ADMIN" "$VENV/bin/python" -c $'import os\nfrom sandesh import sandesh_db as s\ncon = s.connect()\ntry:\n    s.assign_admin(con, os.environ["SANDESH_ADMIN"])\n    print("✓ Sandesh admin assigned: %r" % s.admin_name(con))\nexcept ValueError as exc:\n    print("  NOTE: %s — keeping %r (install continues)" % (exc, s.admin_name(con)))\nfinally:\n    con.close()'
+  SANDESH_ADMIN="$SANDESH_ADMIN" "$VENV/bin/python" - <<'PY'
+import os
+from sandesh import sandesh_db as s
+con = s.connect()
+try:
+    s.assign_admin(con, os.environ["SANDESH_ADMIN"])
+    print("✓ Sandesh admin assigned: %r" % s.admin_name(con))
+except ValueError as exc:
+    print("  NOTE: %s — keeping %r (install continues)" % (exc, s.admin_name(con)))
+finally:
+    con.close()
+PY
 else
   echo "  NOTE: \$SANDESH_ADMIN not set — admin assignment skipped."
   echo "        assign later by re-running:  SANDESH_ADMIN=<name> ./install.sh"

@@ -167,17 +167,40 @@ class DefaultListingTest(_TempDataHome):
         )
 
     def test_default_listing_shows_correct_state_for_active(self):
-        """Active row in default listing shows state 'active'."""
+        """Active row in default listing shows state 'active' ON the ActiveProj line.
+
+        AC7 (CR-SAN-030): line-anchored assertion — find the line containing
+        the project id, then assert the state cell on THAT line.
+        """
         _rc, out, _err = self._run_cli(["projects"])
-        # The row must contain both the project id and the word 'active'.
-        self.assertIn("active", out,
-                      f"state 'active' must appear in default listing output; got:\n{out}")
+        active_lines = [ln for ln in out.splitlines() if self.ACTIVE in ln]
+        self.assertTrue(
+            len(active_lines) >= 1,
+            f"Expected at least one output line containing '{self.ACTIVE}'; got:\n{out}",
+        )
+        self.assertTrue(
+            any("active" in ln for ln in active_lines),
+            f"None of the '{self.ACTIVE}' lines contains state 'active'; "
+            f"lines: {active_lines!r}\nfull output:\n{out}",
+        )
 
     def test_default_listing_shows_correct_state_for_archived(self):
-        """Archived row in default listing shows state 'archived'."""
+        """Archived row in default listing shows state 'archived' ON the ArchivedProj line.
+
+        AC7 (CR-SAN-030): line-anchored assertion — find the line containing
+        the project id, then assert the state cell on THAT line.
+        """
         _rc, out, _err = self._run_cli(["projects"])
-        self.assertIn("archived", out,
-                      f"state 'archived' must appear in default listing output; got:\n{out}")
+        archived_lines = [ln for ln in out.splitlines() if self.ARCHIVED in ln]
+        self.assertTrue(
+            len(archived_lines) >= 1,
+            f"Expected at least one output line containing '{self.ARCHIVED}'; got:\n{out}",
+        )
+        self.assertTrue(
+            any("archived" in ln for ln in archived_lines),
+            f"None of the '{self.ARCHIVED}' lines contains state 'archived'; "
+            f"lines: {archived_lines!r}\nfull output:\n{out}",
+        )
 
 
 # ---------------------------------------------------------------------------
