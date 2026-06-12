@@ -783,7 +783,7 @@ describe("AC5 — docs markers: inbox and fetch carry sender_project / proxy-str
     const tools = getRegisteredTools();
     const tool = tools.get("sandesh_inbox")!;
     expect(tool).toBeDefined();
-    const combined = ((tool as any).desc ?? "") + " " + ((tool as any).promptSnippet ?? "");
+    const combined = ((tool as any).description ?? "") + " " + ((tool as any).promptSnippet ?? "");
     const hasMark =
       combined.toLowerCase().includes("sender_project") ||
       combined.toLowerCase().includes("proxy") ||
@@ -797,7 +797,7 @@ describe("AC5 — docs markers: inbox and fetch carry sender_project / proxy-str
     const tools = getRegisteredTools();
     const tool = tools.get("sandesh_fetch")!;
     expect(tool).toBeDefined();
-    const combined = ((tool as any).desc ?? "") + " " + ((tool as any).promptSnippet ?? "");
+    const combined = ((tool as any).description ?? "") + " " + ((tool as any).promptSnippet ?? "");
     const hasMark =
       combined.toLowerCase().includes("sender_project") ||
       combined.toLowerCase().includes("proxy") ||
@@ -809,7 +809,7 @@ describe("AC5 — docs markers: inbox and fetch carry sender_project / proxy-str
     const tools = getRegisteredTools();
     const tool = tools.get("sandesh_search")!;
     expect(tool).toBeDefined();
-    const combined = ((tool as any).desc ?? "") + " " + ((tool as any).promptSnippet ?? "");
+    const combined = ((tool as any).description ?? "") + " " + ((tool as any).promptSnippet ?? "");
     const hasPagination =
       combined.toLowerCase().includes("paginate") ||
       combined.toLowerCase().includes("pagination") ||
