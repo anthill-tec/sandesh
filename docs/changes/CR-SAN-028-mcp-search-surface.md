@@ -1,6 +1,6 @@
 # CR-SAN-028 — MCP search surface (filtered inbox params + sandesh_search)
 
-**Status:** IN_PROGRESS
+**Status:** COMPLETED (shipped 2026-06-12 on develop)
 **Priority:** Medium (agent-facing adapter over the wave's core)
 **Depends on:** CR-SAN-027 (search engine)
 **Labels:** wave-7, search, mcp
