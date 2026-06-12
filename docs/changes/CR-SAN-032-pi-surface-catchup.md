@@ -18,15 +18,19 @@ to full parity and gates on the CLI version that carries those semantics.
 ## Scope
 
 ### §S1 — three new tools (PE6): 9 → 12
-- `sandesh_archive` / `sandesh_unarchive` — params `project_id` (required), `by`
-  (required), plus `dry_run` and (archive only, if the CLI exposes it) `force`,
-  mapping to `sandesh archive|unarchive --project <id> --by <addr> [--dry-run] [--force]`
-  (exact flag set pinned at gap-analysis against `cli.py`). Descriptions: Mainline-tier
+- `sandesh_archive` — params `project_id` (required), `by` (required), `dry_run`
+  (optional bool), `force` (optional bool) → `sandesh archive --project <id> --by <addr>
+  [--dry-run] [--force]`. `sandesh_unarchive` — params `project_id`, `by`, `dry_run`
+  ONLY (the CLI has no unarchive `--force`; eviction is archive-side) →
+  `sandesh unarchive --project <id> --by <addr> [--dry-run]`. Boolean flags emitted only
+  when the param is true (house omit-at-default style). Descriptions: Mainline-tier
   reversible lifecycle pair; archived = can't send/receive, reads intact, watchers
   evicted.
 - `sandesh_search` — params `recipient` (required), `query` (required), `limit`
-  (default 20), `offset` (default 0), `sender_project` (optional), mapping to
-  `sandesh search <query> --to <recipient> [--limit N] [--offset N] [--from-project P]`.
+  (optional int), `offset` (optional int), `sender_project` (optional), mapping to
+  `sandesh search <query> --to <recipient> [--limit N] [--offset N] [--from-project P]`;
+  each optional flag emitted ONLY when its param is provided (omit-at-default — the CLI
+  defaults, limit 20 / offset 0, then apply).
   Description mirrors the MCP tool: FTS5 syntax, bm25+snippets, own-mailbox boundary,
   pagination, never marks read, lazy-reindex notice passthrough (the CLI prints it).
 
@@ -37,7 +41,8 @@ to full parity and gates on the CLI version that carries those semantics.
   the cross-project proxy-stream filter.
 
 ### §S3 — CLI version gate ≥ 0.2.0 (PE7)
-- The session-start probe parses `sandesh --version` output (`sandesh X.Y.Z`); a version
+- The session-start probe parses `sandesh --version` stdout against
+  `^sandesh (\d+)\.(\d+)\.(\d+)` (the CLI emits `sandesh {__version__}`); a version
   below 0.2.0 takes the missing-CLI path: one-time `ctx.ui.notify` warning naming the
   required minimum + upgrade hint, wake loop NOT armed. Unparseable output counts as
   too-old. Tool registration stays static/unblocked.
@@ -48,6 +53,11 @@ to full parity and gates on the CLI version that carries those semantics.
   tombstoned`, `unknown project '<id>'`, and `cross-project sending not approved for
   project '<id>' — ask the Sandesh admin`. No shim-side handling added (PE9 boundary:
   no tombstone/grant/revoke/admin/reindex tools).
+
+### §S4b — wake-test assertion strengthening (031 VERIFY register item)
+- `src/wake.test.ts` AC2 "no infinite spin" test: `notifyCalls.length` assertion tightens
+  from `toBeGreaterThanOrEqual(2)` to `toBe(2)` (the comment's stated intent; the
+  3-item exec sequence makes >2 impossible).
 
 ### §S5 — docs + version (PE10)
 - promptSnippets/descriptions gain the proxy-stream + search/pagination story (reuse the
@@ -60,9 +70,10 @@ to full parity and gates on the CLI version that carries those semantics.
       are `sandesh_archive`, `sandesh_unarchive`, `sandesh_search`; no registered tool
       name contains `tombstone`, `grant`, `revoke`, `admin`, or `reindex`.
 - [ ] **AC2 — arg mapping.** Each new tool/param builds exactly the CLI argv pinned in
-      §S1/§S2 (mock `pi.exec`, assert argv): archive/unarchive with/without `dry_run`;
-      search with defaults (no --limit/--offset flags when defaults? — pinned at
-      gap-analysis) and with all params; inbox/fetch with each filter alone and combined.
+      §S1/§S2 (mock `pi.exec`, assert argv): archive with/without `dry_run`/`force`;
+      unarchive with/without `dry_run` (and NO force param in its schema); search with
+      no optionals (argv carries no --limit/--offset/--from-project) and with all
+      params; inbox/fetch with each filter alone and combined.
 - [ ] **AC3 — version gate.** Probe `sandesh 0.1.0` → warning notice naming 0.2.0, wake
       loop not armed; `sandesh 0.2.0` (and `0.3.1`) → armed as today; garbage output →
       treated as too-old; missing CLI path unchanged.
@@ -71,14 +82,17 @@ to full parity and gates on the CLI version that carries those semantics.
 - [ ] **AC5 — docs markers.** promptSnippets/descriptions contain the proxy-stream and
       search/pagination markers (grep); `package.json` version is `0.2.0`.
 - [ ] **AC6 — regression.** Full `bun test` suite green in `integrations/pi/`.
+- [ ] **AC7 — wake assertion tightened.** The §S4b test asserts `toBe(2)`; the wake suite
+      stays green.
 
 ## Estimated size
 Medium — three tools + six params + gate + docs, all shim-thin; the AC2 argv matrix is
 the bulk of the test work.
 
 ## Risks / open questions
-- Exact CLI flags for archive `--force` and search default-flag emission — pinned at
-  gap-analysis against `cli.py` before RED.
+- (none open — flag sets, omit-at-default emission, and the version-probe regex were
+  pinned at gap-analysis against `cli.py`; the §S4 error strings verified verbatim in
+  `sandesh_db.py`.)
 
 ## Non-goals
 - npm publish (rides the v0.2.0 release); any Sandesh-core change; wake-loop changes
