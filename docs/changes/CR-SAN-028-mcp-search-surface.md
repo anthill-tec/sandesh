@@ -22,11 +22,14 @@ agent-facing docs teach the proxy-stream use case. `reindex` stays CLI/installer
 
 ### §S2 — `sandesh_search` (the 12th tool)
 - `sandesh_search(recipient, query, project_id=None, limit=20, offset=0, sender_project=None)` —
-  `recipient` + `query` required; `project_id` optional with the derivation chain (from `recipient`,
-  matching `sandesh_fetch`); `@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))`; returns
-  `{hits: [...], total: int, limit: int, offset: int}`; errors (`ValueError`,) → `ToolError` (the
-  malformed-query message included); docstring covers FTS5 syntax, pagination, the own-mailbox
-  boundary, and that search never marks read.
+  `recipient` + `query` required; `project_id` accepted-and-unused (the lib `search()` is con-only —
+  snippets come from the index, no body-file reads — so no project resolution exists; the
+  `sandesh_inbox`/`sandesh_thread` pattern); `@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))`;
+  returns the lib result dict verbatim — `{hits: [...], total: int, limit: int, offset: int}`
+  (+`reindexed` when the lazy heuristic fired) — FastMCP serializes a dict return with keys preserved
+  (verified empirically); errors (`ValueError`,) → `ToolError` (the malformed-query message included);
+  docstring covers FTS5 syntax, pagination, the own-mailbox boundary, that search never marks read,
+  and the lazy-reindex flag.
 - **No `sandesh_reindex` tool** (maintenance is CLI/installer-only).
 
 ### §S3 — agent-facing docs
@@ -59,9 +62,8 @@ agent-facing docs teach the proxy-stream use case. `reindex` stays CLI/installer
 Small-medium — param threading, one thin tool, docs sweep, one E2E scenario.
 
 ## Risks / open questions
-- Tool result shape for `sandesh_search` (dict with hits/total) vs the list-returning house style of
-  the read tools — pin the exact serialization at gap-analysis against FastMCP structured-content
-  behaviour.
+- (none open — the dict-return serialization was verified empirically: keys preserved verbatim in
+  both text and structured content.)
 
 ## Non-goals
 - Any reindex/maintenance MCP tool; Pi extension exposure (Wave 8); semantic search.
