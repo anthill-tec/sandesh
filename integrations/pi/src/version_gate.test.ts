@@ -197,8 +197,9 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     const { fakeCtx, notifyCalls } = makeFakeCtx();
     await fireSessionStart(handler, fakeCtx);
 
-    // A warning notice must have been fired (the version-too-old path)
-    expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
+    // Exactly one warning notice must have been fired (the version-too-old path);
+    // the gate branches are mutually exclusive — a double-notify is a bug.
+    expect(notifyCalls.length).toBe(1);
   });
 
   test("AC3b — probe stdout 'sandesh 0.1.0' → notice names required minimum '0.2.0'", async () => {
@@ -281,8 +282,8 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     const { fakeCtx, notifyCalls } = makeFakeCtx();
     await fireSessionStart(handler, fakeCtx);
 
-    // Too-old path: notice fired, no notify exec
-    expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
+    // Too-old path: exactly one notice fired (branches are mutually exclusive), no notify exec
+    expect(notifyCalls.length).toBe(1);
     expect(countNotifyCalls(execMock)).toBe(0);
   });
 
@@ -303,8 +304,8 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     const { fakeCtx, notifyCalls } = makeFakeCtx();
     await fireSessionStart(handler, fakeCtx);
 
-    // Too-old path: notice fired, no notify exec
-    expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
+    // Too-old path: exactly one notice fired (branches are mutually exclusive), no notify exec
+    expect(notifyCalls.length).toBe(1);
     expect(countNotifyCalls(execMock)).toBe(0);
   });
 
@@ -345,7 +346,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     const { fakeCtx, notifyCalls } = makeFakeCtx();
     await fireSessionStart(handler, fakeCtx);
 
-    expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
+    expect(notifyCalls.length).toBe(1);
     expect(countNotifyCalls(execMock)).toBe(0);
   });
 
