@@ -1,6 +1,6 @@
 # CR-SAN-030 — pre-release cleanup sweep (VERIFY-nit backlog, Waves 6–7)
 
-**Status:** IN_PROGRESS
+**Status:** COMPLETED (shipped 2026-06-12 on develop)
 **Priority:** Low (hygiene before v0.2.0)
 **Depends on:** —
 **Labels:** pre-0.2.0, chore, tests, installer
