@@ -5,7 +5,8 @@
  * Pi tools. Each tool delegates to the installed `sandesh` CLI via `pi.exec(...)`.
  * Sandesh-core stays pure Python — this shim never imports messaging logic.
  *
- * C0 scope: the registration surface (9 tools, TypeBox parameter schemas).
+ * C0 scope: the registration surface (TypeBox parameter schemas) — originally
+ * 9 tools; CR-SAN-032 extended it to 12 (archive/unarchive/search).
  * C1 scope: each tool's execute() builds the `sandesh` CLI argv per the mapping
  * table, shells out via pi.exec, and maps the result to an AgentToolResult
  * (zero code → stdout text; non-zero → an error result surfacing stderr).
