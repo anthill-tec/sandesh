@@ -864,9 +864,10 @@ describe("CR-SAN-031 — followUp delivery hardening", () => {
     const notifyCalls = (execMock.mock.calls as Array<[string, string[], unknown?]>).filter(
       ([, args]) => Array.isArray(args) && args.includes("notify"),
     );
-    // RED: today loop dies after the throw — only 1 notify call exists, so
-    // toBeGreaterThanOrEqual(2) fails, AND/OR the test may see only 1 call.
-    // GREEN: exactly 2 — re-arm happened, exit-3 stopped it.
-    expect(notifyCalls.length).toBeGreaterThanOrEqual(2);
+    // CR-SAN-032 §S4b/AC7: tightened from toBeGreaterThanOrEqual(2) to toBe(2).
+    // The 3-item exec sequence (probe, exit-0, exit-3) makes >2 impossible:
+    // probe is exec[0], first notify is exec[1] (exit-0), re-arm is exec[2] (exit-3 stops).
+    // Exactly 2 notify calls — any value >2 would require a 4th exec entry.
+    expect(notifyCalls.length).toBe(2);
   });
 });
