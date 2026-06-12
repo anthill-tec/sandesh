@@ -539,9 +539,18 @@ async function wakeLoop(
     if (wakeStopped) break;
     switch (r.code) {
       case 0:
-        pi.sendUserMessage(
-          `You have unread Sandesh mail — call sandesh_fetch for "${self}", then act on it.`,
-        );
+        // deliverAs "followUp": ignored when idle (immediate turn), queued when the
+        // agent is mid-turn — without it Pi's prompt() throws while streaming and the
+        // wake message is silently lost (CR-SAN-031 / PE11).
+        try {
+          pi.sendUserMessage(
+            `You have unread Sandesh mail — call sandesh_fetch for "${self}", then act on it.`,
+            { deliverAs: "followUp" },
+          );
+        } catch {
+          // The real Pi wrapper is void/catching; this guards host variations where a
+          // synchronous throw would otherwise kill the loop. Swallow and re-arm.
+        }
         break; // re-arm
       case 2:
         break; // re-arm, no message

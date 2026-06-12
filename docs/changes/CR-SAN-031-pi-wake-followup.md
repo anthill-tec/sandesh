@@ -1,6 +1,6 @@
 # CR-SAN-031 — Pi wake delivery hardening: `deliverAs: "followUp"`
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-13 on develop)
 **Priority:** High (shipped defect — wake messages lost while the agent is mid-turn)
 **Depends on:** —
 **Labels:** wave-8, pi, wake, bun
