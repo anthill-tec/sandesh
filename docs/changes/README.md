@@ -31,6 +31,8 @@ Single source of truth for change requests. Pick the next `PENDING` CR by phase 
 | [CR-SAN-026](CR-SAN-026-inbox-filters.md) | **Inbox/fetch filters (lib+CLI)**: composable server-side filters — `sender_project` headline (the cross-project proxy stream) + sender/kind/since/until/subject; filtered fetch marks only the subset; wake path untouched | Wave 7 | COMPLETED | — | 2026-06-12 |
 | [CR-SAN-027](CR-SAN-027-fts-search-engine.md) | **FTS5 search engine**: `0005-message-fts` (+dump excludes the FTS family), send-time indexing, `search()` (bm25+snippets, own-mailbox, paginated limit/offset/total) + `reindex` (explicit CLI + installer + lazy empty-index path) | Wave 7 | COMPLETED | CR-SAN-026 | 2026-06-12 |
 | [CR-SAN-028](CR-SAN-028-mcp-search-surface.md) | **MCP search surface**: `sandesh_inbox`/`sandesh_fetch` filter params + `sandesh_search` (11→12 tools, readOnlyHint, paginated; NO reindex tool), instructions/usage, stdio E2E | Wave 7 | COMPLETED | CR-SAN-027 | 2026-06-12 |
+| [CR-SAN-029](CR-SAN-029-projects-listing-tombstoned.md) | **`projects --all`**: include tombstoned rows (permanent markers) in the 3-column listing; default output unchanged | pre-v0.2.0 | PENDING | — | — |
+| [CR-SAN-030](CR-SAN-030-pre-release-cleanup-sweep.md) | **Cleanup sweep**: redundant in-function imports, `_tombstone_guards`/`search` docstring precision, MCP `reindexed`-flag + `sender`/`since`/`until` coverage, install.sh admin-block heredoc, test_install ResourceWarning | pre-v0.2.0 | PENDING | — | — |
 
 Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distribution](../research/PRD-distribution.md) · [PRD-pi-extension](../research/PRD-pi-extension.md) · [PRD-db-migration](../research/PRD-db-migration.md) · [PRD-global-store](../research/PRD-global-store.md)
 Design notes: [DN-windows-notifier](../research/DN-windows-notifier.md) · [DN-pi-wake](../research/DN-pi-wake.md) (Pi wake spike — RESOLVED: native injection)
@@ -52,8 +54,11 @@ breaking change.
 Wave 7 (inbox search) — design contract: **[PRD-inbox-search](../research/PRD-inbox-search.md)**
 (AGREED 2026-06-12): sender-project proxy stream + composable filters, FTS5 keyword search (own-mailbox,
 paginated), explicit+lazy reindex; semantic search assessed/deferred. Strict order CR-SAN-026 → 027 →
-028 (breakdown user-approved 2026-06-12). Then: **Wave 8 — Pi extension catch-up** (design opens at its
-wave) → the **v0.2.0 release + local reinstall**.
+028 (breakdown user-approved 2026-06-12) — **Wave 7 COMPLETE (2026-06-12)**.
+Pre-v0.2.0 housekeeping (filed at the Wave-7-close SCRUM, 2026-06-12): CR-SAN-029 + CR-SAN-030 (the
+Waves-6/7 VERIFY-nit backlog; install nits routed into the sweep, `sender_project` SQL-join optimization
+deferred-at-volume). Then: **Wave 8 — Pi extension catch-up** (design opens at its wave) → the
+**v0.2.0 release + local reinstall**.
 
 ## Canonical statuses
 `PENDING` / `IN_PROGRESS` / `COMPLETED` / `SUPERSEDED` / `DEFERRED`
