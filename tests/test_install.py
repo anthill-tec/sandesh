@@ -476,6 +476,12 @@ class McpExtraInstallTest(unittest.TestCase):
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     proc.kill()
+                    proc.wait(timeout=5)
+            # Close the pipe wrappers — text=True Popen pipes are TextIOWrapper
+            # objects that otherwise leak and fire ResourceWarning at GC time.
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                if stream is not None:
+                    stream.close()
 
     def test_ac4_sandesh_script_still_works_with_mcp_extra(self):
         """`sandesh --help` must exit 0 in the [mcp]-installed venv."""

@@ -132,7 +132,6 @@ def db_path():
 
 def connect():
     """Open (creating tables if absent) the global Sandesh DB at db_path(), WAL mode."""
-    import sqlite3
     os.makedirs(root_dir(), exist_ok=True)
     con = sqlite3.connect(db_path())
     con.row_factory = sqlite3.Row
@@ -655,7 +654,9 @@ def search(con, recipient, query, *, limit=20, offset=0, sender_project=None):
     """FTS5 keyword search over the caller's OWN mail only — messages with a
     `message_recipient` row for `recipient` (to + cc, read or unread); never
     crosses inbox boundaries (CR-SAN-027 §S3). bm25-ranked, best match first;
-    each hit carries the envelope fields + a `snippet()` highlight. Read-state
+    each hit carries the envelope fields + a `snippet()` highlight — matched
+    terms wrapped in `[`…`]`, elisions rendered as `…` (the
+    snippet(message_fts, -1, '[', ']', '…', 8) projection). Read-state
     is untouched.
 
     Lazy auto-reindex: an EMPTY index alongside a non-empty `message` table
@@ -889,7 +890,11 @@ def _unarchive_guards(con, project_id, by):
 
 def _tombstone_guards(con, project_id, by):
     """State + authz guards shared by tombstone_project() and
-    tombstone_preview(): archived-only (the two-step), super-admin-only `by`."""
+    tombstone_preview(): archived-only (the two-step), super-admin-only `by`.
+
+    The state checks run BEFORE the super-admin authz check, so the
+    unknown-project / active / already-tombstoned errors surface identically
+    for admin and non-admin callers."""
     state = project_state(con, project_id)
     if state is None:
         raise ValueError(f"unknown project '{project_id}'")
@@ -1059,7 +1064,6 @@ def _legacy_address_project(row, has_project_col):
 def _consolidate_store(con, project_id, legacy_path):
     """Import one legacy per-project store into the global DB (one transaction),
     then rename it to `<legacy_path>.pre-global`. Returns the summary dict."""
-    import sqlite3
     src = sqlite3.connect(legacy_path)
     src.row_factory = sqlite3.Row
     addresses_imported = messages_imported = 0
