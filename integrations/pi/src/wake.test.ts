@@ -74,6 +74,11 @@ function exit(code: number): ExecResult {
 interface FakePiOptions {
   /** Scripted exec results in order. First call gets index 0, etc. */
   execSequence: Array<ExecResult | "reject">;
+  /**
+   * Optional override for the sendUserMessage implementation.
+   * Default: no-op. Use to inject a synchronously-throwing mock for AC2 tests.
+   */
+  sendUserMessageImpl?: (_content: string | unknown[], _opts?: unknown) => void;
 }
 
 function makeFakePi(opts: FakePiOptions) {
@@ -84,9 +89,10 @@ function makeFakePi(opts: FakePiOptions) {
   const execMock = mock(makeExecSequence(opts.execSequence));
 
   const sendUserMessageMock = mock(
-    (_content: string | unknown[], _opts?: unknown): void => {
-      // no-op
-    },
+    opts.sendUserMessageImpl ??
+      ((_content: string | unknown[], _opts?: unknown): void => {
+        // no-op
+      }),
   );
 
   const onMock = mock((event: string, handler: unknown) => {
@@ -684,5 +690,183 @@ describe("AC3 — exit-code branches", () => {
     await drainMicrotasks();
 
     expect(sendUserMessageMock.mock.calls.length).toBe(0);
+  });
+});
+
+// ─── CR-SAN-031 — followUp delivery hardening ────────────────────────────────
+
+describe("CR-SAN-031 — followUp delivery hardening", () => {
+  /**
+   * AC1 — options pin.
+   *
+   * On a notify exit-0, sendUserMessage must be called with the EXISTING message
+   * text AND a second argument whose `deliverAs` is "followUp".
+   *
+   * RED reason: production code (index.ts ~line 542) calls
+   *   pi.sendUserMessage(`You have unread...`) with NO options argument.
+   * The test asserts calls[0][1] has { deliverAs: "followUp" } — this will fail
+   * until GREEN adds the options argument.
+   */
+  test("AC1 — exit-0: sendUserMessage receives { deliverAs: 'followUp' } as second arg", async () => {
+    process.env.SANDESH_ADDRESS = "Mainline - Demo";
+    process.env.SANDESH_PROJECT = "Demo";
+
+    // probe ok → notify exit-0 (mail) → re-arm → notify exit-3 (stop)
+    const { fakePi, sendUserMessageMock } = makeFakePi({
+      execSequence: [ok("sandesh 1.0.0"), exit(0), exit(3)],
+    });
+    registerExtension(fakePi);
+
+    const onCalls = (fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>;
+    const startHandler = (onCalls.find(([e]) => e === "session_start")![1]) as SessionStartHandler;
+
+    const { fakeCtx } = makeFakeCtx();
+    await startHandler(fakeSessionStartEvent, fakeCtx);
+    await drainMicrotasks();
+
+    // Must have been called exactly once
+    expect(sendUserMessageMock.mock.calls.length).toBe(1);
+
+    const [content, options] = sendUserMessageMock.mock.calls[0] as [string, unknown];
+
+    // Content must be the unchanged wake message (references sandesh_fetch + self address)
+    expect(typeof content).toBe("string");
+    expect(content).toContain("sandesh_fetch");
+    expect(content).toContain("Mainline - Demo");
+
+    // Options argument must exist and carry deliverAs: "followUp"
+    // RED: today options is undefined — this assertion fails
+    expect(options).toBeDefined();
+    expect(typeof options).toBe("object");
+    expect((options as Record<string, unknown>).deliverAs).toBe("followUp");
+  });
+
+  test("AC1 — exit-0: sendUserMessage options arg is exactly { deliverAs: 'followUp' } (no extra keys required, but deliverAs must be 'followUp')", async () => {
+    process.env.SANDESH_ADDRESS = "Track 1 - Alpha";
+    process.env.SANDESH_PROJECT = "Alpha";
+
+    const { fakePi, sendUserMessageMock } = makeFakePi({
+      execSequence: [ok("sandesh 1.0.0"), exit(0), exit(5)],
+    });
+    registerExtension(fakePi);
+
+    const onCalls = (fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>;
+    const startHandler = (onCalls.find(([e]) => e === "session_start")![1]) as SessionStartHandler;
+
+    const { fakeCtx } = makeFakeCtx();
+    await startHandler(fakeSessionStartEvent, fakeCtx);
+    await drainMicrotasks();
+
+    expect(sendUserMessageMock.mock.calls.length).toBe(1);
+    const opts = (sendUserMessageMock.mock.calls[0] as [string, unknown])[1];
+    // RED: today opts is undefined
+    expect(opts).toBeDefined();
+    expect((opts as Record<string, unknown>).deliverAs).toBe("followUp");
+  });
+
+  test("AC1 — exit-0 twice: sendUserMessage called twice, both with { deliverAs: 'followUp' }", async () => {
+    process.env.SANDESH_ADDRESS = "Track 2 - Beta";
+    process.env.SANDESH_PROJECT = "Beta";
+
+    // probe → mail → mail → stop
+    const { fakePi, sendUserMessageMock } = makeFakePi({
+      execSequence: [ok("sandesh 1.0.0"), exit(0), exit(0), exit(3)],
+    });
+    registerExtension(fakePi);
+
+    const onCalls = (fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>;
+    const startHandler = (onCalls.find(([e]) => e === "session_start")![1]) as SessionStartHandler;
+
+    const { fakeCtx } = makeFakeCtx();
+    await startHandler(fakeSessionStartEvent, fakeCtx);
+    await drainMicrotasks();
+
+    expect(sendUserMessageMock.mock.calls.length).toBe(2);
+    for (const callArgs of sendUserMessageMock.mock.calls as Array<[string, unknown]>) {
+      const opts = callArgs[1];
+      // RED: opts is undefined today
+      expect(opts).toBeDefined();
+      expect((opts as Record<string, unknown>).deliverAs).toBe("followUp");
+    }
+  });
+
+  /**
+   * AC2 — loop survives a synchronously-throwing sendUserMessage.
+   *
+   * RED reason: production code has no try/catch around pi.sendUserMessage().
+   * A synchronous throw inside the wakeLoop's `case 0:` branch will propagate
+   * out of the async wakeLoop function, rejecting the detached promise — the loop
+   * dies and no subsequent notify is ever called.
+   *
+   * This test observes that the subsequent notify IS NOT called today (RED
+   * failure = the exec mock does NOT see a second notify call after the throw,
+   * and/or the exit-3 termination never arrives).
+   *
+   * GREEN must wrap sendUserMessage in try/catch so the loop survives.
+   */
+  test("AC2 — throwing sendUserMessage: loop survives, re-arms notify, exit-3 terminates cleanly", async () => {
+    process.env.SANDESH_ADDRESS = "Mainline - Demo";
+    process.env.SANDESH_PROJECT = "Demo";
+
+    // sendUserMessage throws synchronously
+    const throwingImpl = (_content: string | unknown[], _opts?: unknown): void => {
+      throw new Error("sendUserMessage: simulated Pi host error");
+    };
+
+    // probe ok → notify exit-0 (triggers sendUserMessage throw) → re-arm → notify exit-3 (stop)
+    const { fakePi, execMock, sendUserMessageMock } = makeFakePi({
+      execSequence: [ok("sandesh 1.0.0"), exit(0), exit(3)],
+      sendUserMessageImpl: throwingImpl,
+    });
+    registerExtension(fakePi);
+
+    const onCalls = (fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>;
+    const startHandler = (onCalls.find(([e]) => e === "session_start")![1]) as SessionStartHandler;
+
+    const { fakeCtx } = makeFakeCtx();
+    await startHandler(fakeSessionStartEvent, fakeCtx);
+    await drainMicrotasks();
+
+    // sendUserMessage was invoked (the throw happened)
+    expect(sendUserMessageMock.mock.calls.length).toBe(1);
+
+    // Loop must have survived: the re-armed notify was called (≥2 notify execs total)
+    // RED: today the throw escapes wakeLoop and the loop dies — only 1 notify call exists
+    const notifyCalls = (execMock.mock.calls as Array<[string, string[], unknown?]>).filter(
+      ([, args]) => Array.isArray(args) && args.includes("notify"),
+    );
+    expect(notifyCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("AC2 — throwing sendUserMessage: loop terminates on subsequent exit-3 (no infinite spin)", async () => {
+    process.env.SANDESH_ADDRESS = "Track 1 - Demo";
+    process.env.SANDESH_PROJECT = "Demo";
+
+    const throwingImpl = (_content: string | unknown[], _opts?: unknown): void => {
+      throw new Error("sendUserMessage: simulated Pi host error");
+    };
+
+    // probe → exit-0 (throw) → exit-3 (stop)
+    const { fakePi, execMock } = makeFakePi({
+      execSequence: [ok("sandesh 1.0.0"), exit(0), exit(3)],
+      sendUserMessageImpl: throwingImpl,
+    });
+    registerExtension(fakePi);
+
+    const onCalls = (fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>;
+    const startHandler = (onCalls.find(([e]) => e === "session_start")![1]) as SessionStartHandler;
+
+    const { fakeCtx } = makeFakeCtx();
+    await startHandler(fakeSessionStartEvent, fakeCtx);
+    await drainMicrotasks();
+
+    // Loop stopped at exit-3: exactly 2 notify calls (first arm + re-arm after throw)
+    const notifyCalls = (execMock.mock.calls as Array<[string, string[], unknown?]>).filter(
+      ([, args]) => Array.isArray(args) && args.includes("notify"),
+    );
+    // RED: today loop dies after the throw — only 1 notify call exists, so
+    // toBeGreaterThanOrEqual(2) fails, AND/OR the test may see only 1 call.
+    // GREEN: exactly 2 — re-arm happened, exit-3 stopped it.
+    expect(notifyCalls.length).toBeGreaterThanOrEqual(2);
   });
 });
