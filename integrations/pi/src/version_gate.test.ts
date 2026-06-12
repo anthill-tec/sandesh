@@ -190,7 +190,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     });
     registerExtension(fakePi);
 
-    const handler = fakePi.on.mock.calls.find(
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
       ([e]: [string, unknown]) => e === "session_start",
     )![1] as SessionStartHandler;
 
@@ -210,7 +210,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     });
     registerExtension(fakePi);
 
-    const handler = fakePi.on.mock.calls.find(
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
       ([e]: [string, unknown]) => e === "session_start",
     )![1] as SessionStartHandler;
 
@@ -232,7 +232,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     });
     registerExtension(fakePi);
 
-    const handler = fakePi.on.mock.calls.find(
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
       ([e]: [string, unknown]) => e === "session_start",
     )![1] as SessionStartHandler;
 
@@ -241,7 +241,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
 
     const notice = notifyCalls[0];
     expect(notice).toBeDefined();
-    expect(["warning", "error"]).toContain(notice.type);
+    expect(["warning", "error"]).toContain(notice.type ?? "");
   });
 
   test("AC3d — probe stdout 'sandesh 0.1.0' → wake loop NOT armed (no notify exec)", async () => {
@@ -254,7 +254,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     });
     registerExtension(fakePi);
 
-    const handler = fakePi.on.mock.calls.find(
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
       ([e]: [string, unknown]) => e === "session_start",
     )![1] as SessionStartHandler;
 
@@ -274,7 +274,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     });
     registerExtension(fakePi);
 
-    const handler = fakePi.on.mock.calls.find(
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
       ([e]: [string, unknown]) => e === "session_start",
     )![1] as SessionStartHandler;
 
@@ -296,7 +296,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     });
     registerExtension(fakePi);
 
-    const handler = fakePi.on.mock.calls.find(
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
       ([e]: [string, unknown]) => e === "session_start",
     )![1] as SessionStartHandler;
 
@@ -317,7 +317,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     });
     registerExtension(fakePi);
 
-    const handler = fakePi.on.mock.calls.find(
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
       ([e]: [string, unknown]) => e === "session_start",
     )![1] as SessionStartHandler;
 
@@ -338,7 +338,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     });
     registerExtension(fakePi);
 
-    const handler = fakePi.on.mock.calls.find(
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
       ([e]: [string, unknown]) => e === "session_start",
     )![1] as SessionStartHandler;
 
@@ -359,7 +359,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     });
     registerExtension(fakePi);
 
-    const handler = fakePi.on.mock.calls.find(
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
       ([e]: [string, unknown]) => e === "session_start",
     )![1] as SessionStartHandler;
 
@@ -383,7 +383,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     });
     registerExtension(fakePi);
 
-    const handler = fakePi.on.mock.calls.find(
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
       ([e]: [string, unknown]) => e === "session_start",
     )![1] as SessionStartHandler;
 
@@ -406,7 +406,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     });
     registerExtension(fakePi);
 
-    const handler = fakePi.on.mock.calls.find(
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
       ([e]: [string, unknown]) => e === "session_start",
     )![1] as SessionStartHandler;
 
@@ -428,7 +428,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     });
     registerExtension(fakePi);
 
-    const handler = fakePi.on.mock.calls.find(
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
       ([e]: [string, unknown]) => e === "session_start",
     )![1] as SessionStartHandler;
 
@@ -449,7 +449,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     });
     registerExtension(fakePi);
 
-    const handler = fakePi.on.mock.calls.find(
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
       ([e]: [string, unknown]) => e === "session_start",
     )![1] as SessionStartHandler;
 
@@ -469,7 +469,7 @@ describe("AC3 — version gate: sandesh below 0.2.0 takes missing-CLI path", () 
     });
     registerExtension(fakePi);
 
-    const handler = fakePi.on.mock.calls.find(
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
       ([e]: [string, unknown]) => e === "session_start",
     )![1] as SessionStartHandler;
 
