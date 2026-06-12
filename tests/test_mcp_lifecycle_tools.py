@@ -106,14 +106,14 @@ class McpLifecycleToolsTest(unittest.IsolatedAsyncioTestCase):
     # AC1 — tool inventory: exactly 11 tools; no forbidden names; annotations
     # -------------------------------------------------------------------------
 
-    async def test_ac1_list_tools_returns_exactly_eleven_tools(self):
-        """AC1: list_tools() returns exactly 11 tools (existing 9 + sandesh_archive
-        + sandesh_unarchive)."""
+    async def test_ac1_list_tools_returns_exactly_twelve_tools(self):
+        """AC1: list_tools() returns exactly 12 tools (existing 9 + sandesh_archive
+        + sandesh_unarchive + sandesh_search from CR-SAN-028)."""
         tools = await mcp_server.mcp.list_tools()
         names = sorted(t.name for t in tools)
         self.assertEqual(
-            len(tools), 11,
-            f"Expected exactly 11 tools, got {len(tools)}: {names}",
+            len(tools), 12,
+            f"Expected exactly 12 tools, got {len(tools)}: {names}",
         )
 
     async def test_ac1_sandesh_archive_present_in_tool_list(self):
