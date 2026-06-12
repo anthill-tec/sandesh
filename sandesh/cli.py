@@ -63,9 +63,14 @@ def cmd_setup(args):
 def cmd_projects(args):
     con = sdb.connect()
     try:
-        rows = con.execute(
-            "SELECT project_id, state, xproj_granted_at FROM project "
-            "WHERE state != 'tombstoned' ORDER BY project_id").fetchall()
+        if getattr(args, "all", False):
+            rows = con.execute(
+                "SELECT project_id, state, xproj_granted_at FROM project "
+                "ORDER BY project_id").fetchall()
+        else:
+            rows = con.execute(
+                "SELECT project_id, state, xproj_granted_at FROM project "
+                "WHERE state != 'tombstoned' ORDER BY project_id").fetchall()
         if not rows:
             print("(no projects set up)")
             return 0
@@ -404,7 +409,10 @@ def build_parser():
 
     sub.add_parser("setup", parents=[common],
                    help="provision a project (create store + init DB)").set_defaults(fn=cmd_setup)
-    sub.add_parser("projects", parents=[common], help="list set-up projects").set_defaults(fn=cmd_projects)
+    p = sub.add_parser("projects", parents=[common], help="list set-up projects")
+    p.add_argument("--all", action="store_true",
+                   help="include tombstoned projects (permanent markers)")
+    p.set_defaults(fn=cmd_projects)
 
     p = sub.add_parser("register", parents=[common], help="self-register an address")
     p.add_argument("--address", required=True)
