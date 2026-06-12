@@ -1,13 +1,15 @@
 /**
  * CR-SAN-013 C0 — RED: 9-tool registration surface
+ * CR-SAN-032 C1 — updated to 12-tool inventory (AC1)
  *
  * Asserts AC2 + AC3:
- *   AC2: registerTool called exactly 9 times with the exact tool names.
+ *   AC2: registerTool called exactly 12 times with the exact tool names.
  *   AC3: each captured def has non-empty name/label/description and a TypeBox
  *        parameters object; spot-checks properties on sandesh_send, sandesh_reply,
  *        sandesh_register.
  *
- * This test imports from ./index which does NOT yet exist → import error → RED.
+ * AC1 (CR-SAN-032): exactly 12 tools; sandesh_archive, sandesh_unarchive,
+ *   sandesh_search present; no tool name contains tombstone/grant/revoke/admin/reindex.
  */
 
 import { test, expect, describe, mock } from "bun:test";
@@ -38,31 +40,55 @@ function makeFakePi() {
 }
 
 // ---------------------------------------------------------------------------
-// AC2 — exactly 9 tools, exact names, sandesh_actioned absent
+// AC1 (CR-SAN-032) + AC2 — exactly 12 tools, exact names
 // ---------------------------------------------------------------------------
 
-describe("registerExtension — registration surface (AC2)", () => {
-  test("calls registerTool exactly 9 times", () => {
+describe("registerExtension — registration surface (AC1/AC2)", () => {
+  test("calls registerTool exactly 12 times", () => {
     const { fakePi, registerTool } = makeFakePi();
     registerExtension(fakePi);
-    expect(registerTool.mock.calls.length).toBe(9);
+    expect(registerTool.mock.calls.length).toBe(12);
   });
 
-  test("registers exactly the 9 specified tool names", () => {
+  test("registers exactly the 12 specified tool names", () => {
     const { fakePi, capturedTools } = makeFakePi();
     registerExtension(fakePi);
     const names = capturedTools.map((t) => t.name).sort();
     expect(names).toEqual([
       "sandesh_addressbook",
+      "sandesh_archive",
       "sandesh_fetch",
       "sandesh_inbox",
       "sandesh_register",
       "sandesh_reply",
+      "sandesh_search",
       "sandesh_send",
       "sandesh_setup",
       "sandesh_thread",
+      "sandesh_unarchive",
       "sandesh_unregister",
     ]);
+  });
+
+  test("new tools sandesh_archive, sandesh_unarchive, sandesh_search are present", () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    registerExtension(fakePi);
+    const names = capturedTools.map((t) => t.name);
+    expect(names).toContain("sandesh_archive");
+    expect(names).toContain("sandesh_unarchive");
+    expect(names).toContain("sandesh_search");
+  });
+
+  test("no registered tool name contains tombstone, grant, revoke, admin, or reindex", () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    registerExtension(fakePi);
+    const names = capturedTools.map((t) => t.name);
+    const forbidden = ["tombstone", "grant", "revoke", "admin", "reindex"];
+    for (const name of names) {
+      for (const word of forbidden) {
+        expect(name, `Tool name "${name}" must not contain "${word}"`).not.toContain(word);
+      }
+    }
   });
 
   test("does NOT register sandesh_actioned", () => {
@@ -189,7 +215,7 @@ describe("registerExtension — promptSnippet + promptGuidelines (AC4)", () => {
   test("every tool has a non-empty promptSnippet string", () => {
     const { fakePi, capturedTools } = makeFakePi();
     registerExtension(fakePi);
-    expect(capturedTools.length).toBe(9);
+    expect(capturedTools.length).toBe(12);
     for (const tool of capturedTools) {
       expect(
         typeof tool.promptSnippet,
