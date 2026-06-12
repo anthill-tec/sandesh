@@ -726,5 +726,403 @@ class T4SubprocessStdioArchiveTest(unittest.IsolatedAsyncioTestCase):
                     )
 
 
+# T5 — stdio E2E: search/filter scenario (CR-SAN-028 AC6)
+#
+# Fixture (library, pre-spawn):
+#   Two projects P1="SearchE2EP1", P2="SearchE2EP2".
+#   Register Mainline - SearchE2EP1, Track 1 - SearchE2EP1, Mainline - SearchE2EP2.
+#   assign_admin("ops"); grant_xproj on both projects so P2 can send cross-project.
+#   Seed corpus:
+#     3 messages from P1 (T1 → Mainline-P1) each body contains unique term "tubdeploy"
+#       so pagination with limit=2 gives page-1 (2 hits) + page-2 (1 hit), total=3.
+#     1 cross-project message from Mainline-P2 → Mainline-P1, body contains "p2xmigrate"
+#       (used for sender_project filter assertion).
+#   All mail is addressed to Mainline-P1 — T5 session exercises only Mainline-P1.
+#
+# Scenario over stdio (NO $SANDESH_PROJECT — derivation only):
+#   1. sandesh_inbox(recipient=ML_P1, sender_project=P2) returns exactly the P2 row;
+#      the unfiltered call returns more (superset).
+#   2. sandesh_search for "tubdeploy" with limit=2 offset=0 → total=3, 2 hits, page
+#      has expected ids; page 2 (offset=2) → total=3, 1 hit — consistent totals.
+#   3. A malformed FTS5 query comes back as an MCP error result (isError=True), not a
+#      transport crash; error text mentions the query or 'invalid'.
+#
+# Result-shape note: sandesh_search returns a plain dict (not int/list).
+#   Over stdio the MCP SDK delivers it in content[0].text as a JSON string
+#   (structuredContent stays None for dict-typed returns in this SDK version).
+#   _sc_search() below parses that JSON string.  All other tools (inbox, send, …)
+#   return int or list and are accessible via .structuredContent["result"] as usual.
+
+
+def _sc_search(result):
+    """Extract the search-result dict from a successful sandesh_search CallToolResult.
+
+    sandesh_search returns a plain dict.  Over the stdio transport the MCP SDK
+    (mcp 1.27.x) delivers dict-typed tool returns in content[0].text as a JSON
+    string; structuredContent is None.  This helper parses that JSON.
+
+    Fails the calling test with a descriptive message if the result is an error
+    or the payload cannot be parsed.
+    """
+    import json as _json
+    if result.isError:
+        raise AssertionError(
+            f"Expected search success but got isError=True; "
+            f"error: {result.content[0].text if result.content else '?'}"
+        )
+    # structuredContent carries the dict on some SDK versions; content[0].text on others.
+    if result.structuredContent is not None:
+        sc = result.structuredContent
+        return sc["result"] if isinstance(sc, dict) and "result" in sc else sc
+    if result.content:
+        text = getattr(result.content[0], "text", None)
+        if text:
+            return _json.loads(text)
+    raise AssertionError(
+        f"Cannot extract search dict from result: "
+        f"structuredContent={result.structuredContent!r}, content={result.content!r}"
+    )
+
+
+@unittest.skipUnless(
+    HAS_MCP and os.path.exists(_VENV_PYTHON),
+    _STDIO_SKIP_REASON or "mcp/venv not available",
+)
+class T5SubprocessStdioSearchFilterTest(unittest.IsolatedAsyncioTestCase):
+    """CR-SAN-028 AC6 — stdio E2E: sandesh_inbox filter by sender_project +
+    sandesh_search with pagination + malformed query → isError=True.
+
+    Fixture is seeded in-process before the subprocess spawns so the same
+    XDG_DATA_HOME is used by both. The subprocess env has no $SANDESH_PROJECT.
+    """
+
+    P1 = "SearchE2EP1"
+    P2 = "SearchE2EP2"
+    ML_P1 = "Mainline - SearchE2EP1"
+    T1_P1 = "Track 1 - SearchE2EP1"
+    ML_P2 = "Mainline - SearchE2EP2"
+
+    # Unique corpus terms — no collisions with any other test in the file.
+    TERM_P1 = "tubdeploy"       # appears in all 3 P1 messages → total=3 for pagination
+    TERM_P2 = "p2xmigrate"      # appears in the P2 cross-project message only
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="sandesh-e2e-search-")
+        self._prev_xdg = os.environ.get("XDG_DATA_HOME")
+        self._prev_proj = os.environ.get("SANDESH_PROJECT")
+        os.environ["XDG_DATA_HOME"] = self.tmp
+        os.environ.pop("SANDESH_PROJECT", None)
+
+        # Provision both projects.
+        sdb.setup(self.P1)
+        sdb.setup(self.P2)
+
+        self.store1 = sdb.store_dir(self.P1)
+        self.store2 = sdb.store_dir(self.P2)
+
+        con = sdb.connect()
+        try:
+            sdb.register(con, self.ML_P1, kind="mainline", project=self.P1)
+            sdb.register(con, self.T1_P1, kind="track",    project=self.P1)
+            sdb.register(con, self.ML_P2, kind="mainline", project=self.P2)
+
+            # Admin + cross-project grant so P2 can send to P1.
+            sdb.assign_admin(con, "ops")
+            sdb.grant_xproj(con, self.P1, "ops")
+            sdb.grant_xproj(con, self.P2, "ops")
+
+            # Seed 3 P1-internal messages sharing TERM_P1 (for pagination: limit=2 → 2+1).
+            self.p1_ids = []
+            for i in range(3):
+                mid = sdb.send(
+                    con, self.store1,
+                    from_addr=self.T1_P1,
+                    to=[self.ML_P1],
+                    subject=f"p1 deploy item {i}",
+                    body_text=f"body {self.TERM_P1} item {i}",
+                )
+                self.p1_ids.append(mid)
+
+            # Seed 1 cross-project message from P2 to ML_P1 with TERM_P2.
+            self.p2_id = sdb.send(
+                con, self.store2,
+                from_addr=self.ML_P2,
+                to=[self.ML_P1],
+                subject="p2 migration handoff",
+                body_text=f"cross-project {self.TERM_P2} complete",
+            )
+        finally:
+            con.close()
+
+    def tearDown(self):
+        for k, v in (
+            ("XDG_DATA_HOME", self._prev_xdg),
+            ("SANDESH_PROJECT", self._prev_proj),
+        ):
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _spawn_params(self):
+        """StdioServerParameters — XDG_DATA_HOME set, no SANDESH_PROJECT."""
+        env = {k: v for k, v in os.environ.items() if k != "SANDESH_PROJECT"}
+        env["XDG_DATA_HOME"] = self.tmp
+        return StdioServerParameters(
+            command=_VENV_PYTHON,
+            args=["-m", "sandesh.mcp_server"],
+            env=env,
+        )
+
+    # ── scenario step 1: sandesh_inbox filtered by sender_project ────────────
+
+    async def test_ac6_inbox_filtered_by_sender_project_returns_only_p2_rows(self):
+        """AC6 step 1a: sandesh_inbox(recipient=ML_P1, sender_project=P2) over stdio
+        returns exactly the one P2-sender row (p2_id) and excludes all P1 rows."""
+        async with stdio_client(self._spawn_params()) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+
+                result = await session.call_tool("sandesh_inbox", {
+                    "recipient": self.ML_P1,
+                    "unread_only": False,
+                    "sender_project": self.P2,
+                })
+                self.assertFalse(
+                    result.isError,
+                    f"sandesh_inbox(sender_project={self.P2!r}) must not error; "
+                    f"got: {result.content[0].text if result.content else '?'}",
+                )
+                rows = result.structuredContent["result"]
+                self.assertIsInstance(rows, list)
+                ids = [r["id"] for r in rows]
+
+                # Must contain the P2 cross-project message.
+                self.assertIn(
+                    self.p2_id, ids,
+                    f"p2_id={self.p2_id} must appear with sender_project={self.P2!r}; "
+                    f"got ids={ids!r}",
+                )
+                # Must NOT contain any of the P1 messages.
+                for p1_mid in self.p1_ids:
+                    self.assertNotIn(
+                        p1_mid, ids,
+                        f"P1 message {p1_mid} must NOT appear with sender_project={self.P2!r}; "
+                        f"got ids={ids!r}",
+                    )
+                # Exactly 1 row — only p2_id is a P2-sender message to ML_P1.
+                self.assertEqual(
+                    len(ids), 1,
+                    f"Exactly 1 row expected for sender_project={self.P2!r}; "
+                    f"got {len(ids)}: {ids!r}",
+                )
+
+    async def test_ac6_inbox_unfiltered_is_superset_of_filtered(self):
+        """AC6 step 1b: unfiltered sandesh_inbox(recipient=ML_P1) returns a STRICT
+        superset of the sender_project-filtered call — it includes both P1 and P2 rows."""
+        async with stdio_client(self._spawn_params()) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+
+                unfiltered_result = await session.call_tool("sandesh_inbox", {
+                    "recipient": self.ML_P1,
+                    "unread_only": False,
+                })
+                self.assertFalse(unfiltered_result.isError)
+                filtered_result = await session.call_tool("sandesh_inbox", {
+                    "recipient": self.ML_P1,
+                    "unread_only": False,
+                    "sender_project": self.P2,
+                })
+                self.assertFalse(filtered_result.isError)
+
+                unfiltered_ids = {r["id"] for r in unfiltered_result.structuredContent["result"]}
+                filtered_ids   = {r["id"] for r in filtered_result.structuredContent["result"]}
+
+                # Filtered must be a strict subset — not equal.
+                self.assertLess(
+                    filtered_ids, unfiltered_ids,
+                    f"Filtered set must be a STRICT subset of unfiltered set; "
+                    f"filtered={sorted(filtered_ids)!r}, "
+                    f"unfiltered={sorted(unfiltered_ids)!r}",
+                )
+                # p2_id in both; all p1_ids only in unfiltered.
+                self.assertIn(
+                    self.p2_id, unfiltered_ids,
+                    f"p2_id must be in unfiltered inbox",
+                )
+                for p1_mid in self.p1_ids:
+                    self.assertIn(
+                        p1_mid, unfiltered_ids,
+                        f"P1 message {p1_mid} must be in unfiltered inbox",
+                    )
+                    self.assertNotIn(
+                        p1_mid, filtered_ids,
+                        f"P1 message {p1_mid} must NOT be in sender_project={self.P2!r} filtered inbox",
+                    )
+
+    # ── scenario step 2: sandesh_search + pagination ─────────────────────────
+
+    async def test_ac6_search_returns_hit_with_envelope_and_snippet(self):
+        """AC6 step 2a: sandesh_search for TERM_P2 returns p2_id with envelope keys
+        and a snippet containing the search term."""
+        async with stdio_client(self._spawn_params()) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+
+                result = await session.call_tool("sandesh_search", {
+                    "recipient": self.ML_P1,
+                    "query": self.TERM_P2,
+                })
+                # _sc_search() parses content[0].text JSON (dict return over stdio).
+                data = _sc_search(result)
+                self.assertIsInstance(data, dict)
+
+                # Required envelope keys on every hit.
+                self.assertIn("hits",   data)
+                self.assertIn("total",  data)
+                self.assertIn("limit",  data)
+                self.assertIn("offset", data)
+
+                # Exactly 1 hit — TERM_P2 is unique to p2_id.
+                self.assertEqual(
+                    data["total"], 1,
+                    f"TERM_P2={self.TERM_P2!r} is unique to p2_id; "
+                    f"expected total=1, got {data['total']!r}",
+                )
+                self.assertEqual(
+                    len(data["hits"]), 1,
+                    f"Exactly 1 hit expected; got {len(data['hits'])!r}",
+                )
+                hit = data["hits"][0]
+                self.assertEqual(
+                    hit["id"], self.p2_id,
+                    f"hit id must be p2_id={self.p2_id}; got {hit['id']!r}",
+                )
+                # Required envelope fields.
+                for key in ("id", "from", "subject", "kind", "created_at", "role", "snippet"):
+                    self.assertIn(
+                        key, hit,
+                        f"hit must contain envelope key {key!r}; got {sorted(hit.keys())!r}",
+                    )
+                # Snippet must be non-empty and contain the search term.
+                snippet = hit["snippet"]
+                self.assertIsInstance(snippet, str)
+                self.assertGreater(len(snippet.strip()), 0, "snippet must not be empty")
+                self.assertIn(
+                    self.TERM_P2.lower(), snippet.lower(),
+                    f"snippet must contain the search term {self.TERM_P2!r}; got {snippet!r}",
+                )
+
+    async def test_ac6_search_pagination_page1_and_page2(self):
+        """AC6 step 2b+2c: sandesh_search for TERM_P1 (3 total hits) with limit=2:
+        page 1 (offset=0) → 2 hits, total=3;
+        page 2 (offset=2) → 1 hit, total=3;
+        pages don't overlap and together cover all 3 p1 corpus ids."""
+        async with stdio_client(self._spawn_params()) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+
+                # Page 1 — _sc_search() parses content[0].text JSON (dict over stdio).
+                r1 = await session.call_tool("sandesh_search", {
+                    "recipient": self.ML_P1,
+                    "query": self.TERM_P1,
+                    "limit": 2,
+                    "offset": 0,
+                })
+                d1 = _sc_search(r1)
+
+                self.assertEqual(
+                    d1["total"], 3,
+                    f"TERM_P1 has 3 corpus messages; total must be 3 on page 1; "
+                    f"got {d1['total']!r}",
+                )
+                self.assertEqual(
+                    len(d1["hits"]), 2,
+                    f"limit=2 → page 1 must have 2 hits; got {len(d1['hits'])!r}",
+                )
+                self.assertEqual(d1["limit"], 2)
+                self.assertEqual(d1["offset"], 0)
+
+                # Page 2.
+                r2 = await session.call_tool("sandesh_search", {
+                    "recipient": self.ML_P1,
+                    "query": self.TERM_P1,
+                    "limit": 2,
+                    "offset": 2,
+                })
+                d2 = _sc_search(r2)
+
+                self.assertEqual(
+                    d2["total"], 3,
+                    f"total must still be 3 on page 2; got {d2['total']!r}",
+                )
+                self.assertEqual(
+                    len(d2["hits"]), 1,
+                    f"limit=2, offset=2 → page 2 must have 1 hit; got {len(d2['hits'])!r}",
+                )
+                self.assertEqual(d2["offset"], 2)
+
+                # Pages are disjoint and together cover all 3 p1 corpus ids.
+                ids1 = {h["id"] for h in d1["hits"]}
+                ids2 = {h["id"] for h in d2["hits"]}
+                self.assertEqual(
+                    ids1 & ids2, set(),
+                    f"pages must not overlap; overlap={ids1 & ids2!r}",
+                )
+                self.assertEqual(
+                    ids1 | ids2, set(self.p1_ids),
+                    f"page1+page2 must cover all 3 p1 ids={set(self.p1_ids)!r}; "
+                    f"combined={ids1 | ids2!r}",
+                )
+
+    # ── scenario step 3: malformed FTS5 query → MCP error result ─────────────
+
+    async def test_ac6_malformed_fts5_query_returns_error_result_not_crash(self):
+        """AC6 step 3: a malformed FTS5 query (unbalanced quote) comes back as an MCP
+        error result (isError=True) over the real stdio subprocess — not a transport
+        crash, not an unhandled exception.
+
+        Spec: 'a malformed query surfaces as an MCP error result (isError=True on the
+        CallToolResult, message mentioning the invalid query)' — §S4 / AC6.
+        """
+        async with stdio_client(self._spawn_params()) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+
+                result = await session.call_tool("sandesh_search", {
+                    "recipient": self.ML_P1,
+                    "query": '"unterminated',   # unbalanced quote → malformed FTS5
+                })
+                # Must be an error result — NOT a raised exception (transport crash).
+                self.assertTrue(
+                    result.isError,
+                    "A malformed FTS5 query must produce isError=True on the "
+                    "CallToolResult over stdio (not a transport crash); "
+                    "got isError=False (success)",
+                )
+                # structuredContent must be None on an error result.
+                self.assertIsNone(
+                    result.structuredContent,
+                    "structuredContent must be None when isError=True; "
+                    f"got {result.structuredContent!r}",
+                )
+                # Error text must be present and mention the query problem.
+                self.assertTrue(
+                    result.content,
+                    "Error result must have at least one content item",
+                )
+                err_text = result.content[0].text
+                self.assertIsInstance(err_text, str)
+                err_lower = err_text.lower()
+                problem_terms = ("invalid", "query", "fts", "unterminated")
+                self.assertTrue(
+                    any(term in err_lower for term in problem_terms),
+                    f"Error message must mention the query problem "
+                    f"(one of {problem_terms}); got: {err_text!r}",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
