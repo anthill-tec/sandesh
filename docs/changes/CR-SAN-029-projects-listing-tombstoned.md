@@ -1,6 +1,6 @@
 # CR-SAN-029 — `sandesh projects --all`: tombstoned rows in the listing
 
-**Status:** PENDING
+**Status:** IN_PROGRESS
 **Priority:** Low (lifecycle-story completeness)
 **Depends on:** —
 **Labels:** pre-0.2.0, cli, lifecycle
