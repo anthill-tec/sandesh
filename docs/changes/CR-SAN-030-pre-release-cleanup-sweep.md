@@ -34,14 +34,20 @@ sweep so v0.2.0 ships with an empty nit backlog.
   with `sender=` returns only that sender's rows; with `since=`/`until=` brackets a
   seeded timestamp spread (including a date-only `until` matching a same-day message —
   the end-of-day normalization observed through the MCP layer).
+- Strengthen the AC1 state-column assertions in `tests/test_projects_listing_cli.py`:
+  anchor each state assertion to the line containing its project id (e.g. the `active`
+  cell asserted on the `ActiveProj` row), not bare output membership.
 
 ### §S3 — installer + test hygiene
 - `install.sh`: rewrite the `$SANDESH_ADMIN` admin-assignment `$'...'`-escaped
   inline-python (line ~101) as a readable heredoc (`"$VENV/bin/python" - <<'PY' ... PY`)
   — byte-identical behavior: env-read inside python, ValueError surfaced as a notice
   with install continuing, unset → skip notice. The §S2b comment block stays.
-- `tests/test_install.py`: close the unclosed handle behind the long-standing
-  ResourceWarning so the suite runs warning-clean.
+- `tests/test_install.py`: close the unclosed `TextIOWrapper` handles (subprocess
+  pipes) behind the long-standing ResourceWarning so the suite runs warning-clean.
+  NOTE: the warning fires in GC context, where it CANNOT be promoted to an exception —
+  `-W error::ResourceWarning` passes even with the bug present; the gate must inspect
+  the run's output.
 
 ## Acceptance criteria
 
@@ -61,8 +67,12 @@ sweep so v0.2.0 ships with an empty nit backlog.
       (`admin_name()` returns it), a re-run with a DIFFERENT name prints the keeping-
       notice and exits 0, unset skips with the notice (existing install tests stay
       green; extend if uncovered).
-- [ ] **AC6 — warning-clean.** `PYTHONPATH=. .venv/bin/python -W error::ResourceWarning
-      tests/test_install.py` passes (no ResourceWarning raised).
+- [ ] **AC6 — warning-clean.** The combined output of `PYTHONPATH=. .venv/bin/python
+      tests/test_install.py` (stdout+stderr) contains ZERO lines matching
+      `ResourceWarning` (currently 3+); the suite stays 27/27 green.
+- [ ] **AC7 — line-anchored state assertions.** Each AC1 state assertion in
+      `tests/test_projects_listing_cli.py` asserts the state cell on the line containing
+      its own project id; the suite stays 20/20 green.
 
 ## Estimated size
 Small — mechanical edits + a handful of tests; the installer rewrite is the only piece
