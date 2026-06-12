@@ -325,7 +325,7 @@ describe("AC4 — missing-env notice when probe succeeds but env vars unset", ()
     expect(noticeText).toContain("SANDESH_ADDRESS");
   });
 
-  test("AC4e — missing env → no notify exec, notice surfaced naming SANDESH_ADDRESS, verbs still registered (9 tools)", async () => {
+  test("AC4e — missing env → no notify exec, notice surfaced naming SANDESH_ADDRESS, verbs still registered (12 tools)", async () => {
     delete process.env.SANDESH_ADDRESS;
     process.env.SANDESH_PROJECT = "TestProj";
 
@@ -347,8 +347,8 @@ describe("AC4 — missing-env notice when probe succeeds but env vars unset", ()
     );
     expect(wakeNotifyCalls.length).toBe(0);
 
-    // Verbs still registered (9 tools from CR-SAN-013)
-    expect(capturedTools.size).toBe(9);
+    // Verbs still registered (12 tools after CR-SAN-032)
+    expect(capturedTools.size).toBe(12);
 
     // C1 NEW: a notice MUST have been surfaced via ctx.ui.notify naming $SANDESH_ADDRESS
     expect(notifyCalls.length).toBeGreaterThanOrEqual(1);

@@ -109,8 +109,8 @@ const fakeSessionStartEvent: SessionStartEvent = {
 // AC7d — verbs always registered regardless of probe outcome (must pass count check)
 // ---------------------------------------------------------------------------
 
-describe("AC7d — 9 tools registered regardless of probe outcome", () => {
-  test("all 9 tools registered when sandesh is present (code 0)", () => {
+describe("AC7d — 12 tools registered regardless of probe outcome", () => {
+  test("all 12 tools registered when sandesh is present (code 0)", () => {
     const { fakePi, capturedTools } = makeFakePi({
       stdout: "sandesh 1.0.0",
       stderr: "",
@@ -118,10 +118,10 @@ describe("AC7d — 9 tools registered regardless of probe outcome", () => {
       killed: false,
     });
     registerExtension(fakePi);
-    expect(capturedTools.size).toBe(9);
+    expect(capturedTools.size).toBe(12);
   });
 
-  test("all 9 tools registered when sandesh is missing (non-zero code)", () => {
+  test("all 12 tools registered when sandesh is missing (non-zero code)", () => {
     const { fakePi, capturedTools } = makeFakePi({
       stdout: "",
       stderr: "sandesh: command not found",
@@ -129,13 +129,13 @@ describe("AC7d — 9 tools registered regardless of probe outcome", () => {
       killed: false,
     });
     registerExtension(fakePi);
-    expect(capturedTools.size).toBe(9);
+    expect(capturedTools.size).toBe(12);
   });
 
-  test("all 9 tools registered when probe rejects (exec throws)", () => {
+  test("all 12 tools registered when probe rejects (exec throws)", () => {
     const { fakePi, capturedTools } = makeFakePi("reject");
     registerExtension(fakePi);
-    expect(capturedTools.size).toBe(9);
+    expect(capturedTools.size).toBe(12);
   });
 
   test("registered tool names include all 9 expected names", () => {
