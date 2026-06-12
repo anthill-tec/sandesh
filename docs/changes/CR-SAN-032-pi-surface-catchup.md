@@ -1,6 +1,6 @@
 # CR-SAN-032 — Pi surface catch-up: 12-tool parity, version gate, docs
 
-**Status:** PENDING
+**Status:** IN_PROGRESS
 **Priority:** High (the wave's main body — Pi reaches the post-Wave-7 surface)
 **Depends on:** CR-SAN-031 (wake hardening lands first; this CR's tests build on the loop)
 **Labels:** wave-8, pi, parity, bun
