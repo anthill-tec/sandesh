@@ -95,6 +95,37 @@ const MISSING_CLI_NOTICE =
   "sandesh CLI not found on PATH. Install it with `uv tool install sandesh` or " +
   "`pipx install sandesh` (or run the repo's install.sh), then ensure it is on your PATH.";
 
+/**
+ * Minimum `sandesh` CLI version this extension requires (CR-SAN-032 §S3 / AC3).
+ */
+const MIN_CLI_VERSION: readonly [number, number, number] = [0, 2, 0];
+
+/**
+ * Outdated-CLI notice (CR-SAN-032 §S3 / AC3). Surfaced once when the probe's
+ * `sandesh --version` output parses below the required minimum (or is
+ * unparseable). Names the required minimum and an upgrade hint.
+ */
+const OUTDATED_CLI_NOTICE =
+  "sandesh CLI is too old for this extension: version 0.2.0 or newer is required. " +
+  "Upgrade it with `uv tool install sandesh` or `pipx upgrade sandesh` " +
+  "(or re-run the repo's install.sh).";
+
+/**
+ * Parse `sandesh --version` stdout against `^sandesh (\d+)\.(\d+)\.(\d+)` and
+ * compare to MIN_CLI_VERSION. Unparseable output counts as too-old (§S3).
+ */
+function cliVersionOk(stdout: string): boolean {
+  const m = /^sandesh (\d+)\.(\d+)\.(\d+)/.exec(stdout.trim());
+  if (!m) return false;
+  const major = Number(m[1]);
+  const minor = Number(m[2]);
+  const patch = Number(m[3]);
+  const [minMajor, minMinor, minPatch] = MIN_CLI_VERSION;
+  if (major !== minMajor) return major > minMajor;
+  if (minor !== minMinor) return minor > minMinor;
+  return patch >= minPatch;
+}
+
 // ---------------------------------------------------------------------------
 // Shared parameter fragments
 // ---------------------------------------------------------------------------
@@ -479,9 +510,12 @@ export default function registerExtension(pi: ExtensionAPI): void {
     name: "sandesh_inbox",
     label: "Sandesh: Inbox",
     description:
-      "List messages addressed to a recipient. By default shows unread only; set unread_only=false to include everything.",
+      "List messages addressed to a recipient. By default shows unread only; set unread_only=false to include everything. " +
+      "Optional filters narrow the list by sender, kind, time window, or subject; sender_project is the cross-project " +
+      "proxy-stream filter (only messages whose sender belongs to that project).",
     promptSnippet:
-      "List an address's messages without consuming them (triage; does not mark read).",
+      "List an address's messages without consuming them (triage; does not mark read). " +
+      "Filter by sender, kind, time, subject, or sender_project (the cross-project proxy stream).",
     parameters: Type.Object({
       recipient: Type.String({ description: "Address whose inbox to list." }),
       unread_only: Type.Optional(
@@ -505,9 +539,12 @@ export default function registerExtension(pi: ExtensionAPI): void {
     name: "sandesh_fetch",
     label: "Sandesh: Fetch",
     description:
-      "Fetch the messages addressed to a recipient, marking them read. Set mark=false to peek without marking.",
+      "Fetch the messages addressed to a recipient, marking them read. Set mark=false to peek without marking. " +
+      "Optional filters narrow the fetch by sender, kind, time window, or subject; sender_project is the " +
+      "cross-project proxy-stream filter (only messages whose sender belongs to that project).",
     promptSnippet:
-      "Read an address's unread messages (consolidates to+cc, marks read) — call after notify wakes you.",
+      "Read an address's unread messages (consolidates to+cc, marks read) — call after notify wakes you. " +
+      "Filter by sender, kind, time, subject, or sender_project (the cross-project proxy stream).",
     promptGuidelines: [
       "Consolidates the address's unread to+cc messages into one view and marks them read.",
       "Set mark=false (or use sandesh_inbox) to peek without consuming.",
@@ -657,7 +694,14 @@ export default function registerExtension(pi: ExtensionAPI): void {
     try {
       const r = await pi.exec("sandesh", ["--version"]);
       if (r.code === 0) {
-        probeOk = true;
+        // §S3 version gate: a CLI below MIN_CLI_VERSION (or unparseable
+        // output) takes the missing-CLI-style path — one-time warning,
+        // wake loop NOT armed. Tool registration stays static/unblocked.
+        if (cliVersionOk(r.stdout)) {
+          probeOk = true;
+        } else {
+          ctx.ui.notify(OUTDATED_CLI_NOTICE, "warning");
+        }
       } else {
         ctx.ui.notify(MISSING_CLI_NOTICE, "warning");
       }
