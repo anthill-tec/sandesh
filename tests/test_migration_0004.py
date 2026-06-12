@@ -45,6 +45,8 @@ _SNAPSHOT_PATH = os.path.join(_REPO_ROOT, "sandesh", "schema", "current-schema.j
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+from tests._migrate_helpers import rollback_until  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers (mirroring the patterns in test_migration_0003.py)
@@ -140,6 +142,20 @@ class _TempDataHome(unittest.TestCase):
         self._set_xdg(data_home)
         from sandesh import migrate
         migrate.rollback()
+
+    def _rollback_until(self, migration_id, data_home):
+        """Roll back one step at a time until `migration_id` is pending.
+
+        CR-SAN-027 C1 un-pinning (per the CR-SAN-022/023 precedent): fixtures
+        target the migration they MEAN instead of hard-coding the rollback
+        count (which changes whenever the chain grows — e.g. 0005 made
+        "one rollback reaches pre-0004" false).
+        """
+        rollback_until(
+            migration_id,
+            rollback_fn=lambda: self._rollback(data_home),
+            status_fn=lambda: self._status(data_home),
+        )
 
     def _setup_project(self, project_id, data_home):
         """Call sandesh_db.setup(project_id) with XDG_DATA_HOME set."""
@@ -395,10 +411,10 @@ class Migration0004ShapeAfterApplyTest(_TempDataHome):
             f"pending must be 0 after apply(); got pending={pending!r}",
         )
 
-    def test_status_shows_all_four_applied(self):
-        """After apply(), all four migrations must be applied.
+    def test_status_shows_chain_applied(self):
+        """After apply(), the chain through 0004 must be applied, nothing pending.
 
-        RED: 0004 absent → only 3 applied.
+        RED: 0004 absent → 0004-xproj-grant never in applied.
         """
         applied, pending = self._status(self._dh)
         for mid in ("0001-baseline", "0002-drop-message-status",
@@ -407,9 +423,11 @@ class Migration0004ShapeAfterApplyTest(_TempDataHome):
                 mid, applied,
                 f"{mid} must be in applied after apply(); got applied={applied!r}",
             )
+        # CR-SAN-027 C1 un-pinning: membership + empty pending instead of a
+        # chain-length count that breaks every time the chain grows.
         self.assertEqual(
-            len(applied), 4,
-            f"Exactly 4 migrations must be applied; got applied={applied!r}",
+            pending, [],
+            f"pending must be empty after apply(); got pending={pending!r}",
         )
 
 
@@ -560,8 +578,10 @@ class Migration0004LegacyFixturePreservedRowsTest(_TempDataHome):
         self._apply(self._dh)
         self._db = self._db_path(self._dh)
 
-        # Step 2: roll back exactly one step (0004) to get a pre-0004 project table.
-        self._rollback(self._dh)
+        # Step 2: roll back until 0004 is pending — pre-0004 project table.
+        # CR-SAN-027 C1 un-pinning: was a single rollback() (depth pinned to
+        # "0004 is the chain head"); rollback_until survives chain growth.
+        self._rollback_until("0004-xproj-grant", self._dh)
 
         # Step 3 (hard pre-condition check — NO skip, hard assert):
         # xproj columns must be gone after rollback; admin table must be gone.
@@ -763,7 +783,8 @@ class Migration0004RollbackTest(_TempDataHome):
             "xproj_granted_at must exist after apply() (pre-condition for rollback test); "
             "0004 not yet written.",
         )
-        self._rollback(self._dh)
+        # CR-SAN-027 C1 un-pinning: roll back until 0004 is pending (was one step).
+        self._rollback_until("0004-xproj-grant", self._dh)
         cols_after_rollback = _column_map(self._db, "project")
         self.assertNotIn(
             "xproj_granted_at",
@@ -783,7 +804,8 @@ class Migration0004RollbackTest(_TempDataHome):
             cols_after_apply,
             "xproj_granted_by must exist after apply() (pre-condition); 0004 not written.",
         )
-        self._rollback(self._dh)
+        # CR-SAN-027 C1 un-pinning: roll back until 0004 is pending (was one step).
+        self._rollback_until("0004-xproj-grant", self._dh)
         cols_after_rollback = _column_map(self._db, "project")
         self.assertNotIn(
             "xproj_granted_by",
@@ -804,7 +826,8 @@ class Migration0004RollbackTest(_TempDataHome):
             tables_after_apply,
             "admin table must exist after apply() (pre-condition); 0004 not written.",
         )
-        self._rollback(self._dh)
+        # CR-SAN-027 C1 un-pinning: roll back until 0004 is pending (was one step).
+        self._rollback_until("0004-xproj-grant", self._dh)
         tables_after_rollback = _table_names(self._db)
         self.assertNotIn(
             "admin",
@@ -848,7 +871,8 @@ class Migration0004RollbackTest(_TempDataHome):
 
         RED: 0004 file absent → status() never sees it at all.
         """
-        self._rollback(self._dh)
+        # CR-SAN-027 C1 un-pinning: roll back until 0004 is pending (was one step).
+        self._rollback_until("0004-xproj-grant", self._dh)
         applied, pending = self._status(self._dh)
         self.assertNotIn(
             "0004-xproj-grant",
@@ -953,10 +977,11 @@ class Migration0004FreshSchemaParity(_TempDataHome):
                 "Expected: harmless re-run (0001 marked, 0002/0003/0004 IF NOT EXISTS).",
             )
 
-    def test_apply_on_fresh_setup_store_shows_four_applied_zero_pending(self):
-        """After apply() on a fresh setup() store, status() must show all 4 applied, 0 pending.
+    def test_apply_on_fresh_setup_store_shows_chain_applied_zero_pending(self):
+        """After apply() on a fresh setup() store, status() must show the chain
+        through 0004 applied, nothing pending.
 
-        RED: 0004 absent → status shows only 3 applied or raises.
+        RED: 0004 absent → 0004-xproj-grant never in applied.
         """
         self._apply(self._dh)
         applied, pending = self._status(self._dh)
@@ -967,13 +992,11 @@ class Migration0004FreshSchemaParity(_TempDataHome):
                 f"{mid} must be in applied after apply() on fresh store; "
                 f"got applied={applied!r}",
             )
+        # CR-SAN-027 C1 un-pinning: membership + empty pending instead of a
+        # chain-length count that breaks every time the chain grows.
         self.assertEqual(
-            len(pending), 0,
-            f"pending must be 0 after apply() on fresh store; got pending={pending!r}",
-        )
-        self.assertEqual(
-            len(applied), 4,
-            f"Exactly 4 migrations must be applied (0001..0004); got {applied!r}",
+            pending, [],
+            f"pending must be empty after apply() on fresh store; got pending={pending!r}",
         )
 
 

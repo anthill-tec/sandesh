@@ -39,6 +39,7 @@ Semantics:
 import os
 import re
 import shutil
+import sqlite3
 import time
 
 DB_FILE = "sandesh.db"
@@ -100,6 +101,7 @@ CREATE TABLE IF NOT EXISTS admin (
     name        TEXT NOT NULL,
     assigned_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(subject, body);
 """
 
 
@@ -410,6 +412,13 @@ def send(con, store, from_addr, to=None, cc=None, subject="", kind=None,
             fh.write(body_text)
         con.execute("UPDATE message SET body_path=? WHERE id=?", (full, mid))
 
+    # FTS index entry (CR-SAN-027 §S2): rowid = message id; subject-only
+    # messages index the subject with an empty body. Inside the same
+    # transaction as the message row — committed (or rolled back) together.
+    con.execute(
+        "INSERT INTO message_fts (rowid, subject, body) VALUES (?,?,?)",
+        (mid, subject, body_text or ""))
+
     con.executemany(
         "INSERT INTO message_recipient (message_id, recipient, role) VALUES (?,?,?)",
         [(mid, r, role) for r, role in recips])
@@ -615,6 +624,79 @@ def thread(con, msg_id):
         else:
             out.append(node)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# full-text search (CR-SAN-027 §S2/§S3)
+
+def reindex(con):
+    """Rebuild the whole `message_fts` index from the message rows + body files
+    (CR-SAN-027 §S2). A missing/unreadable body file falls back to a
+    subject-only entry (empty body). Idempotent — the index is wiped first, so
+    a re-run yields the same rows. Returns the indexed count."""
+    con.execute("DELETE FROM message_fts")
+    rows = con.execute("SELECT id, subject, body_path FROM message").fetchall()
+    for r in rows:
+        body = ""
+        if r["body_path"]:
+            try:
+                with open(r["body_path"], encoding="utf-8") as fh:
+                    body = fh.read()
+            except OSError:
+                body = ""                     # missing/unreadable → subject-only
+        con.execute(
+            "INSERT INTO message_fts (rowid, subject, body) VALUES (?,?,?)",
+            (r["id"], r["subject"], body))
+    con.commit()
+    return len(rows)
+
+
+def search(con, recipient, query, *, limit=20, offset=0, sender_project=None):
+    """FTS5 keyword search over the caller's OWN mail only — messages with a
+    `message_recipient` row for `recipient` (to + cc, read or unread); never
+    crosses inbox boundaries (CR-SAN-027 §S3). bm25-ranked, best match first;
+    each hit carries the envelope fields + a `snippet()` highlight. Read-state
+    is untouched.
+
+    Lazy auto-reindex: an EMPTY index alongside a non-empty `message` table
+    (pre-FTS history) triggers one `reindex` before querying — the result then
+    carries `reindexed: True`; a merely sparse index never does. The
+    tombstoned-sender hide and the `sender_project` filter compose python-side
+    (like inbox), BEFORE pagination — `total` is the post-filter match count.
+    A malformed FTS5 query raises ValueError carrying the sqlite message."""
+    reindexed = False
+    if (con.execute("SELECT count(*) FROM message_fts").fetchone()[0] == 0
+            and con.execute("SELECT count(*) FROM message").fetchone()[0] > 0):
+        reindex(con)
+        reindexed = True
+    q = ("SELECT m.id, m.from_addr, m.subject, m.kind, m.created_at, r.role, "
+         "snippet(message_fts, -1, '[', ']', '…', 8) AS snip, "
+         "bm25(message_fts) AS rank "
+         "FROM message_fts "
+         "JOIN message m ON m.id = message_fts.rowid "
+         "JOIN message_recipient r ON r.message_id = m.id AND r.recipient = ? "
+         "WHERE message_fts MATCH ? ORDER BY rank")
+    try:
+        rows = con.execute(q, (recipient, query)).fetchall()
+    except sqlite3.OperationalError as exc:
+        raise ValueError(f"invalid search query: {exc}") from exc
+    tombstoned = _tombstoned_projects(con)
+    if tombstoned:                        # hidden traffic never matches anything
+        rows = [r for r in rows
+                if not _is_tombstoned_sender(con, r["from_addr"], tombstoned)]
+    if sender_project is not None:
+        rows = [r for r in rows
+                if _address_project(con, r["from_addr"]) == sender_project]
+    total = len(rows)
+    hits = [{
+        "id": r["id"], "from": r["from_addr"], "subject": r["subject"],
+        "kind": r["kind"], "created_at": r["created_at"], "role": r["role"],
+        "snippet": r["snip"],
+    } for r in rows[offset:offset + limit]]
+    result = {"hits": hits, "total": total, "limit": limit, "offset": offset}
+    if reindexed:
+        result["reindexed"] = True
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -892,6 +974,20 @@ def tombstone_project(con, project_id, by, *, force=False, wait_secs=None):
 
     # DRIFT-2 step 1: internal ids computed while address rows still exist.
     internal_ids = _internal_message_ids(con, project_id)
+    # FTS text destruction (CR-SAN-027 §S2 / T1): every message SENT BY this
+    # project — internal AND surviving cross-project ones — loses its index
+    # text copy (the body files die with the folder; the index must not
+    # retain the text). Computed by sender BEFORE the address-row purge
+    # (DRIFT-2 ordering); messages the project merely RECEIVED keep their
+    # index rows (the content belongs to the sender's project).
+    sent_ids = [r["id"] for r in con.execute(
+        "SELECT m.id FROM message m JOIN address sa ON sa.address = m.from_addr"
+        " WHERE sa.project = ?", (project_id,))]
+    if sent_ids:
+        placeholders = ",".join("?" * len(sent_ids))
+        con.execute(
+            f"DELETE FROM message_fts WHERE rowid IN ({placeholders})",
+            sent_ids)
     # Step 2: internal message_recipient rows, then internal message rows.
     if internal_ids:
         placeholders = ",".join("?" * len(internal_ids))

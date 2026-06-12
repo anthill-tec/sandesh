@@ -1,6 +1,6 @@
 # CR-SAN-027 — FTS5 search engine (index, search/reindex, CLI)
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-12 on develop)
 **Priority:** High (the wave's recall capability)
 **Depends on:** CR-SAN-026 (filter layer; `sender_project` composition)
 **Labels:** wave-7, search, fts, migration, installer

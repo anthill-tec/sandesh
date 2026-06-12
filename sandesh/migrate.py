@@ -195,7 +195,8 @@ def _live_shape(db_path):
     dynamically from ``sqlite_master`` (CR-SAN-022 DRIFT-4 — no hard-coded
     table list, so new tables like ``project`` are visible). Internal tables
     are excluded: ``sqlite_*`` plus yoyo's bookkeeping tables (``_yoyo*`` /
-    ``yoyo*``).
+    ``yoyo*``) and the FTS family (``message_fts*`` — a derived, regenerable
+    index, not schema-of-record; CR-SAN-027 §S1).
     """
     import sqlite3
     con = sqlite3.connect(db_path)
@@ -206,7 +207,7 @@ def _live_shape(db_path):
             for r in con.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
             ).fetchall()
-            if not r["name"].startswith(("sqlite_", "_yoyo", "yoyo"))
+            if not r["name"].startswith(("sqlite_", "_yoyo", "yoyo", "message_fts"))
         ]
         shape = {}
         for table in tables:
