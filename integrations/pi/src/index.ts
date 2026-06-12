@@ -110,6 +110,47 @@ const projectIdParam = Type.Optional(
   }),
 );
 
+/**
+ * Shared inbox/fetch filter fragment (CR-SAN-032 §S2). Six optional filters
+ * mapping to the CLI's `--from --from-project --kind --since --until --subject`
+ * flags; each is emitted only when its param is provided (omit-at-default).
+ */
+const messageFilterParams = {
+  sender: Type.Optional(
+    Type.String({
+      description: "Filter: only messages from this sender address (maps to --from).",
+    }),
+  ),
+  sender_project: Type.Optional(
+    Type.String({
+      description:
+        "Filter: the cross-project proxy-stream filter — only messages whose sender belongs to this project (maps to --from-project).",
+    }),
+  ),
+  kind: Type.Optional(
+    StringEnum(["request", "directive", "fyi"], {
+      description: "Filter: only messages of this kind (maps to --kind).",
+    }),
+  ),
+  since: Type.Optional(
+    Type.String({
+      description:
+        "Filter: only messages created at or after this timestamp (maps to --since). CLI-accepted formats: YYYY-MM-DD or 'YYYY-MM-DD HH:MM:SS' (ISO-8601 'T…Z' values are rejected by the CLI).",
+    }),
+  ),
+  until: Type.Optional(
+    Type.String({
+      description:
+        "Filter: only messages created at or before this timestamp (maps to --until). CLI-accepted formats: YYYY-MM-DD or 'YYYY-MM-DD HH:MM:SS' (ISO-8601 'T…Z' values are rejected by the CLI).",
+    }),
+  ),
+  subject_like: Type.Optional(
+    Type.String({
+      description: "Filter: only messages whose subject matches this pattern (maps to --subject).",
+    }),
+  ),
+};
+
 // ---------------------------------------------------------------------------
 // execute() helpers — argv construction + result mapping
 // ---------------------------------------------------------------------------
@@ -122,6 +163,19 @@ const projectIdParam = Type.Optional(
 function projectPrefix(projectId?: string): string[] {
   const project = projectId ?? process.env.SANDESH_PROJECT;
   return project ? ["--project", project] : [];
+}
+
+/**
+ * Append the inbox/fetch filter flags (CR-SAN-032 §S2) to `args`, emitting
+ * each CLI flag only when its param is provided.
+ */
+function pushMessageFilters(args: string[], params: MessageFilterParams): void {
+  if (params.sender !== undefined) args.push("--from", params.sender);
+  if (params.sender_project !== undefined) args.push("--from-project", params.sender_project);
+  if (params.kind !== undefined) args.push("--kind", params.kind);
+  if (params.since !== undefined) args.push("--since", params.since);
+  if (params.until !== undefined) args.push("--until", params.until);
+  if (params.subject_like !== undefined) args.push("--subject", params.subject_like);
 }
 
 /**
@@ -193,13 +247,23 @@ interface ReplyParams {
   project_id?: string;
 }
 
-interface InboxParams {
+/** Shared inbox/fetch filter shape (CR-SAN-032 §S2). */
+interface MessageFilterParams {
+  sender?: string;
+  sender_project?: string;
+  kind?: string;
+  since?: string;
+  until?: string;
+  subject_like?: string;
+}
+
+interface InboxParams extends MessageFilterParams {
   recipient: string;
   unread_only?: boolean;
   project_id?: string;
 }
 
-interface FetchParams {
+interface FetchParams extends MessageFilterParams {
   recipient: string;
   mark?: boolean;
   project_id?: string;
@@ -210,8 +274,29 @@ interface ThreadParams {
   project_id?: string;
 }
 
+interface ArchiveParams {
+  project_id: string;
+  by: string;
+  dry_run?: boolean;
+  force?: boolean;
+}
+
+interface UnarchiveParams {
+  project_id: string;
+  by: string;
+  dry_run?: boolean;
+}
+
+interface SearchParams {
+  recipient: string;
+  query: string;
+  limit?: number;
+  offset?: number;
+  sender_project?: string;
+}
+
 // ---------------------------------------------------------------------------
-// Extension entry — register the 9 Sandesh verb tools
+// Extension entry — register the 12 Sandesh verb tools
 // ---------------------------------------------------------------------------
 
 export default function registerExtension(pi: ExtensionAPI): void {
@@ -404,11 +489,13 @@ export default function registerExtension(pi: ExtensionAPI): void {
           description: "When true (default) show only unread; false shows all messages.",
         }),
       ),
+      ...messageFilterParams,
       project_id: projectIdParam,
     }),
     execute: async (_callId, params: InboxParams, signal) => {
       const args = [...projectPrefix(params.project_id), "inbox", "--to", params.recipient];
       if (params.unread_only === false) args.push("--all");
+      pushMessageFilters(args, params);
       return runSandesh(pi, "inbox", args, signal);
     },
   });
@@ -432,11 +519,13 @@ export default function registerExtension(pi: ExtensionAPI): void {
           description: "When true (default) mark fetched messages read; false peeks without marking.",
         }),
       ),
+      ...messageFilterParams,
       project_id: projectIdParam,
     }),
     execute: async (_callId, params: FetchParams, signal) => {
       const args = [...projectPrefix(params.project_id), "fetch", "--to", params.recipient];
       if (params.mark === false) args.push("--peek");
+      pushMessageFilters(args, params);
       return runSandesh(pi, "fetch", args, signal);
     },
   });
@@ -455,6 +544,105 @@ export default function registerExtension(pi: ExtensionAPI): void {
     execute: async (_callId, params: ThreadParams, signal) => {
       const args = [...projectPrefix(params.project_id), "thread", "--id", String(params.msg_id)];
       return runSandesh(pi, "thread", args, signal);
+    },
+  });
+
+  // sandesh_archive — archive a project (reversible lifecycle pause).
+  pi.registerTool({
+    name: "sandesh_archive",
+    label: "Sandesh: Archive",
+    description:
+      "Archive a project (Mainline-tier, reversible): an archived project can no longer send or receive messages, reads stay intact, and live watchers are evicted. Reverse with sandesh_unarchive. Use dry_run to preview without writing.",
+    promptSnippet:
+      "Archive a project (reversible pause) — no send/receive while archived, reads intact, watchers evicted.",
+    parameters: Type.Object({
+      project_id: Type.String({ description: "Project id to archive." }),
+      by: Type.String({
+        description: "Address performing the archive (the project's own Mainline).",
+      }),
+      dry_run: Type.Optional(
+        Type.Boolean({
+          description: "When true, preview the archive (eviction counts) without writing.",
+        }),
+      ),
+      force: Type.Optional(
+        Type.Boolean({
+          description: "When true, proceed even if live watchers must be evicted.",
+        }),
+      ),
+    }),
+    execute: async (_callId, params: ArchiveParams, signal) => {
+      const args = ["archive", "--project", params.project_id, "--by", params.by];
+      if (params.dry_run === true) args.push("--dry-run");
+      if (params.force === true) args.push("--force");
+      return runSandesh(pi, "archive", args, signal);
+    },
+  });
+
+  // sandesh_unarchive — restore an archived project to active.
+  pi.registerTool({
+    name: "sandesh_unarchive",
+    label: "Sandesh: Unarchive",
+    description:
+      "Unarchive a project (Mainline-tier, the reverse of sandesh_archive): restores an archived project to active so it can send and receive again. Reads were never blocked while archived. Use dry_run to preview without writing.",
+    promptSnippet:
+      "Restore an archived project to active (reverse of sandesh_archive).",
+    parameters: Type.Object({
+      project_id: Type.String({ description: "Project id to unarchive." }),
+      by: Type.String({
+        description: "Address performing the unarchive (the project's own Mainline).",
+      }),
+      dry_run: Type.Optional(
+        Type.Boolean({
+          description: "When true, preview the unarchive without writing.",
+        }),
+      ),
+    }),
+    execute: async (_callId, params: UnarchiveParams, signal) => {
+      const args = ["unarchive", "--project", params.project_id, "--by", params.by];
+      if (params.dry_run === true) args.push("--dry-run");
+      return runSandesh(pi, "unarchive", args, signal);
+    },
+  });
+
+  // sandesh_search — full-text search over the caller's own mailbox.
+  pi.registerTool({
+    name: "sandesh_search",
+    label: "Sandesh: Search",
+    description:
+      "Full-text search the messages addressed to you (own-mailbox only). Query uses FTS5 syntax: quoted phrases, AND/OR/NOT. Results are bm25-ranked with snippets; paginate with limit/offset (CLI defaults: limit 20, offset 0). Never marks anything read. A lazy-reindex notice from the CLI is passed through verbatim.",
+    promptSnippet:
+      "Full-text search your own mailbox (FTS5 syntax; bm25-ranked snippets; paginate with limit/offset; never marks read).",
+    parameters: Type.Object({
+      recipient: Type.String({
+        description: "Your address — search is scoped to this recipient's own mailbox.",
+      }),
+      query: Type.String({
+        description: "FTS5 query: quoted phrases, AND/OR/NOT operators.",
+      }),
+      limit: Type.Optional(
+        Type.Integer({
+          description: "Max results per page (CLI default 20 when omitted).",
+        }),
+      ),
+      offset: Type.Optional(
+        Type.Integer({
+          description: "Pagination offset (CLI default 0 when omitted).",
+        }),
+      ),
+      sender_project: Type.Optional(
+        Type.String({
+          description:
+            "Filter: the cross-project proxy-stream filter — only messages whose sender belongs to this project (maps to --from-project).",
+        }),
+      ),
+    }),
+    execute: async (_callId, params: SearchParams, signal) => {
+      const args = ["search", params.query, "--to", params.recipient];
+      if (params.limit !== undefined) args.push("--limit", String(params.limit));
+      if (params.offset !== undefined) args.push("--offset", String(params.offset));
+      if (params.sender_project !== undefined) args.push("--from-project", params.sender_project);
+      return runSandesh(pi, "search", args, signal);
     },
   });
 
