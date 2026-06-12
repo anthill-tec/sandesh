@@ -4,7 +4,8 @@ Tests drive `sandesh_archive` and `sandesh_unarchive` via the in-process FastMCP
 harness (same pattern as test_mcp_mutating_tools.py) and verify side-effects by
 reading back from sandesh_db directly (fresh connections).
 
-AC1 — tool inventory: exactly 11 tools, no tombstone/grant/revoke/admin names,
+AC1 — tool inventory: exactly 12 tools (sandesh_search joined in CR-SAN-028),
+       no tombstone/grant/revoke/admin names,
        archive annotations are destructiveHint=False + idempotentHint=False.
 AC2 — archive/unarchive round-trip via MCP: state transitions + send guard.
 AC3 — required project_id: missing project_id is a ToolError (pydantic validation)
@@ -103,17 +104,17 @@ class McpLifecycleToolsTest(unittest.IsolatedAsyncioTestCase):
         self.fail(f"Tool '{name}' not found in list_tools()")
 
     # -------------------------------------------------------------------------
-    # AC1 — tool inventory: exactly 11 tools; no forbidden names; annotations
+    # AC1 — tool inventory: exactly 12 tools; no forbidden names; annotations
     # -------------------------------------------------------------------------
 
-    async def test_ac1_list_tools_returns_exactly_eleven_tools(self):
-        """AC1: list_tools() returns exactly 11 tools (existing 9 + sandesh_archive
-        + sandesh_unarchive)."""
+    async def test_ac1_list_tools_returns_exactly_twelve_tools(self):
+        """AC1: list_tools() returns exactly 12 tools (existing 9 + sandesh_archive
+        + sandesh_unarchive + sandesh_search from CR-SAN-028)."""
         tools = await mcp_server.mcp.list_tools()
         names = sorted(t.name for t in tools)
         self.assertEqual(
-            len(tools), 11,
-            f"Expected exactly 11 tools, got {len(tools)}: {names}",
+            len(tools), 12,
+            f"Expected exactly 12 tools, got {len(tools)}: {names}",
         )
 
     async def test_ac1_sandesh_archive_present_in_tool_list(self):
