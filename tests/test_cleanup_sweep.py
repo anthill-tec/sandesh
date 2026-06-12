@@ -756,18 +756,23 @@ class Ac5InstallerHeredocTest(unittest.TestCase):
         )
 
     def test_ac5_heredoc_py_marker_present_in_install_sh(self):
-        """install.sh must contain `<<'PY'` as the heredoc start marker in the
-        admin-assignment block (or equivalent like `<<'PYCODE'`).
+        """install.sh must contain `<<'PY'` — the SINGLE-quoted heredoc start
+        marker — in the admin-assignment block (or equivalent like `<<'PYCODE'`).
 
-        RED: the current one-liner blob has no heredoc; <<'PY' is absent.
+        The single quotes are mandatory: `<< "PY"` or a bare `<<PY` delimiter
+        would allow shell parameter/command interpolation inside the heredoc
+        body (injection-unsafe — PRD O3).
         """
         content = self._read_install_sh()
-        # Accept any <<'PY...' marker (e.g. <<'PY', <<'PYCODE', <<'PYTHON').
-        heredoc_present = "<<'PY" in content or '<< "PY' in content
+        # ONLY the single-quoted marker is acceptable (<<'PY', <<'PYCODE', ...);
+        # double-quoted or unquoted delimiters permit shell interpolation.
+        heredoc_present = "<<'PY" in content
         self.assertTrue(
             heredoc_present,
-            "install.sh must contain a heredoc python invocation marker (<<'PY or "
-            "similar) in the admin-assignment block; none found. "
+            "install.sh must contain a SINGLE-quoted heredoc python invocation "
+            "marker (<<'PY' or similar) in the admin-assignment block; none found. "
+            "Double-quoted (<< \"PY\") or unquoted (<<PY) delimiters are rejected — "
+            "they allow shell interpolation inside the body. "
             "The `$'...'` blob must be replaced with `\"$VENV/bin/python\" - <<'PY' ... PY`.",
         )
 

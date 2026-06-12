@@ -1387,6 +1387,22 @@ class InstallShAdminAssignmentTest(unittest.TestCase):
             "(per PRD O3: no CLI admin verb; -c and heredoc forms are both acceptable).",
         )
 
+    def test_install_sh_reads_admin_name_from_env_inside_python(self):
+        """install.sh must read the admin name from the environment INSIDE python.
+
+        PRD-global-store O3 (injection safety): the admin name must never be
+        shell-interpolated into the embedded python code — the program reads it
+        itself via os.environ["SANDESH_ADMIN"]. This pins the exact env-read
+        form alongside the mechanism-agnostic checks above.
+        """
+        self.assertIn(
+            'os.environ["SANDESH_ADMIN"]',
+            self._content,
+            "install.sh must read the admin name via os.environ[\"SANDESH_ADMIN\"] "
+            "INSIDE the embedded python program (PRD O3 injection safety) — "
+            "shell-interpolating $SANDESH_ADMIN into the code is forbidden.",
+        )
+
     def test_install_sh_does_not_call_sandesh_admin_cli(self):
         """install.sh must NOT invoke 'sandesh admin' as a CLI subcommand.
 
