@@ -93,7 +93,20 @@ Project lifecycle: sandesh_archive is a reversible, read-only pause — while a
 project is archived its participants can neither send nor receive, and
 sandesh_unarchive restores it (messages and read state survive untouched).
 Tombstoning is a destructive, backend-admin CLI action with no MCP tool; a
-tombstoned project's traffic is hidden from all reads (inbox/fetch/thread)."""
+tombstoned project's traffic is hidden from all reads (inbox/fetch/thread).
+
+Finding mail: sandesh_inbox and sandesh_fetch accept composable filters
+(sender, sender_project, kind, since, until, subject_like). The sender_project
+filter is the cross-project PROXY STREAM: when two parallel, interdependent
+projects collaborate under a grant, filtering your own mailbox by the other
+project's id yields just that counterpart's traffic — a virtual per-project
+channel inside one inbox. For keyword lookup, sandesh_search runs an FTS5
+full-text search over YOUR OWN mail only (subjects + bodies, read or unread);
+it never crosses inbox boundaries and never marks anything read. Results are
+bm25-ranked with snippets and paginated via limit/offset (`total` is the full
+match count — page with offset until you have it all). Quoted phrases and
+AND/OR/NOT work; a `reindexed: true` flag in the result just means the index
+was lazily rebuilt first (harmless)."""
 
 
     mcp = FastMCP("sandesh", instructions=SANDESH_INSTRUCTIONS)
@@ -161,18 +174,55 @@ tombstoned project's traffic is hidden from all reads (inbox/fetch/thread)."""
             Field(description="When True (default) list only unread messages; set False to "
                   "include already-read ones."),
         ] = True,
+        sender: Annotated[
+            str | None,
+            Field(description="Only messages whose sender exactly matches this address. "
+                  "None (default) = no constraint."),
+        ] = None,
+        sender_project: Annotated[
+            str | None,
+            Field(description="The cross-project proxy-stream filter: only messages whose "
+                  "SENDER belongs to this project — filter your own mailbox by a "
+                  "collaborating project's id to read just that counterpart's traffic "
+                  "as a virtual channel. None (default) = no constraint."),
+        ] = None,
+        kind: Annotated[
+            str | None,
+            Field(description="Only messages of this kind ('request'/'directive'/'fyi'/"
+                  "'reply'). None (default) = no constraint."),
+        ] = None,
+        since: Annotated[
+            str | None,
+            Field(description="Only messages created at/after this timestamp — "
+                  "'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS', inclusive. None = no lower bound."),
+        ] = None,
+        until: Annotated[
+            str | None,
+            Field(description="Only messages created at/before this timestamp — "
+                  "'YYYY-MM-DD' (extends to end of day) or 'YYYY-MM-DD HH:MM:SS', "
+                  "inclusive. None = no upper bound."),
+        ] = None,
+        subject_like: Annotated[
+            str | None,
+            Field(description="Case-insensitive literal substring the subject must "
+                  "contain. None (default) = no constraint."),
+        ] = None,
     ) -> list[dict]:
         """List an address's messages — a quick triage glance at what's pending. Unread by
         default; pass unread_only=False to include read messages too.
 
         Called by an address on its own mailbox when it wants to see what's waiting WITHOUT
-        consuming it — unlike sandesh_fetch, this does NOT mark anything read. Read-only.
-        Returns list[dict].
+        consuming it — unlike sandesh_fetch, this does NOT mark anything read. The optional
+        filters (sender, sender_project, kind, since, until, subject_like) compose; each
+        None means "no constraint". Read-only. Returns list[dict].
         """
         con = None
         try:
             con = sandesh_db.connect()
-            return [dict(r) for r in sandesh_db.inbox(con, recipient, unread_only)]
+            return [dict(r) for r in sandesh_db.inbox(
+                con, recipient, unread_only, sender=sender,
+                sender_project=sender_project, kind=kind, since=since,
+                until=until, subject_like=subject_like)]
         except (ValueError, PermissionError) as e:
             raise ToolError(str(e)) from e
         finally:
@@ -197,6 +247,39 @@ tombstoned project's traffic is hidden from all reads (inbox/fetch/thread)."""
             Field(description="When True (default) mark the fetched messages read; set False "
                   "to peek (render without marking, so they stay unread)."),
         ] = True,
+        sender: Annotated[
+            str | None,
+            Field(description="Only messages whose sender exactly matches this address. "
+                  "None (default) = no constraint."),
+        ] = None,
+        sender_project: Annotated[
+            str | None,
+            Field(description="The cross-project proxy-stream filter: only messages whose "
+                  "SENDER belongs to this project — fetch (and mark read) just a "
+                  "collaborating project's traffic, leaving the rest unread. "
+                  "None (default) = no constraint."),
+        ] = None,
+        kind: Annotated[
+            str | None,
+            Field(description="Only messages of this kind ('request'/'directive'/'fyi'/"
+                  "'reply'). None (default) = no constraint."),
+        ] = None,
+        since: Annotated[
+            str | None,
+            Field(description="Only messages created at/after this timestamp — "
+                  "'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS', inclusive. None = no lower bound."),
+        ] = None,
+        until: Annotated[
+            str | None,
+            Field(description="Only messages created at/before this timestamp — "
+                  "'YYYY-MM-DD' (extends to end of day) or 'YYYY-MM-DD HH:MM:SS', "
+                  "inclusive. None = no upper bound."),
+        ] = None,
+        subject_like: Annotated[
+            str | None,
+            Field(description="Case-insensitive literal substring the subject must "
+                  "contain. None (default) = no constraint."),
+        ] = None,
     ) -> list[dict]:
         """The real read: consolidate an address's unread messages (both `to` and `cc`) into
         one view — bodies read from file, subject-only entries shown as just the subject —
@@ -204,13 +287,18 @@ tombstoned project's traffic is hidden from all reads (inbox/fetch/thread)."""
 
         This is what a session calls right after its `notify` watcher wakes it. Reading a
         message means "received and now being acted on" — the waiting sender can observe that
-        read state. Pass mark=False to peek without consuming. Returns list[dict] (with
-        thread refs).
+        read state. Pass mark=False to peek without consuming. The optional filters (sender,
+        sender_project, kind, since, until, subject_like) compose — only the matching subset
+        is rendered and marked; non-matching unread mail stays unread. Returns list[dict]
+        (with thread refs).
         """
         con = None
         try:
             _project, store, con = _ctx(_derive_or_resolve(project_id, recipient))
-            return sandesh_db.fetch(con, store, recipient, mark)
+            return sandesh_db.fetch(
+                con, store, recipient, mark, sender=sender,
+                sender_project=sender_project, kind=kind, since=since,
+                until=until, subject_like=subject_like)
         except (ValueError, PermissionError) as e:
             raise ToolError(str(e)) from e
         finally:
@@ -242,6 +330,65 @@ tombstoned project's traffic is hidden from all reads (inbox/fetch/thread)."""
             con = sandesh_db.connect()
             return [dict(r) for r in sandesh_db.thread(con, msg_id)]
         except (ValueError, PermissionError) as e:
+            raise ToolError(str(e)) from e
+        finally:
+            if con is not None:
+                con.close()
+
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+    def sandesh_search(
+        recipient: Annotated[
+            str,
+            Field(description="The address whose mail to search — your own address, format "
+                  "'<Orchestrator> - <Project>' (e.g. 'Mainline - Nai')."),
+        ],
+        query: Annotated[
+            str,
+            Field(description="The FTS5 search query — bare terms, quoted phrases "
+                  "(\"deploy pipeline\"), and AND/OR/NOT operators. A malformed query "
+                  "(e.g. an unterminated quote) is rejected with an error."),
+        ],
+        project_id: Annotated[
+            str | None,
+            Field(description="Accepted for compatibility but unused — search is "
+                  "recipient-keyed on the global DB and needs no project routing."),
+        ] = None,
+        limit: Annotated[
+            int,
+            Field(description="Max hits per page (default 20)."),
+        ] = 20,
+        offset: Annotated[
+            int,
+            Field(description="Number of ranked hits to skip — page through results "
+                  "with offset=0, limit, 2*limit, ... until `total` is covered."),
+        ] = 0,
+        sender_project: Annotated[
+            str | None,
+            Field(description="The cross-project proxy-stream filter: only hits whose "
+                  "SENDER belongs to this project. None (default) = no constraint."),
+        ] = None,
+    ) -> dict:
+        """Full-text search (FTS5) over an address's OWN mail — subjects + bodies, read or
+        unread, to and cc alike. The query supports bare terms, quoted phrases
+        ('"gateway timeout"'), and AND/OR/NOT operators.
+
+        The boundary: search only ever sees messages addressed to `recipient` — it never
+        crosses into another address's inbox (mail you merely SENT is not searched). It is
+        pure query: nothing is ever marked read.
+
+        Pagination: returns {hits, total, limit, offset} — `hits` is the bm25-ranked page
+        (best match first, each hit an envelope + a `snippet` highlight), `total` the full
+        match count; advance `offset` by `limit` to page. A `reindexed: true` key means the
+        FTS index was empty and was lazily rebuilt before querying (one-time, harmless).
+        """
+        con = None
+        try:
+            con = sandesh_db.connect()
+            return sandesh_db.search(
+                con, recipient, query, limit=limit, offset=offset,
+                sender_project=sender_project)
+        except (ValueError,) as e:
             raise ToolError(str(e)) from e
         finally:
             if con is not None:
