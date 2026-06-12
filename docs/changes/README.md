@@ -33,6 +33,8 @@ Single source of truth for change requests. Pick the next `PENDING` CR by phase 
 | [CR-SAN-028](CR-SAN-028-mcp-search-surface.md) | **MCP search surface**: `sandesh_inbox`/`sandesh_fetch` filter params + `sandesh_search` (11→12 tools, readOnlyHint, paginated; NO reindex tool), instructions/usage, stdio E2E | Wave 7 | COMPLETED | CR-SAN-027 | 2026-06-12 |
 | [CR-SAN-029](CR-SAN-029-projects-listing-tombstoned.md) | **`projects --all`**: include tombstoned rows (permanent markers) in the 3-column listing; default output unchanged | pre-v0.2.0 | COMPLETED | — | 2026-06-12 |
 | [CR-SAN-030](CR-SAN-030-pre-release-cleanup-sweep.md) | **Cleanup sweep**: redundant in-function imports, `_tombstone_guards`/`search` docstring precision, MCP `reindexed`-flag + `sender`/`since`/`until` coverage, install.sh admin-block heredoc, test_install ResourceWarning | pre-v0.2.0 | COMPLETED | — | 2026-06-12 |
+| [CR-SAN-031](CR-SAN-031-pi-wake-followup.md) | **Pi wake hardening**: the wake call gains `deliverAs: "followUp"` (mid-turn mail was silently lost + hot-spin; PE11 source-verified) + throw-survival guard | Wave 8 | PENDING | — | — |
+| [CR-SAN-032](CR-SAN-032-pi-surface-catchup.md) | **Pi surface catch-up**: 9→12 tools (archive/unarchive/search), 6 inbox/fetch filter params, `sandesh` ≥0.2.0 session gate, Wave-6 error-string pins, promptSnippet/docs refresh, pkg 0.2.0 | Wave 8 | PENDING | CR-SAN-031 | — |
 
 Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distribution](../research/PRD-distribution.md) · [PRD-pi-extension](../research/PRD-pi-extension.md) · [PRD-db-migration](../research/PRD-db-migration.md) · [PRD-global-store](../research/PRD-global-store.md)
 Design notes: [DN-windows-notifier](../research/DN-windows-notifier.md) · [DN-pi-wake](../research/DN-pi-wake.md) (Pi wake spike — RESOLVED: native injection)
@@ -57,8 +59,13 @@ paginated), explicit+lazy reindex; semantic search assessed/deferred. Strict ord
 028 (breakdown user-approved 2026-06-12) — **Wave 7 COMPLETE (2026-06-12)**.
 Pre-v0.2.0 housekeeping (filed at the Wave-7-close SCRUM, 2026-06-12): CR-SAN-029 + CR-SAN-030 (the
 Waves-6/7 VERIFY-nit backlog; install nits routed into the sweep, `sender_project` SQL-join optimization
-deferred-at-volume). Then: **Wave 8 — Pi extension catch-up** (design opens at its wave) → the
+deferred-at-volume). Then: **Wave 8 — Pi extension catch-up** → the
 **v0.2.0 release + local reinstall**.
+Wave 8 (Pi catch-up) — design contract: **[PRD-pi-extension](../research/PRD-pi-extension.md) §8**
+(AGREED 2026-06-13, PE6–PE11; amended in place per owner choice — full 12-tool parity, hard
+≥0.2.0 CLI gate, wake `followUp` hardening from the opensrc source re-verification). Strict order
+CR-SAN-031 → 032 (breakdown user-approved 2026-06-13). bun stack (`integrations/pi/`, `bun-*`
+agents).
 
 ## Canonical statuses
 `PENDING` / `IN_PROGRESS` / `COMPLETED` / `SUPERSEDED` / `DEFERRED`
