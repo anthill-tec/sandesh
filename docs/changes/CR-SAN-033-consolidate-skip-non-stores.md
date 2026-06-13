@@ -1,6 +1,6 @@
 # CR-SAN-033 — hotfix: `consolidate` skips non-store DB files
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-06-13 in v0.2.1)
 **Priority:** Critical (v0.2.0 installer crashes on real-world debris)
 **Depends on:** —
 **Labels:** hotfix-0.2.1, consolidation, installer
