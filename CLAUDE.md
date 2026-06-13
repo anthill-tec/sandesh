@@ -46,24 +46,21 @@ but nothing is Claude-specific anymore — it's a general agent-messaging primit
 
 ## Status & Roadmap
 
-- **Waves 1–5 — DONE** (through **v0.1.0**): the standalone CLI + `notify` watcher
-  (Wave 1), the MCP server `sandesh-mcp` (Wave 2 — the verbs as MCP tools; the watcher
-  stays the wake path), packaging/PyPI workflow, and the schema-migration subsystem +
-  installer auto-migrate (Wave 5, CR-SAN-017/018).
-- **Wave 6 — IN PROGRESS: the global store.** **CR-SAN-022 done (merged)** — one
-  global `sandesh.db` (WAL) for all projects, the `project` tracker table +
-  `address.project`, global-target `migrate`, explicit project scoping, legacy-store
-  `consolidate`. **CR-SAN-023 done (pending merge)** — cross-project messaging behind
-  the admin's per-project grant (`grant`/`revoke --cross-project`), the single-row
-  `admin` table (assigned at install via `$SANDESH_ADMIN`), tracker-state checks on
-  `send`/`reply`/`register`, the 3-column `projects` listing. **CR-SAN-024 done
-  (pending merge)** — project lifecycle verbs (`archive`/`unarchive`/`tombstone`,
-  two-step + two-tier authz, eviction, purge, read rules, `--dry-run` previews).
-  Next: CR-SAN-025 (MCP surface). Design contract:
-  `docs/research/PRD-global-store.md` (AGREED 2026-06-11).
-- **Not yet adopted** by the originating orchestration workflow — that's a separate,
-  deliberate step (seed an addressbook, sessions run `notify`, migrate off the old
-  file-note relay).
+- **Waves 1–8 — DONE** (through **v0.2.0**): the standalone CLI + `notify` watcher
+  (Wave 1), the MCP server `sandesh-mcp` (Wave 2), packaging/PyPI workflow, the Pi
+  extension (Wave 4), the schema-migration subsystem + installer auto-migrate (Wave 5,
+  CR-SAN-017/018), **the global store** (Wave 6, CR-SAN-022..025 — one global DB,
+  project tracker, cross-project grants, archive→tombstone lifecycle, install-assigned
+  super-admin, MCP 9→11 tools), **inbox search** (Wave 7, CR-SAN-026..028 — composable
+  filters incl. the `sender_project` proxy stream, FTS5 `search`/`reindex`, MCP
+  11→12 tools), pre-release housekeeping (CR-SAN-029/030), and the **Pi catch-up**
+  (Wave 8, CR-SAN-031/032 — wake `deliverAs: followUp` hardening, Pi 9→12-tool parity,
+  ≥0.2.0 CLI session gate). Design contracts: `docs/research/PRD-global-store.md`,
+  `PRD-inbox-search.md`, `PRD-pi-extension.md` §8 (all AGREED).
+- **Next:** registry publishes (PyPI trusted-publisher registration is a maintainer
+  action — RELEASING.md), and adoption by the originating orchestration workflow —
+  a separate, deliberate step (seed an addressbook, sessions run `notify`, migrate
+  off the old file-note relay).
 
 ---
 
@@ -71,25 +68,31 @@ but nothing is Claude-specific anymore — it's a general agent-messaging primit
 
 ```
 sandesh/                         (this repo — source of truth)
-├── app/
+├── sandesh/            the Python package (dist name: sandesh-relay; version from git tags via hatch-vcs)
 │   ├── sandesh_db.py   the library: schema + all operations (no CLI, no I/O loop)
 │   ├── cli.py          argparse CLI over the library (one binary, all subcommands)
-│   └── notify.py       the blocking mailbox watcher (run() + a thin main)
-├── bin/sandesh         bash launcher → resolves its real path → runs app/cli.py
-├── install.sh          copies app/ + bin/ to the XDG data dir, symlinks the launcher
-├── tests/test_sandesh.py   24 unit tests (run against a temp store; no install needed)
-├── README.md
+│   ├── notify.py       the blocking mailbox watcher (run() + a thin main)
+│   ├── mcp_server.py   the MCP adapter (12 tools; optional [mcp] extra)
+│   ├── migrate.py      the yoyo-backed migration engine (optional [migrate] extra)
+│   ├── migrations/     0001-baseline … 0005-message-fts (+ rollbacks)
+│   ├── schema/current-schema.json   committed snapshot (CI gate: == migrate --dump-schema)
+│   └── data/usage-scenarios.md      the sandesh://usage MCP resource content
+├── integrations/pi/    the Pi extension (bun/TS; npm @anthill-tec/sandesh-pi; 12 tools + native wake)
+├── install.sh          builds a venv at $XDG_DATA_HOME/sandesh/.venv, pip-installs [mcp,migrate],
+│                       symlinks launchers, then migrate --all → consolidate → reindex → admin assign
+├── tests/              41 test files (run against a temp store; no install needed)
+├── README.md / RELEASING.md / pyproject.toml
 └── CLAUDE.md           (this file)
 
 Installed (by install.sh) + runtime data:
 ~/.local/share/sandesh/          ($XDG_DATA_HOME/sandesh)
-├── app/  bin/sandesh            the installed code + launcher
-├── sandesh.db                   the ONE global DB (WAL) — all projects; five tables:
-│                                address, message, message_recipient, notifier, project
+├── .venv/                       the installed package + entry points
+├── sandesh.db                   the ONE global DB (WAL) — all projects; address, message,
+│                                message_recipient, notifier, project, admin (+ message_fts index)
 └── projects/<project_id>/
     ├── messages/msg-<id>.md     message bodies (full absolute paths stored in the DB)
     └── sandesh.db.pre-global    legacy per-project DB, kept as backup after consolidation
-~/.local/bin/sandesh             symlink → ~/.local/share/sandesh/bin/sandesh (PATH entry)
+~/.local/bin/sandesh             symlink → ~/.local/share/sandesh/.venv/bin/sandesh (PATH entry)
 ```
 
 ---
@@ -211,11 +214,11 @@ liveness table is crash-safe rather than relying on a shutdown hook.
 ## How to run
 
 ```bash
-# tests (no install needed — runs against a temp store)
-python3 tests/test_sandesh.py            # or: python3 -m unittest -v (from repo root)
+# tests (no install needed — run against a temp store; per-file, discovery is broken)
+PYTHONPATH=. .venv/bin/python tests/<test_file>.py    # dev venv has [mcp,migrate]
 
-# install / re-install after edits (copies app/+bin/ to ~/.local/share/sandesh/)
-./install.sh
+# install / re-install (venv at ~/.local/share/sandesh/.venv + migrate/consolidate/reindex)
+SANDESH_ADMIN=<name> ./install.sh
 
 # use (installed launcher; ~/.local/bin must be on PATH, else call by full path)
 sandesh setup --project Demo
@@ -288,29 +291,29 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
 
 ---
 
-## Wave 2 — MCP server (plan)
+## The MCP server (shipped — Wave 2 + 6 + 7)
 
-1. **Verify the MCP Python SDK first** (read its actual API; it's the one real new
-   dependency — decide stdio vs HTTP transport).
-2. `app/mcp_server.py` exposing tools: `sandesh_setup`, `sandesh_register`,
-   `sandesh_unregister`, `sandesh_addressbook`, `sandesh_send`, `sandesh_reply`,
-   `sandesh_inbox`, `sandesh_fetch`, `sandesh_thread` — **each takes
-   `project_id`**. They call `sandesh_db.*` directly (the server is a thin adapter).
-3. **Do NOT** put the wake in MCP. `notify` stays a background process.
-4. Add the MCP dep to `install.sh` (or document a venv); keep the CLI working unchanged.
-5. Tests for the adapter layer.
+`sandesh/mcp_server.py` (FastMCP, stdio; the optional **`[mcp]`** extra) exposes **12 tools**:
+setup, register, unregister, addressbook, send, reply, inbox, fetch, thread (Wave 2),
+archive, unarchive (Wave 6 — tombstone/grant/revoke/admin are NEVER exposed), and search
+(Wave 7). Inbox/fetch carry the six filter params; `project_id` is optional everywhere it
+can be derived (and accepted-but-unused on the recipient-keyed tools). Errors map
+`ValueError`/`PermissionError` → `ToolError`. **The wake is NOT in MCP** — `notify` stays a
+background process (the agent's host re-invokes it; see the wake section above). The Pi
+extension (`integrations/pi/`) mirrors the same 12-tool surface over the CLI, with a native
+wake loop (`sendUserMessage(…, {deliverAs:"followUp"})`) and a ≥0.2.0 CLI session gate.
 
 ---
 
 ## Conventions
 
-- **Git:** the user works git-flow style (feature branches off `develop`). This repo is
-  fresh (initial commit on the default branch) — establish `develop` + a remote if asked.
+- **Git:** the user works git-flow style (feature branches off `develop`).
   **Commit/push only when asked; branch before committing on the default branch.**
 - **Commit messages: NEVER add Claude attribution** ("Generated with Claude",
   "Co-Authored-By: Claude"). Clean, technical messages only.
-- **New dependency?** This project's whole virtue is stdlib-only — adding a dep (only the
-  MCP SDK is anticipated) is a deliberate decision; read the real upstream API first.
+- **New dependency?** The core's whole virtue is stdlib-only — runtime deps live ONLY
+  behind the optional extras (`[mcp]` = the MCP SDK; `[migrate]` = yoyo + jsonschema);
+  adding one is a deliberate decision; read the real upstream API first.
 - Keep `sandesh_db.py` pure (model + ops, no printing/looping); presentation in `cli.py`,
-  the loop in `notify.py`, the future protocol in `mcp_server.py`.
+  the loop in `notify.py`, the MCP protocol in `mcp_server.py`.
 ```
