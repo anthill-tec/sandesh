@@ -476,6 +476,12 @@ class McpExtraInstallTest(unittest.TestCase):
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     proc.kill()
+                    proc.wait(timeout=5)
+            # Close the pipe wrappers — text=True Popen pipes are TextIOWrapper
+            # objects that otherwise leak and fire ResourceWarning at GC time.
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                if stream is not None:
+                    stream.close()
 
     def test_ac4_sandesh_script_still_works_with_mcp_extra(self):
         """`sandesh --help` must exit 0 in the [mcp]-installed venv."""
@@ -679,17 +685,20 @@ CREATE TABLE IF NOT EXISTS notifier (
 
 
 def _make_pre_migration_store(xdg_data, project_id):
-    """Provision a project store that resembles a pre-CR-SAN-017 database.
+    """Provision a GLOBAL store that resembles a pre-CR-SAN-017 database.
 
-    Creates <xdg_data>/sandesh/projects/<project_id>/sandesh.db with the
-    old 4-table schema that includes message.status and has NO _yoyo_migration
-    table.  Returns the path to the db file.
+    CR-SAN-022 C3: the migrate engine targets the single global DB, so the
+    legacy fixture seeds <xdg_data>/sandesh/sandesh.db with the old 4-table
+    schema (message.status present, NO _yoyo_migration table). The installer's
+    `migrate --all` must adopt the baseline and bring it to the latest schema.
+    Per-project legacy files are CR-SAN-022 C5 consolidation territory.
+    Returns the path to the db file.
     """
     import sqlite3
-    project_dir = os.path.join(xdg_data, "sandesh", "projects", project_id)
-    messages_dir = os.path.join(project_dir, "messages")
+    sandesh_dir = os.path.join(xdg_data, "sandesh")
+    messages_dir = os.path.join(sandesh_dir, "projects", project_id, "messages")
     os.makedirs(messages_dir, exist_ok=True)
-    db_path = os.path.join(project_dir, "sandesh.db")
+    db_path = os.path.join(sandesh_dir, "sandesh.db")
     con = sqlite3.connect(db_path)
     con.executescript(_PRE_MIGRATION_SCHEMA)
     con.commit()
@@ -943,10 +952,7 @@ class MigrateOnInstallTest(unittest.TestCase):
             self.skipTest(self._skip_reason)
 
     def _db_path(self):
-        return os.path.join(
-            self.xdg_data,
-            "sandesh", "projects", self.PROJECT_ID, "sandesh.db",
-        )
+        return os.path.join(self.xdg_data, "sandesh", "sandesh.db")
 
     def _installed_sandesh(self):
         """Path to the installed sandesh console script in the installer venv."""
@@ -1030,7 +1036,7 @@ class MigrateOnInstallTest(unittest.TestCase):
             "XDG_DATA_HOME": self.xdg_data,
         }
         result = subprocess.run(
-            [sandesh_bin, "migrate", "--status", "--project", self.PROJECT_ID],
+            [sandesh_bin, "migrate", "--status"],
             capture_output=True,
             text=True,
             timeout=30,

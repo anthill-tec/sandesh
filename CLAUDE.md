@@ -46,16 +46,21 @@ but nothing is Claude-specific anymore — it's a general agent-messaging primit
 
 ## Status & Roadmap
 
-- **Wave 1 — DONE (this repo).** Standalone CLI: store, addressbook, send/reply/
-  inbox/fetch/thread, `setup`, the `notify` watcher, installer. 24 unit tests green.
-- **Wave 2 — NEXT: an MCP server** (`app/mcp_server.py`). Expose the verbs as MCP
-  tools (each taking `project_id`) so an agent calls them instead of shelling out.
-  **The `notify` watcher stays the wake path** (an MCP server can't re-invoke a sleeping
-  agent — see "The wake mechanism"). **Before building it, verify the current MCP
-  Python SDK API** (read its real source / docs) — don't assume from memory.
-- **Not yet adopted** by the originating orchestration workflow — that's a separate,
-  deliberate step (seed an addressbook, sessions run `notify`, migrate off the old
-  file-note relay).
+- **Waves 1–8 — DONE** (through **v0.2.0**): the standalone CLI + `notify` watcher
+  (Wave 1), the MCP server `sandesh-mcp` (Wave 2), packaging/PyPI workflow, the Pi
+  extension (Wave 4), the schema-migration subsystem + installer auto-migrate (Wave 5,
+  CR-SAN-017/018), **the global store** (Wave 6, CR-SAN-022..025 — one global DB,
+  project tracker, cross-project grants, archive→tombstone lifecycle, install-assigned
+  super-admin, MCP 9→11 tools), **inbox search** (Wave 7, CR-SAN-026..028 — composable
+  filters incl. the `sender_project` proxy stream, FTS5 `search`/`reindex`, MCP
+  11→12 tools), pre-release housekeeping (CR-SAN-029/030), and the **Pi catch-up**
+  (Wave 8, CR-SAN-031/032 — wake `deliverAs: followUp` hardening, Pi 9→12-tool parity,
+  ≥0.2.0 CLI session gate). Design contracts: `docs/research/PRD-global-store.md`,
+  `PRD-inbox-search.md`, `PRD-pi-extension.md` §8 (all AGREED).
+- **Next:** registry publishes (PyPI trusted-publisher registration is a maintainer
+  action — RELEASING.md), and adoption by the originating orchestration workflow —
+  a separate, deliberate step (seed an addressbook, sessions run `notify`, migrate
+  off the old file-note relay).
 
 ---
 
@@ -63,44 +68,58 @@ but nothing is Claude-specific anymore — it's a general agent-messaging primit
 
 ```
 sandesh/                         (this repo — source of truth)
-├── app/
+├── sandesh/            the Python package (dist name: sandesh-relay; version from git tags via hatch-vcs)
 │   ├── sandesh_db.py   the library: schema + all operations (no CLI, no I/O loop)
 │   ├── cli.py          argparse CLI over the library (one binary, all subcommands)
-│   └── notify.py       the blocking mailbox watcher (run() + a thin main)
-├── bin/sandesh         bash launcher → resolves its real path → runs app/cli.py
-├── install.sh          copies app/ + bin/ to the XDG data dir, symlinks the launcher
-├── tests/test_sandesh.py   24 unit tests (run against a temp store; no install needed)
-├── README.md
+│   ├── notify.py       the blocking mailbox watcher (run() + a thin main)
+│   ├── mcp_server.py   the MCP adapter (12 tools; optional [mcp] extra)
+│   ├── migrate.py      the yoyo-backed migration engine (optional [migrate] extra)
+│   ├── migrations/     0001-baseline … 0005-message-fts (+ rollbacks)
+│   ├── schema/current-schema.json   committed snapshot (CI gate: == migrate --dump-schema)
+│   └── data/usage-scenarios.md      the sandesh://usage MCP resource content
+├── integrations/pi/    the Pi extension (bun/TS; npm @anthill-tec/sandesh-pi; 12 tools + native wake)
+├── install.sh          builds a venv at $XDG_DATA_HOME/sandesh/.venv, pip-installs [mcp,migrate],
+│                       symlinks launchers, then migrate --all → consolidate → reindex → admin assign
+├── tests/              41 test files (run against a temp store; no install needed)
+├── README.md / RELEASING.md / pyproject.toml
 └── CLAUDE.md           (this file)
 
 Installed (by install.sh) + runtime data:
 ~/.local/share/sandesh/          ($XDG_DATA_HOME/sandesh)
-├── app/  bin/sandesh            the installed code + launcher
+├── .venv/                       the installed package + entry points
+├── sandesh.db                   the ONE global DB (WAL) — all projects; address, message,
+│                                message_recipient, notifier, project, admin (+ message_fts index)
 └── projects/<project_id>/
-    ├── sandesh.db               address, message, message_recipient, notifier
-    └── messages/msg-<id>.md     message bodies (full absolute paths stored in the DB)
-~/.local/bin/sandesh             symlink → ~/.local/share/sandesh/bin/sandesh (PATH entry)
+    ├── messages/msg-<id>.md     message bodies (full absolute paths stored in the DB)
+    └── sandesh.db.pre-global    legacy per-project DB, kept as backup after consolidation
+~/.local/bin/sandesh             symlink → ~/.local/share/sandesh/.venv/bin/sandesh (PATH entry)
 ```
 
 ---
 
 ## Architecture
 
-### The store — XDG, per-project, projectid-routed
-Every operation carries a **`project_id`**; it routes to that project's own store at
-`<data_home>/sandesh/projects/<project_id>/` (`data_home` = `$XDG_DATA_HOME` or
-`~/.local/share`). There is **no git/CWD inference** — projectid is explicit (an MCP
-daemon has no CWD). The CLI accepts `--project` (before *or* after the subcommand) or
-`$SANDESH_PROJECT`. `sandesh_db.store_dir(project_id)` builds the path;
-`sandesh_db.setup(project_id)` provisions it (idempotent).
+### The store — XDG, one global DB, projectid-scoped
+Every operation carries a **`project_id`**, but all projects share **ONE global
+database** at `<data_home>/sandesh/sandesh.db` (WAL mode; `data_home` =
+`$XDG_DATA_HOME` or `~/.local/share`). The `project` tracker table enrolls each
+project; per-project body files live under
+`<data_home>/sandesh/projects/<project_id>/messages/`. There is **no git/CWD
+inference** — projectid is explicit (an MCP daemon has no CWD). The CLI accepts
+`--project` (before *or* after the subcommand) or `$SANDESH_PROJECT`.
+`sandesh_db.db_path()`/`connect()` open the global DB;
+`sandesh_db.store_dir(project_id)` builds the body-folder path;
+`sandesh_db.setup(project_id)` enrolls + provisions (idempotent; refuses a
+tombstoned id).
 
-### Four tables (`sandesh_db._SCHEMA`)
+### Five tables (`sandesh_db._SCHEMA`)
 | table | holds |
 |---|---|
-| `address` | the **addressbook** — durable identities, PK `address` (rejects dupes), `active` soft-delete |
+| `address` | the **addressbook** — durable identities, PK `address` (rejects dupes), `active` soft-delete, `project` (the address's `<Project>` part — the exact-match scoping key) |
 | `message` | the **envelope** — `subject` (NOT NULL), `kind`, `in_reply_to`, `body_path` (NULL = subject-only; else a FULL absolute path) |
 | `message_recipient` | **per-message addressees** — (`message_id`, `recipient`, `role` to/cc, `read_at`); PK `(message_id, recipient)` |
 | `notifier` | **per-session watcher liveness** — PK `recipient`, `pid`, `token` (uuid/launch), `heartbeat_at`, `tombstone` |
+| `project` | the **project tracker** — PK `project_id`, `state` (CHECK `active`\|`archived`\|`tombstoned`), `created_at`/`archived_at`/`tombstoned_at` |
 
 ### Modules
 - **`sandesh_db.py`** — the entire model + operations. Stateless functions taking a
@@ -120,9 +139,19 @@ daemon has no CWD). The CLI accepts `--project` (before *or* after the subcomman
    read by `fetch`; the difference is the **wake**: `notify` polls
    `unread_to()` = `role='to' AND read_at IS NULL`. Cc is delivered + readable but
    never wakes — it's swept up on the recipient's next `fetch`. Conserves agent turns.
-2. **`all-tracks` broadcast.** A reserved recipient keyword; `send` expands it to all
-   **active** addresses **minus the sender**. Per-recipient rows mean every recipient's
-   watcher fires on its own row (the sender gets none).
+2. **`all-tracks` broadcast — sender-project-scoped.** A reserved recipient keyword;
+   `send` expands it to all **active** addresses **in the sender's project**, minus the
+   sender. Per-recipient rows mean every recipient's watcher fires on its own row (the
+   sender gets none). *Re-opened by design (CR-SAN-022):* the original wording relied on
+   per-project stores for isolation; `docs/research/PRD-global-store.md` (AGREED
+   2026-06-11) replaced those with the single global DB, so the scoping is now explicit
+   via `address.project` — and **cross-project messaging requires the admin's
+   per-project grant** (CR-SAN-023): `sandesh grant --cross-project --project <id>
+   --by <admin>` — one-time, inherited by every participant of the granted project,
+   revoked project-wide (`revoke --cross-project`). Without it, `send` to a foreign
+   project fails with `cross-project sending not approved for project '<id>' — ask the
+   Sandesh admin`. The `all-tracks` broadcast stays sender-project-scoped regardless of
+   grant.
 3. **Per-recipient read.** `read_at` lives on `message_recipient`, not `message` — a
    broadcast/cc stays unread for the others after one reads it.
 4. **Subject-only ⟷ file-body.** `subject` is mandatory (the minimal content). No
@@ -133,7 +162,13 @@ daemon has no CWD). The CLI accepts `--project` (before *or* after the subcomman
    `message.status` disposition machine (no open/actioned/closed). A request stays
    visible in history; whether it has been *acted on* is conveyed by replies, not a
    status column. (CR-SAN-017 0002 dropped `message.status`; new≡migrated stores have
-   no status column.)
+   no status column.) **Lifecycle exception (CR-SAN-024):** `archive` still deletes
+   nothing (read-only, reversible), but `tombstone` is the deliberate, admin-only
+   exception — it purges the project's *internal* messages + recipient rows and
+   deletes its body folder (cross-project envelopes survive; their bodies are lost).
+   Standard reads then hide the tombstoned project's traffic: `inbox`/`fetch` filter
+   it out, and `thread` renders the exact warning `incomplete chain — message(s)
+   removed (project tombstoned)` where a chain passes through purged nodes.
 6. **Reply threading.** `message.in_reply_to` links a reply to its parent; `reply`
    defaults `to`=parent's sender and subject=`Re: …` (no `Re: Re:`). `thread` walks the
    chain. `fetch` shows `↳ re #N "<parent subject>"`. (`reply` has no `--resolves`
@@ -146,6 +181,11 @@ daemon has no CWD). The CLI accepts `--project` (before *or* after the subcomman
    `notifier_tombstone(recipient)` sets a flag the watcher sees on its next poll →
    it self-terminates (exit 3). `unregister` of a *live* address tombstones first,
    returns `('tombstoned', pid)`; the caller retries once it's offline, then soft-deletes.
+   **Terminology (two concepts, one word):** the `notifier.tombstone` column here is the
+   *per-watcher cooperative-shutdown flag*; the project lifecycle state `tombstoned`
+   (CR-SAN-024, see #5) is the *permanent retirement of a whole project*. They are
+   unrelated mechanisms — `archive`/`tombstone` merely *use* the per-watcher flag to
+   evict live watchers before changing the project state.
 9. **Removal authorization.** `Mainline` may unregister anyone; any address may
    unregister itself. (Honor-system; all-local cooperative orchestrators.)
 10. **Validated address format** — `'<Orchestrator> - <Project>'`, regex
@@ -174,11 +214,11 @@ liveness table is crash-safe rather than relying on a shutdown hook.
 ## How to run
 
 ```bash
-# tests (no install needed — runs against a temp store)
-python3 tests/test_sandesh.py            # or: python3 -m unittest -v (from repo root)
+# tests (no install needed — run against a temp store; per-file, discovery is broken)
+PYTHONPATH=. .venv/bin/python tests/<test_file>.py    # dev venv has [mcp,migrate]
 
-# install / re-install after edits (copies app/+bin/ to ~/.local/share/sandesh/)
-./install.sh
+# install / re-install (venv at ~/.local/share/sandesh/.venv + migrate/consolidate/reindex)
+SANDESH_ADMIN=<name> ./install.sh
 
 # use (installed launcher; ~/.local/bin must be on PATH, else call by full path)
 sandesh setup --project Demo
@@ -186,6 +226,14 @@ sandesh --project Demo register --address "Mainline - Demo" --kind mainline
 sandesh --project Demo send --from "Track 1 - Demo" --to "Mainline - Demo" --subject "ping"
 sandesh --project Demo notify --to "Mainline - Demo"     # blocks; run in background
 sandesh --project Demo fetch  --to "Mainline - Demo"
+
+# project lifecycle (CR-SAN-024) — two-tier authz, all three accept --dry-run
+sandesh archive   --project Demo --by "Mainline - Demo"   # read-only, reversible (own Mainline)
+sandesh unarchive --project Demo --by "Mainline - Demo"   # back to active (own Mainline)
+sandesh tombstone --project Demo --by <admin> --yes       # PERMANENT; archived-only;
+                                                          # ONLY the install-assigned super-admin;
+                                                          # interactive confirm unless --yes
+sandesh tombstone --project Demo --by <admin> --dry-run   # purge counts, writes nothing
 ```
 Env: `$SANDESH_PROJECT`, `$SANDESH_ADDRESS` (caller's own address),
 `$SANDESH_POLL_SECONDS`. `notify` exit codes: `0` mail / `2` timeout / `3` tombstoned /
@@ -219,36 +267,53 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
 - **Schema changes ship via the migration subsystem.** Don't hand-evolve a store's schema —
   add a migration. The `sandesh migrate` CLI command (gated behind the optional **`[migrate]`**
   extra — `yoyo` + `jsonschema`) applies pending migrations; `--status`/`--rollback`/`--check`
-  inspect and reverse them. On update the installer **auto-migrates** existing stores
+  inspect and reverse them. On update the installer **auto-migrates** the global DB
   (`install.sh` runs `sandesh migrate --all`), and the committed
   `sandesh/schema/current-schema.json` snapshot must stay in sync with `migrations/` — the CI
   gate in `publish-pypi.yml` asserts `migrate --dump-schema` equals that snapshot.
+- **`migrate` no longer accepts `--project`** (CR-SAN-022): the global DB is the single
+  migration target, so the subcommand has no per-project routing — `sandesh migrate
+  --project X` is a CLI error.
+- **`setup` of a tombstoned project refuses** (PRD O1): the tracker row is terminal; the
+  raised error message contains `retired (tombstoned)` and the row is left unchanged.
+- **Legacy per-project stores are auto-consolidated by the installer.** `install.sh` runs
+  `sandesh consolidate` (stdlib-only, idempotent) after the migrate block: it imports each
+  `projects/<id>/sandesh.db` into the global DB (ids remapped, reply chains relinked,
+  body files unmoved), enrolls the project, and keeps the legacy file as
+  `sandesh.db.pre-global`.
+- **The super-admin is NOT an address.** A single-row `admin` table (`CHECK (id = 1)`)
+  holds the Sandesh admin's name — never messageable, registrable, or listable. It is
+  assigned ONLY at install time via `$SANDESH_ADMIN` (an inline venv-python call in
+  `install.sh`); there is deliberately NO CLI or MCP surface to create/change it, and a
+  different-name re-assign is refused (`refusing to silently re-assign`).
+- **`register` requires enrollment.** Registering into a project with no tracker row
+  fails with `unknown project '<id>'` — run `setup` first (it enrolls the project).
 
 ---
 
-## Wave 2 — MCP server (plan)
+## The MCP server (shipped — Wave 2 + 6 + 7)
 
-1. **Verify the MCP Python SDK first** (read its actual API; it's the one real new
-   dependency — decide stdio vs HTTP transport).
-2. `app/mcp_server.py` exposing tools: `sandesh_setup`, `sandesh_register`,
-   `sandesh_unregister`, `sandesh_addressbook`, `sandesh_send`, `sandesh_reply`,
-   `sandesh_inbox`, `sandesh_fetch`, `sandesh_thread` — **each takes
-   `project_id`**. They call `sandesh_db.*` directly (the server is a thin adapter).
-3. **Do NOT** put the wake in MCP. `notify` stays a background process.
-4. Add the MCP dep to `install.sh` (or document a venv); keep the CLI working unchanged.
-5. Tests for the adapter layer.
+`sandesh/mcp_server.py` (FastMCP, stdio; the optional **`[mcp]`** extra) exposes **12 tools**:
+setup, register, unregister, addressbook, send, reply, inbox, fetch, thread (Wave 2),
+archive, unarchive (Wave 6 — tombstone/grant/revoke/admin are NEVER exposed), and search
+(Wave 7). Inbox/fetch carry the six filter params; `project_id` is optional everywhere it
+can be derived (and accepted-but-unused on the recipient-keyed tools). Errors map
+`ValueError`/`PermissionError` → `ToolError`. **The wake is NOT in MCP** — `notify` stays a
+background process (the agent's host re-invokes it; see the wake section above). The Pi
+extension (`integrations/pi/`) mirrors the same 12-tool surface over the CLI, with a native
+wake loop (`sendUserMessage(…, {deliverAs:"followUp"})`) and a ≥0.2.0 CLI session gate.
 
 ---
 
 ## Conventions
 
-- **Git:** the user works git-flow style (feature branches off `develop`). This repo is
-  fresh (initial commit on the default branch) — establish `develop` + a remote if asked.
+- **Git:** the user works git-flow style (feature branches off `develop`).
   **Commit/push only when asked; branch before committing on the default branch.**
 - **Commit messages: NEVER add Claude attribution** ("Generated with Claude",
   "Co-Authored-By: Claude"). Clean, technical messages only.
-- **New dependency?** This project's whole virtue is stdlib-only — adding a dep (only the
-  MCP SDK is anticipated) is a deliberate decision; read the real upstream API first.
+- **New dependency?** The core's whole virtue is stdlib-only — runtime deps live ONLY
+  behind the optional extras (`[mcp]` = the MCP SDK; `[migrate]` = yoyo + jsonschema);
+  adding one is a deliberate decision; read the real upstream API first.
 - Keep `sandesh_db.py` pure (model + ops, no printing/looping); presentation in `cli.py`,
-  the loop in `notify.py`, the future protocol in `mcp_server.py`.
+  the loop in `notify.py`, the MCP protocol in `mcp_server.py`.
 ```

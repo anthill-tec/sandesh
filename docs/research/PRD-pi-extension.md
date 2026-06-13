@@ -1,8 +1,8 @@
 # PRD — Sandesh as a Pi Extension
 
-**Status:** DRAFT (design contract — CRs spin from this later; no code yet)
+**Status:** AGREED (Wave-8 amendment §8 agreed 2026-06-13; §1–§7 shipped as Wave 4)
 **Owner:** Mainline - Sandesh
-**Wave:** Wave 4 (Pi integration)
+**Wave:** Wave 4 (Pi integration) + Wave 8 (global-store catch-up, §8)
 **Related:** `PRD-distribution.md` (Pi is a *first-class extension* integration, not the MCP
 adapter), `PRD-mcp-server.md` §6 (the wake constraint this must re-examine for Pi)
 
@@ -106,3 +106,63 @@ independently (PE1–PE5) and treat the wake as a follow-on.
 - Supporting Pi's HTTP-only MCP adapters (Sandesh is stdio/local; the extension shells the CLI
   directly, so no transport question for the verbs).
 - Other editors' extension ecosystems (revisit per demand).
+
+---
+
+## 8. Wave 8 — global-store catch-up (amendment, 2026-06-13)
+
+The extension shipped in Wave 4 against the pre-global-store world (9 tools, per-project
+stores). Sandesh-core has since shipped Wave 6 (one global DB, project tracker,
+`archive → tombstone` lifecycle, cross-project grants, install-assigned super-admin) and
+Wave 7 (inbox filters + FTS5 search; the MCP surface is now 12 tools). Because the
+extension is a **CLI shim (PE2)**, the Wave-6 *semantics* arrive for free through the
+installed CLI — what lags is the **tool surface**. This section is the catch-up contract.
+
+**PE6 — Full tool parity with the MCP surface (9 → 12 tools).** Add `sandesh_archive`,
+`sandesh_unarchive` (the Mainline-tier lifecycle pair, `by`-carrying, `--dry-run`
+supported), and `sandesh_search` (recipient + query required; `limit`/`offset`
+pagination; `sender_project` filter — mirroring the MCP tool's shape). `sandesh_inbox`
+and `sandesh_fetch` gain the six filter params (`sender`, `sender_project`, `kind`,
+`since`, `until`, `subject_like`), threaded to the existing CLI flags
+(`--from --from-project --kind --since --until --subject`). Param schemas and
+descriptions mirror the MCP/usage-scenarios wording (PE4) — `sender_project` presented
+as the cross-project proxy-stream filter.
+
+**PE7 — Hard CLI version gate: `sandesh` ≥ 0.2.0.** The session-start prereq probe
+(today: presence-only, `sandesh --version` exit 0) additionally parses the version and,
+when it is below 0.2.0, behaves exactly like the missing-CLI path: a one-time
+`ctx.ui.notify` warning naming the required minimum and the upgrade command, and the
+wake loop is NOT armed. (Rationale: the new verbs/flags would otherwise surface as
+confusing argparse errors from an old CLI.) Tool registration itself stays static and
+unblocked, as today.
+
+**PE8 — Wave-6 semantics ride the CLI; the shim adds no policy.** Tracker-state
+refusals (`project archived` / `project tombstoned` / `unknown project`), the
+cross-project grant error, and registration-requires-enrollment all surface through the
+existing error contract (non-zero exit → `Error` carrying the CLI stderr). The
+extension adds NO lifecycle/grant logic of its own; the catch-up pins the key error
+strings in tests so a CLI wording change is caught. The wake loop's exit-code handling
+(0/2 re-arm, 3/4/5 terminal) is already correct for the lifecycle world — unchanged.
+
+**PE9 — Admin boundary (parity with MCP).** `tombstone`, `grant`/`revoke`, admin
+assignment, and `reindex` are NEVER exposed as Pi tools — same boundary as the MCP
+server: agent-reachable surfaces carry no admin or maintenance verbs.
+
+**PE10 — Docs + packaging refresh.** Tool descriptions/promptSnippets gain the
+search/filter story (the sender-project proxy stream for parallel interdependent
+projects, FTS5 syntax + pagination, search-never-marks-read). `@anthill-tec/sandesh-pi`
+version aligns with the core release (0.2.0); publish via the existing npm workflow
+(CR-SAN-021).
+
+**PE11 — Wake delivery hardening: `deliverAs: "followUp"` (source-verified 2026-06-13).**
+Re-verification against `earendil-works/pi@main` (opensrc) confirmed W1 at the implementation
+level: `sendUserMessage` → `AgentSession.prompt(..., {source:"extension"})`, and the idle path
+runs `_runAgentPrompt(messages)` — a background watcher natively starts a turn. It also exposed
+a defect in the shipped wake loop: when the agent is MID-TURN (`isStreaming`), `prompt()`
+without `streamingBehavior` THROWS ("Agent is already processing…"); Pi catches it at the
+wiring site (`runner.emitError`) so the loop survives, but the wake message is silently lost
+and the loop hot-spins (notify exits 0 instantly while mail stays unread). Fix: the wake call
+becomes `pi.sendUserMessage(msg, { deliverAs: "followUp" })` — ignored when idle (immediate
+turn), queued as a follow-up when busy (delivered at end of the current turn). This resolves
+DN-pi-wake's open "steering vs new turn" question: **followUp**, never steer (mail must not
+hijack an in-flight turn).

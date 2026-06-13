@@ -6,6 +6,11 @@
 **messaging system for cooperating agent/orchestrator sessions**. A SQLite-backed
 maildir + a mailbox watcher, pure Python stdlib (no third-party deps).
 
+**Current version: [v0.2.0](https://github.com/anthill-tec/sandesh/releases/tag/v0.2.0)** —
+the global store (one DB for all projects, cross-project messaging behind an admin grant,
+archive→tombstone lifecycle), inbox filters + FTS5 search (CLI/MCP/Pi), 12 MCP tools, and
+the Pi extension at full parity.
+
 Built for the "Model-B" parallel-orchestration pattern (a Mainline coordinator +
 worker *Track* sessions that can't talk to each other directly), but project-agnostic.
 
@@ -35,13 +40,14 @@ Semantics: **To wakes / Cc silent** · `all-tracks` **broadcast** (minus sender)
 ## Layout
 
 Sandesh is a standard Python package (`sandesh/`) installed via `pyproject.toml`; the two
-console scripts (`sandesh`, `sandesh-mcp`) land on `$PATH`. Per-project runtime data lives under
-the XDG data dir:
+console scripts (`sandesh`, `sandesh-mcp`) land on `$PATH`. Runtime data lives under
+the XDG data dir — one global DB for all projects, plus a body folder per project:
 
 ```
-$XDG_DATA_HOME/sandesh/projects/<project_id>/     (default ~/.local/share/sandesh/…)
-├── sandesh.db
-└── messages/msg-<id>.md
+$XDG_DATA_HOME/sandesh/                           (default ~/.local/share/sandesh/…)
+├── sandesh.db                                    (the ONE global DB, WAL — all projects)
+└── projects/<project_id>/
+    └── messages/msg-<id>.md
 ```
 
 ## Install
@@ -58,7 +64,7 @@ server; the bare install is the stdlib-only CLI + `notify`.
 
 ```bash
 # persistent — both scripts on PATH (run `uv tool update-shell` once for PATH)
-uv tool install 'sandesh-relay[mcp]'           # from PyPI (once v0.1.0 is published — see RELEASING.md)
+uv tool install 'sandesh-relay[mcp]'           # from PyPI (once published — see RELEASING.md)
 uv tool install 'git+https://github.com/anthill-tec/sandesh'        # from git, today
 uv tool install '.[mcp]'                        # from a local checkout, today
 
@@ -139,6 +145,51 @@ sandesh --project Nai addressbook
 `$SANDESH_PROJECT` and `$SANDESH_ADDRESS` default `--project` and the caller's own
 address. `$SANDESH_POLL_SECONDS` sets the watcher cadence (default 10, floor 3).
 
+### Cross-project messaging
+
+All projects share the one global DB, but sending **across** projects is **admin-gated**:
+the sender's project needs a one-time grant — `sandesh grant --cross-project --project <id>
+--by <admin>` (revoke with `sandesh revoke --cross-project …`; project-wide, inherited by
+every participant of the granted project). Without it, the send fails with
+`cross-project sending not approved for project '<id>' — ask the Sandesh admin`. The admin
+is assigned **only at install** via `$SANDESH_ADMIN` (`install.sh`) — there is no CLI or MCP
+surface to set it. `all-tracks` broadcasts never cross projects, grant or not.
+`sandesh projects` shows each project's state and grant (`PROJECT  STATE  CROSS-PROJECT`).
+
+### Project lifecycle
+
+A project moves `active → archived → tombstoned` — strictly two-step, with two-tier
+authorization:
+
+```bash
+# read-only freeze — reversible, deletes NOTHING (project's own Mainline only)
+sandesh archive   --project Nai --by "Mainline - Nai"
+sandesh unarchive --project Nai --by "Mainline - Nai"
+
+# permanent retirement — ARCHIVED projects only (the install-assigned super-admin only)
+sandesh tombstone --project Nai --by <admin>          # prompts y/N; --yes to skip
+```
+
+- **`archive`** evicts the project's live `notify` watchers (cooperatively; `--force`
+  reaps stragglers) and freezes it: sends from/to it and new registrations are refused,
+  but every message, body, and thread stays fully readable. **`unarchive`** reverses it.
+- **`tombstone`** is destructive and irreversible: it purges the project's *internal*
+  messages (sender and all recipients inside the project) and deletes its
+  `projects/<id>/` body folder. What survives: cross-project envelopes (rows stay for
+  audit + thread anchoring — their bodies are lost), and the tracker row itself as a
+  permanent `tombstoned` marker (the project id is retired; `setup` refuses to reuse it).
+  Afterwards `inbox`/`fetch` hide the tombstoned project's traffic, and `thread` marks
+  holes with `incomplete chain — message(s) removed (project tombstoned)`.
+- **Who may do what:** `archive`/`unarchive` take the project's **own Mainline** as
+  `--by`; `tombstone` takes only the **super-admin** assigned at install via
+  `$SANDESH_ADMIN`. Without `--yes`, `tombstone` asks for interactive confirmation
+  (and refuses when stdin is not a terminal).
+- **`--dry-run`** (all three verbs) reports what would happen — watchers to evict,
+  the would-be state, and for `tombstone` the purge counts (`internal messages`,
+  `body files`, `cross-project messages` whose bodies would be lost) — and writes
+  nothing. Guards still apply: a dry-run on the wrong state or with the wrong `--by`
+  errors exactly like the real command.
+
 ## Schema migrations
 
 `sandesh migrate` is the schema-migration command — it brings an existing store up to the
@@ -149,19 +200,19 @@ latest schema. It needs the optional **`[migrate]`** extra (which pulls in `yoyo
 pip install 'sandesh-relay[migrate]'      # or: uv tool install 'sandesh-relay[migrate]'
 ```
 
-Updates **auto-migrate**: `install.sh` runs `sandesh migrate --all` on update, so every
-existing project store is migrated to the latest schema as part of the install. (If the
+Updates **auto-migrate**: `install.sh` runs `sandesh migrate --all` on update, so the
+global DB is migrated to the latest schema as part of the install. (If the
 `[migrate]` extra is absent the installer prints a notice and continues — the migration is
-simply skipped, not fatal.) A fresh install with no stores is a clean no-op.
+simply skipped, not fatal.) A fresh install with no data is a clean no-op.
 
-The flags:
+The flags (the global DB is the single target — there is no `--project` on `migrate`):
 
 ```bash
-sandesh migrate --project <id>            # apply pending migrations to one store
-sandesh migrate --all                     # apply to every project store (what the installer runs)
-sandesh migrate --status --project <id>   # show applied / pending migrations
-sandesh migrate --rollback --project <id> # roll back one migration step
-sandesh migrate --check --project <id>    # pending ⇒ non-zero (error); schema drift ⇒ warning
+sandesh migrate            # apply pending migrations
+sandesh migrate --all      # same single global target (what the installer runs)
+sandesh migrate --status   # show applied / pending migrations
+sandesh migrate --rollback # roll back one migration step
+sandesh migrate --check    # pending ⇒ non-zero (error); schema drift ⇒ warning
 ```
 
 ## MCP server
@@ -231,7 +282,7 @@ python3 -m unittest -v          # from the repo root (stdlib-only: CLI + library
   — registers the Sandesh verbs as Pi tools (CR-SAN-013) and a **native wake** (CR-SAN-014: the
   extension wakes the idle agent itself via `sendUserMessage`, no host background task) — published to
   npm as `@anthill-tec/sandesh-pi` (CR-SAN-015). See [`integrations/pi/README.md`](integrations/pi/README.md).
-- The first `v0.1.0` releases (PyPI / AUR / MCP-registry / npm) are maintainer actions — see RELEASING.md.
+- The registry publishes (PyPI / AUR / MCP-registry / npm) are maintainer actions — see RELEASING.md.
 
 ## License
 

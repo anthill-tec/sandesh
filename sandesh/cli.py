@@ -33,7 +33,7 @@ def _ctx(args):
     """(project_id, store_dir, connection)."""
     project = _project(args)
     store = sdb.store_dir(project)
-    return project, store, sdb.connect(store)
+    return project, store, sdb.connect()
 
 
 def _self_addr(args, flag):
@@ -61,8 +61,25 @@ def cmd_setup(args):
 
 
 def cmd_projects(args):
-    ps = sdb.list_projects()
-    print("\n".join(ps) if ps else "(no projects set up)")
+    con = sdb.connect()
+    try:
+        if getattr(args, "all", False):
+            rows = con.execute(
+                "SELECT project_id, state, xproj_granted_at FROM project "
+                "ORDER BY project_id").fetchall()
+        else:
+            rows = con.execute(
+                "SELECT project_id, state, xproj_granted_at FROM project "
+                "WHERE state != 'tombstoned' ORDER BY project_id").fetchall()
+        if not rows:
+            print("(no projects set up)")
+            return 0
+        print(f"{'PROJECT':20} {'STATE':10} CROSS-PROJECT")
+        for r in rows:
+            print(f"{r['project_id']:20} {r['state']:10} "
+                  f"{'✓' if r['xproj_granted_at'] else '-'}")
+    finally:
+        con.close()
     return 0
 
 
@@ -96,7 +113,7 @@ def cmd_unregister(args):
 
 def cmd_addressbook(args):
     project, _, con = _ctx(args)
-    book = sdb.addressbook(con)
+    book = sdb.addressbook(con, project)
     if not book:
         print(f"addressbook ({project}): empty")
         return 0
@@ -161,7 +178,14 @@ def cmd_inbox(args):
     who = _self_addr(args, "to")
     if not who:
         sys.exit("[sandesh] ERROR: pass --to '<address>' (or set $SANDESH_ADDRESS).")
-    rows = sdb.inbox(con, who, unread_only=not args.all)
+    try:
+        rows = sdb.inbox(con, who, unread_only=not args.all,
+                         sender=args.from_, sender_project=args.from_project,
+                         kind=args.kind, since=args.since, until=args.until,
+                         subject_like=args.subject)
+    except ValueError as exc:
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        sys.exit(1)
     print(f"{'#':>5} {'FROM':16} {'ROLE':4} {'READ':5} SUBJECT")
     for r in rows:
         print(f"{r['id']:>5} {r['from_addr']:16} {r['role']:4} "
@@ -175,7 +199,14 @@ def cmd_fetch(args):
     who = _self_addr(args, "to")
     if not who:
         sys.exit("[sandesh] ERROR: pass --to '<address>' (or set $SANDESH_ADDRESS).")
-    items = sdb.fetch(con, store, who, mark=not args.peek)
+    try:
+        items = sdb.fetch(con, store, who, mark=not args.peek,
+                          sender=args.from_, sender_project=args.from_project,
+                          kind=args.kind, since=args.since, until=args.until,
+                          subject_like=args.subject)
+    except ValueError as exc:
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        sys.exit(1)
     _render(items, who)
     if items and not args.peek:
         print(f"(marked {len(items)} read)")
@@ -188,6 +219,9 @@ def cmd_thread(args):
     if not chain:
         sys.exit(f"[sandesh] no such message #{args.id}")
     for m in chain:
+        if isinstance(m, dict) and "warning" in m:   # tombstoned hole (§S2)
+            print(m["warning"])
+            continue
         ind = "  " if m["in_reply_to"] else ""
         print(f"{ind}#{m['id']} {m['from_addr']} · {m['created_at']}")
         print(f"{ind}   {m['subject']}")
@@ -205,7 +239,159 @@ def cmd_migrate(args):
     return _migrate.cmd_migrate(args)
 
 
+def cmd_grant(args):
+    con = sdb.connect()
+    try:
+        sdb.grant_xproj(con, args.project, by=args.by)
+    except (ValueError, PermissionError) as exc:
+        # Print explicitly (not via SystemExit's message) so in-process callers
+        # that capture stderr still see the error text.
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        con.close()
+    print(f"cross-project sending granted to project {args.project!r} (by {args.by})")
+    return 0
+
+
+def cmd_revoke(args):
+    con = sdb.connect()
+    try:
+        sdb.revoke_xproj(con, args.project, by=args.by)
+    except (ValueError, PermissionError) as exc:
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        con.close()
+    print(f"cross-project sending revoked for project {args.project!r} (by {args.by})")
+    return 0
+
+
+def cmd_archive(args):
+    con = sdb.connect()
+    try:
+        if args.dry_run:
+            watchers = sdb.archive_preview(con, args.project, args.by)
+            print(f"[dry-run] project {args.project!r} would become archived")
+            if watchers:
+                print(f"[dry-run] watchers to evict ({len(watchers)}):")
+                for addr in watchers:
+                    print(f"  {addr}")
+            else:
+                print("[dry-run] watchers to evict: none")
+            print("[dry-run] nothing written")
+            return 0
+        sdb.archive(con, args.project, args.by, force=args.force)
+    except (ValueError, PermissionError, RuntimeError) as exc:
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        con.close()
+    print(f"archived project {args.project!r} (by {args.by}) — "
+          f"read-only until unarchived; nothing deleted")
+    return 0
+
+
+def cmd_unarchive(args):
+    con = sdb.connect()
+    try:
+        if args.dry_run:
+            sdb.unarchive_preview(con, args.project, args.by)
+            print(f"[dry-run] project {args.project!r} would become active")
+            print("[dry-run] nothing written")
+            return 0
+        sdb.unarchive(con, args.project, args.by)
+    except (ValueError, PermissionError, RuntimeError) as exc:
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        con.close()
+    print(f"unarchived project {args.project!r} (by {args.by}) — active again")
+    return 0
+
+
+def cmd_tombstone(args):
+    con = sdb.connect()
+    try:
+        if args.dry_run:
+            counts = sdb.tombstone_preview(con, args.project, args.by)
+            print(f"[dry-run] project {args.project!r} would become tombstoned:")
+            print(f"  internal messages: {counts['internal_messages']} (rows purged)")
+            print(f"  body files: {counts['body_files']} (deleted from disk)")
+            print(f"  cross-project messages: {counts['cross_project_messages']} "
+                  f"(rows survive; their bodies are lost)")
+            print("[dry-run] nothing written")
+            return 0
+        if not args.yes:
+            if not sys.stdin.isatty():
+                print(f"[sandesh] tombstoning project {args.project!r} is destructive "
+                      f"and irreversible — pass --yes to confirm "
+                      f"(stdin is not a terminal, cannot prompt)", file=sys.stderr)
+                sys.exit(1)
+            answer = input(
+                f"tombstone project {args.project!r}? This permanently purges its "
+                f"internal messages and deletes its body folder. [y/N] ")
+            if answer.strip().lower() not in ("y", "yes"):
+                print("aborted — nothing changed")
+                return 1
+        sdb.tombstone_project(con, args.project, args.by, force=args.force)
+    except (ValueError, PermissionError, RuntimeError) as exc:
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        con.close()
+    print(f"tombstoned project {args.project!r} (by {args.by}) — internal history "
+          f"purged, body folder deleted; cross-project envelopes survive")
+    return 0
+
+
+def cmd_consolidate(args):
+    summaries = sdb.consolidate()
+    if not summaries:
+        print("nothing to consolidate — no legacy per-project stores found.")
+        return 0
+    for entry in summaries:
+        print(f"consolidated {entry['project_id']}: "
+              f"{entry['messages_imported']} message(s), "
+              f"{entry['addresses_imported']} address(es) → sandesh.db.pre-global")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
+
+def cmd_search(args):
+    con = sdb.connect()
+    try:
+        try:
+            result = sdb.search(con, args.to, args.query, limit=args.limit,
+                                offset=args.offset,
+                                sender_project=args.from_project)
+        except ValueError as exc:
+            print(f"[sandesh] {exc}", file=sys.stderr)
+            sys.exit(1)
+    finally:
+        con.close()
+    if result.get("reindexed"):
+        print("(index was empty — reindexed before searching)")
+    if not result["hits"]:
+        print(f"(no matches for {args.query!r})")
+    for h in result["hits"]:
+        print(f"[#{h['id']}] {h['from']} · {h['created_at']}")
+        print(f"   {h['subject']}")
+        print(f"   {h['snippet']}")
+    print(f"total: {result['total']}")
+    return 0
+
+
+def cmd_reindex(args):
+    con = sdb.connect()
+    try:
+        n = sdb.reindex(con)
+    finally:
+        con.close()
+    print(f"reindexed {n} message(s)")
+    return 0
+
 
 def build_parser():
     # --project is shared so it works BOTH before and after the subcommand:
@@ -223,7 +409,10 @@ def build_parser():
 
     sub.add_parser("setup", parents=[common],
                    help="provision a project (create store + init DB)").set_defaults(fn=cmd_setup)
-    sub.add_parser("projects", parents=[common], help="list set-up projects").set_defaults(fn=cmd_projects)
+    p = sub.add_parser("projects", parents=[common], help="list set-up projects")
+    p.add_argument("--all", action="store_true",
+                   help="include tombstoned projects (permanent markers)")
+    p.set_defaults(fn=cmd_projects)
 
     p = sub.add_parser("register", parents=[common], help="self-register an address")
     p.add_argument("--address", required=True)
@@ -258,14 +447,40 @@ def build_parser():
     p.add_argument("--all", action="store_true", help="reply-all (cc the parent's recipients)")
     p.set_defaults(fn=cmd_reply)
 
+    # CR-SAN-026 §S3: server-side filter flags, mapped 1:1 onto the lib's
+    # inbox/fetch filter params. --from-project is the headline — the
+    # cross-project proxy stream (only mail whose SENDER belongs to that
+    # sibling project).
     p = sub.add_parser("inbox", parents=[common], help="list a recipient's messages")
     p.add_argument("--to")
     p.add_argument("--all", action="store_true", help="include already-read")
+    p.add_argument("--from-project", dest="from_project",
+                   help="only mail whose sender belongs to this project "
+                        "(the cross-project proxy stream)")
+    p.add_argument("--from", dest="from_", help="only mail from this exact sender address")
+    p.add_argument("--kind", help="only this message kind (request/directive/fyi)")
+    p.add_argument("--since", help="only mail at/after this time "
+                                   "(YYYY-MM-DD or 'YYYY-MM-DD HH:MM:SS', inclusive)")
+    p.add_argument("--until", help="only mail at/before this time "
+                                   "(YYYY-MM-DD or 'YYYY-MM-DD HH:MM:SS', inclusive; "
+                                   "date-only means end of that day)")
+    p.add_argument("--subject", help="case-insensitive substring match on subject")
     p.set_defaults(fn=cmd_inbox)
 
     p = sub.add_parser("fetch", parents=[common], help="consolidate + read unread messages")
     p.add_argument("--to")
     p.add_argument("--peek", action="store_true", help="render without marking read")
+    p.add_argument("--from-project", dest="from_project",
+                   help="only mail whose sender belongs to this project "
+                        "(the cross-project proxy stream)")
+    p.add_argument("--from", dest="from_", help="only mail from this exact sender address")
+    p.add_argument("--kind", help="only this message kind (request/directive/fyi)")
+    p.add_argument("--since", help="only mail at/after this time "
+                                   "(YYYY-MM-DD or 'YYYY-MM-DD HH:MM:SS', inclusive)")
+    p.add_argument("--until", help="only mail at/before this time "
+                                   "(YYYY-MM-DD or 'YYYY-MM-DD HH:MM:SS', inclusive; "
+                                   "date-only means end of that day)")
+    p.add_argument("--subject", help="case-insensitive substring match on subject")
     p.set_defaults(fn=cmd_fetch)
 
     p = sub.add_parser("thread", parents=[common], help="show a message's reply chain")
@@ -277,8 +492,14 @@ def build_parser():
     p.add_argument("--timeout", type=int, default=_notify.DEFAULT_TIMEOUT_SECS)
     p.set_defaults(fn=cmd_notify)
 
-    p = sub.add_parser("migrate", parents=[common],
-                       help="apply/inspect schema migrations (needs the [migrate] extra)")
+    # CR-SAN-022 DEC-B: the migrate engine targets the single global DB, so the
+    # migrate subparser deliberately does NOT inherit the common --project
+    # parent (`sandesh migrate --project X` is an argparse error). The
+    # pre-subcommand `sandesh --project X migrate` form still parses via the
+    # top-level parser; migrate simply ignores the value.
+    p = sub.add_parser("migrate",
+                       help="apply/inspect schema migrations on the global DB "
+                            "(needs the [migrate] extra)")
     p.add_argument("--status", action="store_true", help="report applied vs pending (no writes)")
     p.add_argument("--rollback", action="store_true",
                    help="roll back the single most-recent applied migration")
@@ -293,6 +514,97 @@ def build_parser():
     p.add_argument("--json", dest="json", action="store_true",
                    help="machine-parseable JSON output for --diff")
     p.set_defaults(fn=cmd_migrate)
+
+    # CR-SAN-022 §S3: one-time import of legacy per-project stores into the
+    # global DB. Global like `migrate` — no --project needed (the
+    # pre-subcommand `sandesh --project X consolidate` form still parses;
+    # the value is simply ignored).
+    p = sub.add_parser("consolidate",
+                       help="import legacy per-project stores into the global DB "
+                            "(one-time; legacy files become sandesh.db.pre-global)")
+    p.set_defaults(fn=cmd_consolidate)
+
+    # CR-SAN-027 §S3: full-text search over the caller's OWN mail. Parentless
+    # like migrate/consolidate — the engine targets the single global DB, so
+    # `search --project X` is an argparse error (no per-project routing).
+    p = sub.add_parser("search",
+                       help="full-text search over your own mail (FTS5 syntax: "
+                           "\"quoted phrases\", AND/OR/NOT)")
+    p.add_argument("query", help="the FTS5 query")
+    p.add_argument("--to", required=True, help="your address (whose mail to search)")
+    p.add_argument("--from-project", dest="from_project",
+                   help="only hits whose sender belongs to this project")
+    p.add_argument("--limit", type=int, default=20, help="page size (default 20)")
+    p.add_argument("--offset", type=int, default=0, help="page start (default 0)")
+    p.set_defaults(fn=cmd_search)
+
+    # CR-SAN-027 §S2: rebuild the whole FTS index from the message rows + body
+    # files. Parentless and arg-free — global DB, plumbing only.
+    p = sub.add_parser("reindex",
+                       help="rebuild the full-text search index from messages + bodies")
+    p.set_defaults(fn=cmd_reindex)
+
+    # CR-SAN-023 §S2: admin-only verbs (CLI-only — never MCP). Like migrate/
+    # consolidate, these deliberately do NOT inherit parents=[common]: their
+    # --project is the TARGET project of the grant, not routing context (avoids
+    # the dual-position SUPPRESS trap). There is NO `sandesh admin` subcommand —
+    # admin assignment happens only in install.sh via $SANDESH_ADMIN (PRD O3).
+    p = sub.add_parser("grant",
+                       help="grant cross-project sending to a project (Sandesh admin only)")
+    p.add_argument("--cross-project", dest="cross_project", action="store_true",
+                   required=True, help="the cross-project access grant (required)")
+    p.add_argument("--project", required=True, help="the TARGET project receiving the grant")
+    p.add_argument("--by", required=True, help="your admin name (must match the stored admin)")
+    p.set_defaults(fn=cmd_grant)
+
+    p = sub.add_parser("revoke",
+                       help="revoke a project's cross-project grant (Sandesh admin only)")
+    p.add_argument("--cross-project", dest="cross_project", action="store_true",
+                   required=True, help="the cross-project access grant (required)")
+    p.add_argument("--project", required=True, help="the TARGET project losing the grant")
+    p.add_argument("--by", required=True, help="your admin name (must match the stored admin)")
+    p.set_defaults(fn=cmd_revoke)
+
+    # CR-SAN-024 §S3: project lifecycle verbs. Parentless like grant/revoke —
+    # their --project is the TARGET project, not routing context. Two-tier
+    # authz: archive/unarchive take the project's own Mainline (--by), the
+    # destructive tombstone takes the install-assigned super-admin (--by) and
+    # an interactive confirm (bypass with --yes). All three accept --dry-run
+    # (report only, writes nothing).
+    p = sub.add_parser("archive",
+                       help="archive a project — read-only, reversible "
+                            "(its own Mainline only)")
+    p.add_argument("--project", required=True, help="the project to archive")
+    p.add_argument("--by", required=True,
+                   help="the project's own Mainline address")
+    p.add_argument("--force", action="store_true",
+                   help="reap watchers that ignore the eviction tombstone")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true",
+                   help="report watchers to evict + would-be state; write nothing")
+    p.set_defaults(fn=cmd_archive)
+
+    p = sub.add_parser("unarchive",
+                       help="reactivate an archived project (its own Mainline only)")
+    p.add_argument("--project", required=True, help="the project to reactivate")
+    p.add_argument("--by", required=True,
+                   help="the project's own Mainline address")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true",
+                   help="report would-be state; write nothing")
+    p.set_defaults(fn=cmd_unarchive)
+
+    p = sub.add_parser("tombstone",
+                       help="permanently retire an ARCHIVED project — purges its "
+                            "internal history + body folder (Sandesh admin only)")
+    p.add_argument("--project", required=True, help="the project to tombstone")
+    p.add_argument("--by", required=True,
+                   help="your admin name (must match the stored admin)")
+    p.add_argument("--force", action="store_true",
+                   help="reap watchers that ignore the eviction tombstone")
+    p.add_argument("--yes", action="store_true",
+                   help="skip the interactive confirmation")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true",
+                   help="report would-be purge counts; write nothing")
+    p.set_defaults(fn=cmd_tombstone)
     return ap
 
 

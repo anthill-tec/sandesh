@@ -74,6 +74,47 @@ else
   echo "        install it and migrate later:  pip install 'sandesh-relay[migrate]' && sandesh migrate --all"
 fi
 
+# --- consolidate legacy per-project stores (CR-SAN-022 §S3) -------------------
+# Stdlib-only (no [migrate] extra needed), hence OUTSIDE the yoyo probe above.
+# Idempotent: imported stores become sandesh.db.pre-global and are skipped on
+# re-run. Under `set -e` a genuine consolidation error ABORTS the install.
+echo "consolidating legacy per-project stores into the global DB …"
+"$VENV/bin/sandesh" consolidate
+echo "✓ consolidation done"
+
+# CR-SAN-027 §S2: rebuild the full-text search index once on install/update —
+# covers pre-FTS history and freshly consolidated stores. Stdlib-only (FTS5 is
+# compiled into the interpreter), so it needs no extra and runs unconditionally.
+# Idempotent. Under `set -e` a genuine error ABORTS the install.
+echo "rebuilding the full-text search index …"
+"$VENV/bin/sandesh" reindex
+echo "✓ search index rebuilt"
+
+# CR-SAN-023 §S2b: assign the Sandesh admin from $SANDESH_ADMIN via an inline
+# venv-python call — there is deliberately NO CLI verb for this (PRD O3: no
+# agent-reachable surface may create/change the admin). The name is read from
+# the environment INSIDE python (quote/injection-safe — never interpolated into
+# the code), and the different-name re-assign refusal (ValueError) is caught
+# there and surfaced as a notice, NOT an install abort (the python exits 0, so
+# `set -e` lets the install COMPLETE). Unset → skip with a notice.
+if [ -n "${SANDESH_ADMIN:-}" ]; then
+  SANDESH_ADMIN="$SANDESH_ADMIN" "$VENV/bin/python" - <<'PY'
+import os
+from sandesh import sandesh_db as s
+con = s.connect()
+try:
+    s.assign_admin(con, os.environ["SANDESH_ADMIN"])
+    print("✓ Sandesh admin assigned: %r" % s.admin_name(con))
+except ValueError as exc:
+    print("  NOTE: %s — keeping %r (install continues)" % (exc, s.admin_name(con)))
+finally:
+    con.close()
+PY
+else
+  echo "  NOTE: \$SANDESH_ADMIN not set — admin assignment skipped."
+  echo "        assign later by re-running:  SANDESH_ADMIN=<name> ./install.sh"
+fi
+
 echo "✓ venv      → $VENV"
 echo "✓ launcher  → $BINDIR/sandesh"
 if [ -x "$VENV/bin/sandesh-mcp" ]; then
