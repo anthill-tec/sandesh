@@ -6,6 +6,11 @@
 **messaging system for cooperating agent/orchestrator sessions**. A SQLite-backed
 maildir + a mailbox watcher, pure Python stdlib (no third-party deps).
 
+**Current version: [v0.2.0](https://github.com/anthill-tec/sandesh/releases/tag/v0.2.0)** —
+the global store (one DB for all projects, cross-project messaging behind an admin grant,
+archive→tombstone lifecycle), inbox filters + FTS5 search (CLI/MCP/Pi), 12 MCP tools, and
+the Pi extension at full parity.
+
 Built for the "Model-B" parallel-orchestration pattern (a Mainline coordinator +
 worker *Track* sessions that can't talk to each other directly), but project-agnostic.
 
@@ -59,7 +64,7 @@ server; the bare install is the stdlib-only CLI + `notify`.
 
 ```bash
 # persistent — both scripts on PATH (run `uv tool update-shell` once for PATH)
-uv tool install 'sandesh-relay[mcp]'           # from PyPI (once v0.1.0 is published — see RELEASING.md)
+uv tool install 'sandesh-relay[mcp]'           # from PyPI (once published — see RELEASING.md)
 uv tool install 'git+https://github.com/anthill-tec/sandesh'        # from git, today
 uv tool install '.[mcp]'                        # from a local checkout, today
 
@@ -277,7 +282,7 @@ python3 -m unittest -v          # from the repo root (stdlib-only: CLI + library
   — registers the Sandesh verbs as Pi tools (CR-SAN-013) and a **native wake** (CR-SAN-014: the
   extension wakes the idle agent itself via `sendUserMessage`, no host background task) — published to
   npm as `@anthill-tec/sandesh-pi` (CR-SAN-015). See [`integrations/pi/README.md`](integrations/pi/README.md).
-- The first `v0.1.0` releases (PyPI / AUR / MCP-registry / npm) are maintainer actions — see RELEASING.md.
+- The registry publishes (PyPI / AUR / MCP-registry / npm) are maintainer actions — see RELEASING.md.
 
 ## License
 
