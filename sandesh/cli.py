@@ -351,6 +351,10 @@ def cmd_consolidate(args):
         print("nothing to consolidate — no legacy per-project stores found.")
         return 0
     for entry in summaries:
+        if entry.get("skipped"):
+            print(f"skipped {entry['project_id']}: not a legacy store "
+                  f"({entry['reason']}) — file left untouched")
+            continue
         print(f"consolidated {entry['project_id']}: "
               f"{entry['messages_imported']} message(s), "
               f"{entry['addresses_imported']} address(es) → sandesh.db.pre-global")
