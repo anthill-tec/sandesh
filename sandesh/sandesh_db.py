@@ -1135,6 +1135,29 @@ def _consolidate_store(con, project_id, legacy_path):
             "addresses_imported": addresses_imported}
 
 
+def _probe_legacy_store(legacy_path):
+    """Read-only probe of a candidate legacy store (CR-SAN-033).
+
+    Returns None when the file is a real legacy store (its sqlite_master has
+    an `address` table); otherwise a short skip reason — 'no address table'
+    for a SQLite file lacking one, 'not a SQLite database' for corrupt /
+    non-SQLite files. Never writes; the probe connection is closed on all
+    paths."""
+    try:
+        src = sqlite3.connect(f"file:{legacy_path}?mode=ro", uri=True)
+    except sqlite3.DatabaseError:
+        return "not a SQLite database"
+    try:
+        row = src.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='address'"
+        ).fetchone()
+    except sqlite3.DatabaseError:
+        return "not a SQLite database"
+    finally:
+        src.close()
+    return None if row is not None else "no address table"
+
+
 def consolidate():
     """One-time import of legacy per-project stores into the global DB.
 
@@ -1143,8 +1166,11 @@ def consolidate():
     chains relinked, dangling in_reply_to → NULL, body_path verbatim — files
     unmoved), message_recipient rows with remapped message_id, enrolls the
     project 'active', then renames the legacy DB → sandesh.db.pre-global.
-    Idempotent: renamed stores are skipped on re-run; notifier rows are never
-    imported. Returns a list of per-project summary dicts
+    A candidate that is not a real legacy store (no `address` table, corrupt,
+    or not SQLite at all) is skipped — left untouched, no rename — and yields
+    {'project_id', 'skipped': True, 'reason'} instead (CR-SAN-033); the scan
+    continues. Idempotent: renamed stores are skipped on re-run; notifier rows
+    are never imported. Returns a list of per-project summary dicts
     ({'project_id', 'messages_imported', 'addresses_imported'})."""
     projects_dir = os.path.join(root_dir(), "projects")
     summaries = []
@@ -1155,6 +1181,11 @@ def consolidate():
         for project_id in sorted(os.listdir(projects_dir)):
             legacy = os.path.join(projects_dir, project_id, DB_FILE)
             if not os.path.isfile(legacy):           # .pre-global-only dirs: no-op
+                continue
+            reason = _probe_legacy_store(legacy)
+            if reason is not None:                   # non-store debris: skip, no rename
+                summaries.append({"project_id": project_id,
+                                  "skipped": True, "reason": reason})
                 continue
             summaries.append(_consolidate_store(con, project_id, legacy))
     finally:
