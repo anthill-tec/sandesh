@@ -1,6 +1,6 @@
 # CR-SAN-038 — Pi surface: uvx-on-demand CLI + provision nudge
 
-**Status:** PENDING
+**Status:** IN_PROGRESS
 **Priority:** Medium
 **Depends on:** CR-SAN-036 (`sandesh init`)
 **Labels:** pi, lifecycle, dx
