@@ -14,6 +14,8 @@ the Pi extension at full parity.
 Built for the "Model-B" parallel-orchestration pattern (a Mainline coordinator +
 worker *Track* sessions that can't talk to each other directly), but project-agnostic.
 
+> 📖 **Must-read:** [User Guide](docs/USER_GUIDE.md) — how to run cooperating sessions (MCP & Pi).
+
 ## Why
 
 Sessions can't message each other directly, and re-invoking a *sleeping* agent is
@@ -193,21 +195,11 @@ python3 -m unittest -v          # from the repo root (stdlib-only: CLI + library
 
 ## Roadmap
 
-- **MCP server — DONE** (Phase 2): 9 tools over stdio + `instructions` + `sandesh://usage`
-  resource; `[mcp]`-extra isolation; in-memory + real-subprocess E2E tests. The `notify` watcher
-  remains the wake path.
-- **Packaging — DONE** (Phase 3): `pyproject.toml` (hatchling + tag-driven `hatch-vcs` version),
-  `sandesh`/`sandesh-mcp` console scripts, `[mcp]` extra; uv/pipx/`install.sh` install.
-- **PyPI publish — DONE** (Phase 3, CR-SAN-010): `.github/workflows/publish-pypi.yml` publishes
-  `sandesh-relay` to PyPI on a GitHub Release via OIDC trusted publishing (TestPyPI dry-run on
-  manual dispatch); version is git-tag-driven. See **[RELEASING.md](RELEASING.md)**.
-- **Discovery/distribution — DONE** (Phase 3): official **MCP Registry** listing
-  (CR-SAN-011, [`server.json`](server.json) `io.github.anthill-tec/sandesh`).
-- **Pi extension — DONE** (Phase 4): a native Pi extension at [`integrations/pi/`](integrations/pi/)
-  — registers the Sandesh verbs as Pi tools (CR-SAN-013) and a **native wake** (CR-SAN-014: the
-  extension wakes the idle agent itself via `sendUserMessage`, no host background task) — published to
-  npm as `@anthill-tec/sandesh-pi` (CR-SAN-015). See [`integrations/pi/README.md`](integrations/pi/README.md).
-- The registry publishes (PyPI / MCP-registry / npm) are maintainer actions — see RELEASING.md.
+Shipped: the MCP server (stdio, `[mcp]` extra), packaging + OIDC PyPI publish, the
+official **MCP Registry** listing (`io.github.anthill-tec/sandesh`), and the **Pi
+extension** with native wake ([`integrations/pi/`](integrations/pi/), npm
+`@anthill-tec/sandesh-pi`). Registry publishes (PyPI / MCP-registry / npm) are
+maintainer actions — see [RELEASING.md](RELEASING.md).
 
 ## License
 
