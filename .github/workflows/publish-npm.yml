@@ -93,8 +93,16 @@ jobs:
         run: npm install -g npm@latest
       - name: Publish to npm
         working-directory: integrations/pi
-        run: npm publish --access public
-        # no token secret — OIDC trusted publishing only (provenance auto)
+        # INAUGURAL publish of a NEW scoped package: npm has NO "pending publishers"
+        # (unlike PyPI), so a trusted publisher can't be configured until the package
+        # exists. Bootstrap with a token (NODE_AUTH_TOKEN ← the NPM_TOKEN secret;
+        # setup-node's registry-url wires it into .npmrc). --provenance still attaches a
+        # build attestation via the id-token: write permission above. Once the package
+        # exists, configure Trusted Publishing on npmjs.com and revert to OIDC-only
+        # (drop this env + the NPM_TOKEN secret).
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
 
   dry-run:
     needs: build-check
