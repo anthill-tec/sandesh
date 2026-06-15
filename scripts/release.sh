@@ -145,7 +145,9 @@ cmd_finish() {
     local kind
     kind="$(branch_kind "$branch")"
 
-    local flow_cmd="git flow $kind finish $VERSION"
+    # Pass -m so git-flow does not open the annotated-tag editor (which
+    # GIT_MERGE_AUTOEDIT does not suppress) — otherwise finish hangs/aborts non-interactively.
+    local flow_cmd="git flow $kind finish -m \"Release $VERSION\" $VERSION"
     local push_cmd="git push origin main develop --tags"
 
     if [ "$DRY_RUN" = true ]; then
@@ -155,7 +157,7 @@ cmd_finish() {
     fi
 
     debug "finishing: $flow_cmd"
-    GIT_MERGE_AUTOEDIT=no git flow "$kind" finish "$VERSION"
+    GIT_MERGE_AUTOEDIT=no git flow "$kind" finish -m "Release $VERSION" "$VERSION"
     debug "pushing: $push_cmd"
     git push origin main develop --tags
 }
