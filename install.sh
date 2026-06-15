@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# install.sh — PEP-668-safe own-venv install of Sandesh from this source checkout.
+# install.sh — PEP-668-safe own-venv install (and uninstall) of Sandesh from this
+# source checkout.
 #
-#   ./install.sh
+#   ./install.sh                       install (default)
+#   ./install.sh --uninstall [--purge] remove the install (--purge also wipes data)
+#   ./install.sh -h | --help           show usage and exit
 #
 # This is the offline / from-source FALLBACK installer (README leads with `uv`,
 # then `pipx`). It needs only `python3` (with the `venv` module) and `pip`, NOT
@@ -11,6 +14,9 @@
 # ~/.local/share/sandesh/.venv), pip-installs the `sandesh-relay` package from
 # this checkout into it, and symlinks the `sandesh` + `sandesh-mcp` console
 # scripts onto $HOME/.local/bin so they are on PATH.
+#
+# `--uninstall` removes the venv and the two `sandesh*` launchers but KEEPS the
+# data store; add `--purge` to also delete the whole data home ($DEST).
 #
 # Per-project data lives under  <data_home>/sandesh/projects/<project_id>/  and is
 # created by `sandesh setup --project <id>`.
@@ -25,6 +31,78 @@ VENV="$DEST/.venv"
 # the box AND the venv gets yoyo+jsonschema for `migrate --all` (DEC-2); a caller
 # can override (e.g. SANDESH_INSTALL_EXTRAS="" for base-only).
 EXTRAS="${SANDESH_INSTALL_EXTRAS-[mcp,migrate]}"
+
+usage() {
+  cat <<EOF
+Sandesh installer — own-venv install/uninstall from this source checkout.
+
+Usage:
+  ./install.sh                        install Sandesh (default mode)
+  ./install.sh --uninstall            remove the venv + launchers, KEEP the data store
+  ./install.sh --uninstall --purge    also delete the data home ($DEST)
+  ./install.sh -h | --help            show this help and exit
+
+Install builds a venv at  $VENV  and symlinks the
+sandesh / sandesh-mcp launchers into  $BINDIR.
+EOF
+}
+
+# --- uninstall ---------------------------------------------------------------
+do_uninstall() {
+  local purge="$1"
+  echo "uninstalling Sandesh"
+
+  # Detect whether anything was actually present, so a clean env prints a notice.
+  local present=0
+  [ -e "$BINDIR/sandesh" ] || [ -L "$BINDIR/sandesh" ] && present=1
+  [ -e "$BINDIR/sandesh-mcp" ] || [ -L "$BINDIR/sandesh-mcp" ] && present=1
+  [ -e "$VENV" ] && present=1
+  if [ "$purge" = "1" ]; then
+    [ -e "$DEST" ] && present=1
+  fi
+
+  # Remove ONLY the two launchers (never $BINDIR itself) and the venv.
+  rm -f "$BINDIR/sandesh" "$BINDIR/sandesh-mcp"
+  rm -rf "$VENV"
+
+  if [ "$purge" = "1" ]; then
+    rm -rf "$DEST"
+    echo "✓ removed launchers, venv, and the data home ($DEST) — --purge"
+  else
+    echo "✓ removed launchers and venv"
+    echo "  data kept: the data store under $DEST was preserved."
+    echo "             re-run with --purge to delete it too."
+  fi
+
+  if [ "$present" != "1" ]; then
+    echo "  nothing to do — Sandesh was already removed (nothing found to uninstall)."
+  fi
+
+  echo "  reminder: also deregister the MCP server with:  claude mcp remove sandesh"
+}
+
+# --- argument dispatch -------------------------------------------------------
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  --uninstall)
+    if [ "${2:-}" = "--purge" ]; then
+      do_uninstall 1
+    else
+      do_uninstall 0
+    fi
+    exit 0
+    ;;
+  "")
+    : # fall through to the install body below
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
 
 echo "installing Sandesh:  $SRC  →  $DEST"
 mkdir -p "$DEST/projects" "$BINDIR"

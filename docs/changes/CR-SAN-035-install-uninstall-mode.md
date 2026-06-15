@@ -1,6 +1,6 @@
 # CR-SAN-035 — `install.sh --uninstall [--purge]` (installer self-removal)
 
-**Status:** PENDING
+**Status:** COMPLETED (implemented on feature/CR-SAN-035; ships in 0.3.0)
 **Priority:** Low (tooling symmetry — an installer should remove itself)
 **Depends on:** —
 **Labels:** tooling, installer, dx
@@ -50,24 +50,25 @@ store; advise `claude mcp remove`). NOTE: the full per-route **uninstall matrix 
   and `ln -s` the two launchers into `$HOME/.local/bin`. Drive `bash install.sh --uninstall …`.
 
 ### §S5 — docs
-- README `install.sh` subsection gains one line: `./install.sh --uninstall [--purge]`.
+- **Deferred to CR-SAN-039** (docs restructure / uninstall matrix). This CR ships only the
+  `install.sh --uninstall` mechanics + its own `-h/--help` usage block (§S3).
 
 ## Acceptance criteria
 
-- [ ] **AC1 — uninstall removes software, keeps data.** With the fabricated footprint,
+- [x] **AC1 — uninstall removes software, keeps data.** With the fabricated footprint,
       `install.sh --uninstall` exits 0; both `$BINDIR/sandesh` and `$BINDIR/sandesh-mcp` are gone
       and `$VENV` is gone; `sandesh.db` and `projects/` remain; stdout contains the
       `claude mcp remove sandesh` reminder and a "data kept" note.
-- [ ] **AC2 — `--purge` removes data too.** `install.sh --uninstall --purge` exits 0; the symlinks
+- [x] **AC2 — `--purge` removes data too.** `install.sh --uninstall --purge` exits 0; the symlinks
       are gone AND the entire `$DEST` directory (incl. `sandesh.db` + `projects/`) is gone.
-- [ ] **AC3 — idempotent.** Running `install.sh --uninstall` against an already-clean env exits 0
+- [x] **AC3 — idempotent.** Running `install.sh --uninstall` against an already-clean env exits 0
       with no error and an "already removed / nothing to do" notice.
-- [ ] **AC4 — help.** `install.sh -h` and `install.sh --help` exit 0 and print a usage block naming
+- [x] **AC4 — help.** `install.sh -h` and `install.sh --help` exit 0 and print a usage block naming
       the install default, `--uninstall`, and `--purge`.
-- [ ] **AC5 — default + bad flag.** `install.sh` with no args still performs the full install
+- [x] **AC5 — default + bad flag.** `install.sh` with no args still performs the full install
       (existing `InstallShTest` stays green); an unknown flag (e.g. `--bogus`) exits 2 with usage on
       stderr and builds no venv.
-- [ ] **AC6 — scoping safety.** Uninstall removes only the two `sandesh*` symlinks in `$BINDIR` (a
+- [x] **AC6 — scoping safety.** Uninstall removes only the two `sandesh*` symlinks in `$BINDIR` (a
       sibling file placed in `$BINDIR` is untouched), never deletes `$BINDIR` itself, and never
       touches the source checkout `$SRC`.
 
