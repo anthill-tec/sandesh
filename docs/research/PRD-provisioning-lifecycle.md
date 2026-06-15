@@ -1,6 +1,6 @@
 # PRD — Install / Provisioning / Teardown Lifecycle
 
-**Status:** AGREED (2026-06-15)
+**Status:** APPROVED (2026-06-15)
 **Author:** Vidushi (orchestrator), with owner
 **Supersedes/absorbs:** CR-SAN-035 (install.sh `--uninstall`) becomes the *teardown* half of this lifecycle.
 
