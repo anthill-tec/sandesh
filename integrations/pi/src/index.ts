@@ -75,6 +75,7 @@ export function __resetWakeState(): void {
   wakeLoopRunning = false;
   wakeController = undefined;
   wakeStopped = false;
+  resetBinaryResolution();
 }
 
 /**
@@ -110,6 +111,83 @@ const OUTDATED_CLI_NOTICE =
   "sandesh CLI is too old for this extension: version 0.2.0 or newer is required. " +
   "Upgrade it with `uv tool install sandesh` or `pipx upgrade sandesh` " +
   "(or re-run the repo's install.sh).";
+
+/**
+ * Provision-nudge prefix (CR-SAN-038 §S2). Prepended to the CLI's own
+ * `init --check` message; names `sandesh init` so the user knows the next step.
+ */
+const PROVISION_NUDGE_PREFIX =
+  "Sandesh store not provisioned — run `sandesh init` to set it up:";
+
+// ---------------------------------------------------------------------------
+// uvx-on-demand binary resolution (CR-SAN-038 §S1)
+// ---------------------------------------------------------------------------
+
+/**
+ * The `uvx` prefix args used when a local `sandesh` is not on PATH. The CLI is
+ * invoked as `uvx --from sandesh-relay[migrate] sandesh …` — the extra carries
+ * `migrate` (NOT `mcp`): the Pi surface mirrors the MCP tool set but needs the
+ * migration extra for the CLI's own provisioning, never the MCP SDK.
+ */
+const UVX_PREFIX: readonly string[] = ["--from", "sandesh-relay[migrate]", "sandesh"];
+
+/**
+ * Resolved CLI binary choice (CR-SAN-038 §S1). Decided once by the
+ * session_start `--version` probe and reused at every exec site (verbs,
+ * the probe itself, the notify wake). `false` (the default) means "use the
+ * local `sandesh` binary directly"; `true` means "fall back to `uvx`".
+ */
+let useUvx = false;
+
+/**
+ * Test seam companion to {@link __resetWakeState}: reset the resolved binary
+ * choice so a fresh session_start re-probes from the local-binary default.
+ */
+function resetBinaryResolution(): void {
+  useUvx = false;
+}
+
+/**
+ * Given the desired `sandesh` argv, return the actual `(command, args)` for
+ * `pi.exec`. Local sandesh → `("sandesh", args)`; uvx fallback →
+ * `("uvx", ["--from", "sandesh-relay[migrate]", "sandesh", ...args])`.
+ */
+function resolveSandesh(args: string[]): [string, string[]] {
+  if (useUvx) return ["uvx", [...UVX_PREFIX, ...args]];
+  return ["sandesh", args];
+}
+
+/** Outcome of the session_start `--version` probe. */
+interface ProbeResult {
+  reachable: boolean;
+  stdout: string;
+}
+
+/**
+ * Resolve the CLI binary (§S1): probe the local `sandesh --version`; on an
+ * exec rejection OR a non-zero exit, set {@link useUvx} and re-probe via
+ * `uvx --from sandesh-relay[migrate] sandesh --version`. The CLI is considered
+ * unreachable only when BOTH the local and the uvx probes fail. The resolved
+ * choice persists in `useUvx` for every later exec site.
+ */
+async function probeVersion(pi: ExtensionAPI): Promise<ProbeResult> {
+  try {
+    const r = await pi.exec("sandesh", ["--version"]);
+    if (r.code === 0) return { reachable: true, stdout: r.stdout };
+  } catch {
+    // Local binary not found — fall through to the uvx retry.
+  }
+  // Local probe failed (non-zero or rejection): fall back to uvx and re-probe.
+  useUvx = true;
+  try {
+    const [cmd, args] = resolveSandesh(["--version"]);
+    const r = await pi.exec(cmd, args);
+    if (r.code === 0) return { reachable: true, stdout: r.stdout };
+  } catch {
+    // uvx probe also rejected — CLI is unreachable.
+  }
+  return { reachable: false, stdout: "" };
+}
 
 /**
  * Parse `sandesh --version` stdout against `^sandesh (\d+)\.(\d+)\.(\d+)` and
@@ -222,7 +300,8 @@ async function runSandesh(
   args: string[],
   signal?: AbortSignal,
 ): Promise<AgentToolResult<undefined>> {
-  const r = await pi.exec("sandesh", args, { signal });
+  const [cmd, resolvedArgs] = resolveSandesh(args);
+  const r = await pi.exec(cmd, resolvedArgs, { signal });
   // Tombstone-aware unregister (CR-SAN-019 §S1): unregister exit 3 means the
   // address's watcher was tombstoned (cooperative eviction) — a successful
   // disposition, not a failure. Scoped to unregister; every other verb's
@@ -692,25 +771,40 @@ export default function registerExtension(pi: ExtensionAPI): void {
   // wake loop that arms `sandesh notify` and surfaces unread mail.
   pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext): Promise<void> => {
     let probeOk = false;
-    try {
-      const r = await pi.exec("sandesh", ["--version"]);
-      if (r.code === 0) {
-        // §S3 version gate: a CLI below MIN_CLI_VERSION (or unparseable
-        // output) takes the missing-CLI-style path — one-time warning,
-        // wake loop NOT armed. Tool registration stays static/unblocked.
-        if (cliVersionOk(r.stdout)) {
-          probeOk = true;
-        } else {
-          ctx.ui.notify(OUTDATED_CLI_NOTICE, "warning");
-        }
+    // uvx-on-demand (§S1): probe the local `sandesh` first; if it rejects or
+    // exits non-zero, fall back to `uvx --from sandesh-relay[migrate] sandesh`
+    // and re-probe. The resolved choice (useUvx) is stored module-wide and
+    // reused by every later exec (verbs + the notify wake).
+    const probe = await probeVersion(pi);
+    if (probe.reachable) {
+      // §S3 version gate: a CLI below MIN_CLI_VERSION (or unparseable
+      // output) takes the missing-CLI-style path — one-time warning,
+      // wake loop NOT armed. Tool registration stays static/unblocked.
+      if (cliVersionOk(probe.stdout)) {
+        probeOk = true;
       } else {
-        ctx.ui.notify(MISSING_CLI_NOTICE, "warning");
+        ctx.ui.notify(OUTDATED_CLI_NOTICE, "warning");
       }
-    } catch {
+    } else {
       ctx.ui.notify(MISSING_CLI_NOTICE, "warning");
     }
 
     if (!probeOk) return;
+
+    // Provision nudge (§S2): after a passing version check, run a read-only
+    // `sandesh init --check`. Non-zero → emit a one-line nudge naming
+    // `sandesh init` and surfacing the probe's own store-absent / admin-unset
+    // message verbatim. Exit 0 (provisioned) → no nudge. Never throws.
+    try {
+      const [checkCmd, checkArgs] = resolveSandesh(["init", "--check"]);
+      const check = await pi.exec(checkCmd, checkArgs);
+      if (check.code !== 0) {
+        const reason = (check.stderr || check.stdout).trim();
+        ctx.ui.notify(`${PROVISION_NUDGE_PREFIX} ${reason}`.trim(), "warning");
+      }
+    } catch {
+      // A probe rejection here must not break session start; skip the nudge.
+    }
 
     // Probe-gated wake loop: only arm when this session's identity is known.
     // When env is missing, surface a distinct notice naming both env vars
@@ -763,11 +857,14 @@ async function wakeLoop(
   let stopped = false;
   // Respect the module-level stopped flag so an abort/shutdown breaks the loop.
   while (!stopped && !wakeStopped) {
-    const r: ExecResult = await pi.exec(
-      "sandesh",
-      ["--project", project, "notify", "--to", self],
-      { signal },
-    );
+    const [notifyCmd, notifyArgs] = resolveSandesh([
+      "--project",
+      project,
+      "notify",
+      "--to",
+      self,
+    ]);
+    const r: ExecResult = await pi.exec(notifyCmd, notifyArgs, { signal });
     // A shutdown during the awaited notify must prevent any re-arm.
     if (wakeStopped) break;
     switch (r.code) {

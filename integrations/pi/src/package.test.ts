@@ -161,10 +161,13 @@ describe("npm pack --dry-run contents (AC3)", () => {
 
   beforeAll(() => {
     // Run npm pack --dry-run --json from the package directory.
-    // spawnSync is synchronous — safe in beforeAll.
-    const result = spawnSync("/usr/bin/npm", ["pack", "--dry-run", "--json"], {
+    // spawnSync is synchronous — safe in beforeAll. Resolve `npm` from PATH
+    // (NOT a hardcoded /usr/bin/npm): GitHub Actions' npm lives in the node
+    // toolcache, so an absolute /usr/bin/npm ENOENTs and reds the CI build-check.
+    const result = spawnSync("npm", ["pack", "--dry-run", "--json"], {
       cwd: PKG_DIR,
       encoding: "utf-8",
+      shell: true,
     });
 
     if (result.status !== 0) {

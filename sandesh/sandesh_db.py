@@ -40,6 +40,7 @@ import os
 import re
 import shutil
 import sqlite3
+import sys
 import time
 
 DB_FILE = "sandesh.db"
@@ -130,14 +131,103 @@ def db_path():
     return os.path.join(root_dir(), DB_FILE)
 
 
+class MigrationRequired(Exception):
+    """Raised by connect() when the store is schema-behind but the [migrate] extra
+    is absent, so the lazy auto-heal cannot run.
+
+    connect() is library code (the notify poll loop, the MCP server) — it must
+    RAISE this (not sys.exit) so the caller can decide how to surface it. The CLI
+    top-level maps it to a friendly non-zero exit. The message carries an
+    install-method-appropriate remediation command (see install_method_hint())."""
+
+
+def install_method_hint(executable=None):
+    """Best-effort install-method remediation string for the [migrate] extra,
+    inferred from the running interpreter's path.
+
+    - a uv-tool install (executable under .../uv/tools/) → a `uv tool install --with`
+      hint;
+    - a pipx install (executable under .../pipx/venvs/) → a `pipx inject` hint;
+    - otherwise (plain venv / system python) → the generic
+      `pip install 'sandesh-relay[migrate]'` hint.
+    """
+    exe = executable if executable is not None else sys.executable
+    exe = exe or ""
+    norm = exe.replace("\\", "/")
+    if "/uv/tools/" in norm:
+        return (
+            "uv tool install --with 'sandesh-relay[migrate]' sandesh-relay"
+        )
+    if "/pipx/venvs/" in norm:
+        return "pipx inject sandesh-relay 'sandesh-relay[migrate]'"
+    return "pip install 'sandesh-relay[migrate]'"
+
+
+def _store_is_behind(con):
+    """Cheap, stdlib-only behind-detection (no yoyo import).
+
+    Behind ⟺ the `_yoyo_migration` table EXISTS AND some packaged migration id
+    (filenames in migrate.migrations_dir()) is NOT in the applied set. A store
+    with no `_yoyo_migration` table is treated as current (a fresh store already
+    got the latest _SCHEMA from connect()'s executescript) — the AC7 false-
+    positive guard. Returns False when migrations_dir() is unreadable."""
+    row = con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='_yoyo_migration'"
+    ).fetchone()
+    if row is None:
+        return False
+
+    from . import migrate
+    try:
+        fnames = os.listdir(migrate.migrations_dir())
+    except OSError:
+        return False
+    packaged = {
+        f[: -len(".sql")]
+        for f in fnames
+        if f.endswith(".sql") and ".rollback." not in f
+    }
+    if not packaged:
+        return False
+
+    applied = {
+        r[0]
+        for r in con.execute(
+            "SELECT migration_id FROM _yoyo_migration"
+        ).fetchall()
+    }
+    return not packaged.issubset(applied)
+
+
 def connect():
-    """Open (creating tables if absent) the global Sandesh DB at db_path(), WAL mode."""
+    """Open (creating tables if absent) the global Sandesh DB at db_path(), WAL mode.
+
+    Lazy auto-migrate (CR-SAN-036 §S1): after the connection is open, a single
+    cheap query detects whether the store is schema-behind. If it is and the
+    [migrate] extra is importable, pending migrations are auto-applied (self-heal);
+    if [migrate] is absent, MigrationRequired is raised (never sys.exit — this is
+    library code). The common, not-behind path adds ~one cheap query."""
     os.makedirs(root_dir(), exist_ok=True)
     con = sqlite3.connect(db_path())
     con.row_factory = sqlite3.Row
     con.executescript(_SCHEMA)
     con.execute("PRAGMA journal_mode=WAL")
     con.commit()
+
+    if _store_is_behind(con):
+        try:
+            import yoyo  # noqa: F401
+            import jsonschema  # noqa: F401
+        except ImportError:
+            con.close()
+            raise MigrationRequired(
+                "Sandesh store schema is behind and the [migrate] extra is not "
+                "installed, so it cannot be auto-upgraded.\n"
+                "          Install it with:  " + install_method_hint()
+            )
+        from . import migrate
+        migrate.apply()
+
     return con
 
 

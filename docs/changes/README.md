@@ -37,6 +37,11 @@ Single source of truth for change requests. Pick the next `PENDING` CR by phase 
 | [CR-SAN-032](CR-SAN-032-pi-surface-catchup.md) | **Pi surface catch-up**: 9→12 tools (archive/unarchive/search), 6 inbox/fetch filter params, `sandesh` ≥0.2.0 session gate, Wave-6 error-string pins, promptSnippet/docs refresh, pkg 0.2.0 | Wave 8 | COMPLETED | CR-SAN-031 | 2026-06-13 |
 | [CR-SAN-033](CR-SAN-033-consolidate-skip-non-stores.md) | **Hotfix 0.2.1**: `consolidate` skips non-store `sandesh.db` files (yoyo-stub/corrupt debris crashed the v0.2.0 installer live) with a CLI notice; real stores unaffected | hotfix 0.2.1 | COMPLETED | — | 2026-06-13 |
 | [CR-SAN-034](CR-SAN-034-release-pipeline-branch-gated.md) | **Branch-gated release pipeline**: push-to-`main` (new `v*` tag) auto-creates a GitHub Release (PAT) → `publish-pypi`; `publish-pypi`/`publish-npm` guard on `v*`-tag-reachable-from-`main`; `local_scheme=no-local-version` (untagged ⇒ upload-valid `X.Y.Z.devN` for TestPyPI checkpoints); `scripts/release.sh` (checkpoint/finish/status, branch-gated); RELEASING.md rewrite | hotfix 0.2.2 | COMPLETED | — | 2026-06-15 |
+| [CR-SAN-035](CR-SAN-035-install-uninstall-mode.md) | **`install.sh --uninstall [--purge]`**: installer self-removal — arg dispatch (default install unchanged), remove symlinks + venv; `--purge` also removes the data store; `-h/--help` usage; prints `claude mcp remove` reminder; idempotent + scoping-safe (teardown half of the provisioning-lifecycle PRD; uninstall matrix → CR-039) | provisioning-lifecycle (0.3.0) | COMPLETED | — | 2026-06-15 |
+| [CR-SAN-036](CR-SAN-036-provisioning-core.md) | **Provisioning core**: `sandesh init` CLI (migrate→consolidate→reindex→admin; idempotent; `--admin`/`--yes`; CLI-only, never MCP) + **lazy auto-migrate on store open** (apply if `[migrate]`, else install-method-aware actionable error, no self-pip) | provisioning-lifecycle (0.3.0) | COMPLETED | — | 2026-06-15 |
+| [CR-SAN-037](CR-SAN-037-install-surface-choice.md) | **install.sh surface choice**: interactive Claude/Pi/both/none prompt (Pi ⇒ no `mcp`; non-interactive override) + delegate provisioning to `sandesh init` + **mandatory migrate when an existing `sandesh.db` is detected** (fail loudly, no silent skip) | provisioning-lifecycle (0.3.0) | COMPLETED | CR-SAN-036 | 2026-06-15 |
+| [CR-SAN-038](CR-SAN-038-pi-uvx-and-provision-nudge.md) | **Pi surface**: CLI via `uvx --from 'sandesh-relay[migrate]'` (no `mcp`) when local CLI absent + session-gate **nudge to `sandesh init`** on an unprovisioned store; no init/admin/migrate tool; `[migrate]` error passthrough (bun) + `sandesh init --check` probe (py) | provisioning-lifecycle (0.3.0) | COMPLETED | CR-SAN-036 | 2026-06-15 |
+| [CR-SAN-039](CR-SAN-039-docs-restructure.md) | **Docs restructure**: slim README + per-route×surface install guide (`docs/INSTALL.md`/`docs/install/`, install→init→manage→uninstall) + **AUR removed from README** + uninstall matrix | provisioning-lifecycle (0.3.0) | COMPLETED | CR-SAN-036..038, CR-SAN-035 | 2026-06-15 |
 
 Design contracts: [PRD-mcp-server](../research/PRD-mcp-server.md) · [PRD-distribution](../research/PRD-distribution.md) · [PRD-pi-extension](../research/PRD-pi-extension.md) · [PRD-db-migration](../research/PRD-db-migration.md) · [PRD-global-store](../research/PRD-global-store.md)
 Design notes: [DN-windows-notifier](../research/DN-windows-notifier.md) · [DN-pi-wake](../research/DN-pi-wake.md) (Pi wake spike — RESOLVED: native injection)
@@ -68,6 +73,13 @@ Wave 8 (Pi catch-up) — design contract: **[PRD-pi-extension](../research/PRD-p
 ≥0.2.0 CLI gate, wake `followUp` hardening from the opensrc source re-verification). Strict order
 CR-SAN-031 → 032 (breakdown user-approved 2026-06-13). bun stack (`integrations/pi/`, `bun-*`
 agents).
+Release engineering: CR-SAN-034 (branch-gated release pipeline) shipped in **0.2.2** (first real
+PyPI publish, 2026-06-15).
+**Provisioning lifecycle (0.3.0)** — design contract: **[PRD-provisioning-lifecycle](../research/PRD-provisioning-lifecycle.md)**
+(APPROVED 2026-06-15). Decomposition (owner-approved 2026-06-15): CR-SAN-035 (teardown) → 036
+(provisioning core: `sandesh init` + lazy auto-migrate) → 037 (install.sh surface-choice + delegate
++ mandatory-migrate) → 038 (Pi uvx + provision nudge, bun) → 039 (docs restructure). One CLI core,
+two interchangeable surfaces (`[mcp]`=Claude, Pi extension=Pi); install prompts for surface(s).
 
 ## Canonical statuses
 `PENDING` / `IN_PROGRESS` / `COMPLETED` / `SUPERSEDED` / `DEFERRED`

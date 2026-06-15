@@ -19,6 +19,7 @@ Run targeted:
       --agent CR-SAN-018-3-RED
 """
 
+import ast
 import os
 import re
 import unittest
@@ -46,12 +47,18 @@ def _read(path: str) -> str:
 
 
 def _pi_ts_sources() -> list[tuple[str, str]]:
-    """Return [(filename, contents), ...] for all *.ts files in the Pi src dir."""
+    """Return [(filename, contents), ...] for the Pi extension's PRODUCTION *.ts sources.
+
+    The migration-engine boundary applies to the shipped extension code, NOT to test
+    fixtures — `*.test.ts` files legitimately contain strings that SIMULATE the CLI's
+    output (e.g. a `[migrate]`-absent stderr mentioning 'yoyo' for the error-passthrough
+    test). So `*.test.ts` is excluded here; the only production source is `index.ts`.
+    """
     results = []
     if not os.path.isdir(_PI_SRC_DIR):
         return results
     for name in os.listdir(_PI_SRC_DIR):
-        if name.endswith(".ts"):
+        if name.endswith(".ts") and not name.endswith(".test.ts"):
             path = os.path.join(_PI_SRC_DIR, name)
             try:
                 with open(path, encoding="utf-8") as fh:
@@ -262,48 +269,58 @@ class ClaudeMdSchemaMigrationNoteTest(unittest.TestCase):
 
 
 class BoundaryGuardSandeshDbTest(unittest.TestCase):
-    """AC6: sandesh_db.py must contain NO migration-engine references."""
+    """Import-time boundary for sandesh_db.py (REVISED — PRD-provisioning-lifecycle §4.2,
+    CR-SAN-036).
+
+    sandesh_db.connect() now performs lazy auto-migrate, so sandesh_db.py MAY reference the
+    migrate module / `_yoyo_migration` bookkeeping / yoyo LAZILY (inside function bodies). The
+    boundary that still matters — and that this guard enforces — is that importing sandesh_db
+    must NOT eagerly pull the migration engine: there must be NO MODULE-LEVEL import of
+    sandesh.migrate, yoyo, or jsonschema (the import-time hot path stays stdlib-only; yoyo is
+    imported only on the rare behind branch). Supersedes the old CR-SAN-018 'zero references'
+    text check, which the PRD-mandated lazy path deliberately broke.
+    """
 
     @classmethod
     def setUpClass(cls):
-        cls.text = _read(_SANDESH_DB)
         cls.path = _SANDESH_DB
+        with open(_SANDESH_DB, encoding="utf-8") as fh:
+            cls.tree = ast.parse(fh.read())
 
-    def test_sandesh_db_no_migrate_import(self):
-        """sandesh_db.py must not import from sandesh.migrate / import migrate.
+    def _module_level_imports(self):
+        """Names imported at MODULE scope only (top-level statements) — lazy in-function
+        imports are excluded (and are the sanctioned mechanism)."""
+        names = []
+        for node in self.tree.body:  # module body == top level only
+            if isinstance(node, ast.Import):
+                names += [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                names.append(mod)
+                names += [f"{mod}.{a.name}" for a in node.names]
+        return names
 
-        This is a regression guard — it PASSES now and must stay GREEN.
-        """
-        self.assertTrue(
-            os.path.isfile(self.path),
-            f"sandesh_db.py not found at {self.path}",
+    def test_sandesh_db_no_module_level_migrate_import(self):
+        """sandesh_db.py must not import the migrate module at MODULE level (lazy
+        in-function import only)."""
+        self.assertTrue(os.path.isfile(self.path), f"sandesh_db.py not found at {self.path}")
+        offenders = [n for n in self._module_level_imports() if "migrate" in n]
+        self.assertEqual(
+            offenders, [],
+            "sandesh_db.py must NOT import the migrate module at module level — the lazy "
+            f"auto-migrate path imports it inside connect() only. Found: {offenders}",
         )
-        self.assertFalse(
-            bool(re.search(r"import.*migrate", self.text)),
-            "sandesh_db.py must NOT import migrate or sandesh.migrate. "
-            f"Found: {[l for l in self.text.splitlines() if re.search(r'import.*migrate', l)]}",
-        )
 
-    def test_sandesh_db_no_migrate_call(self):
-        """sandesh_db.py must not call migrate(...) directly.
-
-        Regression guard — PASSES now.
-        """
-        self.assertFalse(
-            bool(re.search(r"\bmigrate\(", self.text)),
-            "sandesh_db.py must NOT call migrate(...). "
-            f"Found: {[l for l in self.text.splitlines() if 'migrate(' in l]}",
-        )
-
-    def test_sandesh_db_no_yoyo_reference(self):
-        """sandesh_db.py must not reference yoyo.
-
-        Regression guard — PASSES now.
-        """
-        self.assertFalse(
-            "yoyo" in self.text,
-            "sandesh_db.py must NOT contain any 'yoyo' reference. "
-            f"Found: {[l for l in self.text.splitlines() if 'yoyo' in l]}",
+    def test_sandesh_db_no_module_level_yoyo_or_jsonschema(self):
+        """sandesh_db.py must not import yoyo/jsonschema at MODULE level — importing
+        sandesh_db must stay stdlib-only; yoyo is touched only on the behind branch."""
+        offenders = [
+            n for n in self._module_level_imports() if "yoyo" in n or "jsonschema" in n
+        ]
+        self.assertEqual(
+            offenders, [],
+            "sandesh_db.py must NOT import yoyo/jsonschema at module level (import-time hot "
+            f"path stays stdlib-only). Found: {offenders}",
         )
 
 

@@ -53,71 +53,20 @@ $XDG_DATA_HOME/sandesh/                           (default ~/.local/share/sandes
 ## Install
 
 **Distribution name:** `sandesh-relay` (the import package + the `sandesh` / `sandesh-mcp`
-commands keep the name `sandesh`; `sandesh` was taken on PyPI). The `[mcp]` extra adds the MCP
-server; the bare install is the stdlib-only CLI + `notify`.
+commands keep the name `sandesh`; `sandesh` was taken on PyPI). The bare install is the
+stdlib-only CLI + `notify`; the `[mcp]` extra adds the MCP server.
 
-> **Two things need `sandesh` on PATH:** the MCP client spawns `sandesh-mcp`, **and** the agent
-> backgrounds `sandesh notify` (the wake) every cycle. A **persistent** install puts both on PATH
-> and is the steady-use recommendation; ephemeral `uvx` is ideal for trial / the registration command.
+Sandesh is **CLI + a chosen agent surface** (MCP for Claude Code, or the Pi extension). The
+full per-route × per-surface walkthrough — install → `sandesh init` (provision) → manage
+(auto-migrate on update, admin) → uninstall, plus the uninstall matrix — lives in the
+install guide:
 
-### uv (recommended)
+➡ **[Install & uninstall guide → docs/INSTALL.md](docs/INSTALL.md)**
 
-```bash
-# persistent — both scripts on PATH (run `uv tool update-shell` once for PATH)
-uv tool install 'sandesh-relay[mcp]'           # from PyPI (once published — see RELEASING.md)
-uv tool install 'git+https://github.com/anthill-tec/sandesh'        # from git, today
-uv tool install '.[mcp]'                        # from a local checkout, today
-
-# ephemeral — run the server with no install (deps cached on first run)
-uvx --from 'sandesh-relay[mcp]' sandesh-mcp
-```
-
-uv manages its own Python, so it sidesteps PEP 668 (see below). PyPI publishing is automated via
-OIDC trusted publishing — see **[RELEASING.md](RELEASING.md)**.
-
-### pipx / pipxu (alternative)
-
-```bash
-pipx install 'sandesh-relay[mcp]' && pipx ensurepath   # user-space; restart shell once
-sudo pipx install --global 'sandesh-relay[mcp]'        # all users (pipx ≥ 1.5)
-```
-
-(`pipxu` gives the same UX on a uv backend — common on Arch.)
-
-### Arch Linux (AUR)
-
-```bash
-yay -S sandesh-relay      # or: paru -S sandesh-relay
-```
-
-pacman/AUR resolves the prerequisites, so this **sidesteps PEP 668** entirely (no uv/pipx
-bootstrap). The MCP server's dependency is offered as an optional `python-mcp` (from the AUR) —
-install it for `sandesh-mcp`; if it's unavailable, use the uv/pipx path for the server. (The AUR
-package is published per release — see [RELEASING.md](RELEASING.md).)
-
-### install.sh (offline / from-source fallback)
-
-No uv or pipx? `install.sh` builds its **own venv** and pip-installs the package into it — it
-needs only `python3` (with `venv`) + `pip`, and is **PEP-668-safe** (the venv is not the system
-environment):
-
-```bash
-./install.sh           # → venv at ~/.local/share/sandesh/.venv + symlinks on ~/.local/bin
-```
-
-### No installer present?
-
-Neither uv nor pipx is guaranteed. Bootstrap one, **or** use `install.sh`:
-
-```bash
-# uv:   sudo pacman -S uv   |   curl -LsSf https://astral.sh/uv/install.sh | sh   |   pip install --user uv
-# pipx: pip install --user pipx && pipx ensurepath   |   sudo pacman -S python-pipx
-```
-
-> **PEP 668:** a plain `pip install sandesh-relay` into the **system** Python is *blocked* on
-> externally-managed distros (Arch, Debian, Fedora, recent macOS) by design. Use uv, pipx, or
-> `install.sh` (each isolates into a venv). On Arch, the AUR `PKGBUILD` (CR-SAN-009) sidesteps this
-> entirely — pacman resolves the prerequisites.
+In short: pick a route (uv / pipx / pip / `install.sh`), install the `sandesh-relay`
+distribution with the extras for your surface (`[mcp,migrate]` for Claude, `[migrate]` for Pi),
+then provision with `sandesh init` (`--check` to verify). PyPI publishing is automated via OIDC
+trusted publishing — see **[RELEASING.md](RELEASING.md)**.
 
 ## Use
 
@@ -195,7 +144,8 @@ sandesh tombstone --project Atlas --by <admin>          # prompts y/N; --yes to 
 The verbs are also exposed as an **MCP server** (stdio) so an agent can call them as tools
 instead of shelling out. `mcp` is the only third-party dependency — it ships behind the optional
 **`[mcp]` extra** and is imported only by `sandesh.mcp_server`, so the CLI above stays pure-stdlib
-either way. Installing `sandesh-relay[mcp]` (above) provides the `sandesh-mcp` command; a base
+either way. Installing the `[mcp]` extra (see the [install guide](docs/INSTALL.md)) provides the
+`sandesh-mcp` command; a base
 install without the extra still ships `sandesh-mcp` but it prints a one-line "install the `[mcp]`
 extra" hint and exits non-zero rather than crashing.
 
@@ -251,13 +201,13 @@ python3 -m unittest -v          # from the repo root (stdlib-only: CLI + library
 - **PyPI publish — DONE** (Phase 3, CR-SAN-010): `.github/workflows/publish-pypi.yml` publishes
   `sandesh-relay` to PyPI on a GitHub Release via OIDC trusted publishing (TestPyPI dry-run on
   manual dispatch); version is git-tag-driven. See **[RELEASING.md](RELEASING.md)**.
-- **Discovery/distribution — DONE** (Phase 3): AUR `PKGBUILD` (CR-SAN-009, `packaging/aur/`) +
-  official **MCP Registry** listing (CR-SAN-011, [`server.json`](server.json) `io.github.anthill-tec/sandesh`).
+- **Discovery/distribution — DONE** (Phase 3): official **MCP Registry** listing
+  (CR-SAN-011, [`server.json`](server.json) `io.github.anthill-tec/sandesh`).
 - **Pi extension — DONE** (Phase 4): a native Pi extension at [`integrations/pi/`](integrations/pi/)
   — registers the Sandesh verbs as Pi tools (CR-SAN-013) and a **native wake** (CR-SAN-014: the
   extension wakes the idle agent itself via `sendUserMessage`, no host background task) — published to
   npm as `@anthill-tec/sandesh-pi` (CR-SAN-015). See [`integrations/pi/README.md`](integrations/pi/README.md).
-- The registry publishes (PyPI / AUR / MCP-registry / npm) are maintainer actions — see RELEASING.md.
+- The registry publishes (PyPI / MCP-registry / npm) are maintainer actions — see RELEASING.md.
 
 ## License
 

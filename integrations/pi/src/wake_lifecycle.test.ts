@@ -389,6 +389,7 @@ describe("AC5 — session_shutdown: registered handler, stops loop, no re-arm af
     const { fakePi, execMock, getSessionShutdownHandler } = makeFakePi({
       execSequence: [
         ok("sandesh 1.0.0"), // probe
+        ok(""),              // init --check (provisioned)
         exit(2),             // first notify: timeout → re-arm
         "hang",              // second notify: blocks until aborted
         exit(3),             // fallback (should not be reached)
@@ -431,9 +432,9 @@ describe("AC5 — session_shutdown: registered handler, stops loop, no re-arm af
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
 
-    // probe → notify(3, stop immediately so test is deterministic)
+    // probe → init --check(0) → notify(3, stop immediately so test is deterministic)
     const { fakePi, execMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(3)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(3)],
     });
     registerExtension(fakePi);
 
@@ -609,13 +610,14 @@ describe("AC5 — single-loop guard: double session_start does not spawn two con
     // exec mock will run past the scripted entries and clamp to the last (exit(5)),
     // but the notify count will exceed 1 — revealing the double-start bug.
     const { fakePi, execMock } = makeFakePi({
-      // Enough entries for ONE probe + ONE notify (terminal). If two loops run
-      // concurrently, the second loop's notify call reveals it.
+      // Enough entries for ONE probe + init --check + ONE notify (terminal). If two
+      // loops run concurrently, the second loop's notify call reveals it.
       execSequence: [
         ok("sandesh 1.0.0"), // probe for first session_start
+        ok(""),              // init --check for first session_start (provisioned)
         exit(5),             // notify for first loop → stops
         ok("sandesh 1.0.0"), // probe for second session_start (guard must prevent loop)
-        exit(5),             // would be consumed by a second loop — must NOT happen
+        ok(""),              // init --check for second session_start
       ],
     });
     registerExtension(fakePi);
@@ -677,8 +679,10 @@ describe("AC5 — single-loop guard: double session_start does not spawn two con
     const { fakePi, execMock } = makeFakePi({
       execSequence: [
         ok("sandesh 1.0.0"), // probe for first session_start
+        ok(""),              // init --check for first session_start (provisioned)
         exit(5),             // notify → stop (first loop ends naturally; guard becomes "stopped")
         ok("sandesh 1.0.0"), // probe for second session_start (after guard reset)
+        ok(""),              // init --check for second session_start
         exit(5),             // notify → stop (second loop)
       ],
     });
