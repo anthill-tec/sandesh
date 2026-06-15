@@ -1,6 +1,6 @@
 # CR-SAN-042 — `release.sh set-version` + `finish` manifest-version guard (Option A)
 
-**Status:** PENDING
+**Status:** COMPLETED (implemented on feature/CR-SAN-042-release-set-version)
 **Priority:** Medium (prevents the manual-manifest version drift that reddened 0.3.1's npm
 build-check and forced the 0.3.2 hotfix)
 **Depends on:** — (builds on CR-SAN-034 `scripts/release.sh`)
@@ -48,31 +48,35 @@ failure can no longer reach a cut tag.
   `pyproject.toml`).
 
 ## Acceptance criteria
-- [ ] **AC1 — set-version writes package.json.** `set-version 0.5.7` on `hotfix/0.5.7` (or
+- [x] **AC1 — set-version writes package.json.** `set-version 0.5.7` on `hotfix/0.5.7` (or
       `release/0.5.7`) sets `integrations/pi/package.json` top-level `"version"` to `"0.5.7"`
       (file remains valid JSON; other keys unchanged).
-- [ ] **AC2 — set-version writes server.json (both/all fields).** Same invocation sets repo-root
+- [x] **AC2 — set-version writes server.json (both/all fields).** Same invocation sets repo-root
       `server.json` top-level `"version"` AND `packages[0].version` to `"0.5.7"` (valid JSON;
       non-version keys unchanged).
-- [ ] **AC3 — set-version commits; --dry-run does not.** Live `set-version 0.5.7` leaves a clean
+- [x] **AC3 — set-version commits; --dry-run does not.** Live `set-version 0.5.7` leaves a clean
       working tree with a new HEAD commit that modifies the manifests. `set-version 0.5.7 --dry-run`
       exits 0, prints the planned change, and leaves the manifests **and** git state unchanged (no
       commit, no staged changes).
-- [ ] **AC4 — set-version gating + validation.** `set-version 0.5.7` on `develop`/`main`/`feature/x`
+- [x] **AC4 — set-version gating + validation.** `set-version 0.5.7` on `develop`/`main`/`feature/x`
       exits 2 with a branch error and leaves manifests untouched; a malformed version
       (`set-version 1.2`, `set-version v1.2.3`, `set-version 1.2.3.4`) exits 2 and writes nothing.
-- [ ] **AC5 — finish guard rejects a mismatch.** With `integrations/pi/package.json` at `0.0.1` on
+- [x] **AC5 — finish guard rejects a mismatch.** With `integrations/pi/package.json` at `0.0.1` on
       `hotfix/0.5.7`, `finish 0.5.7` exits 1, stderr names `package.json` with found `0.0.1` vs
       expected `0.5.7`; and even `finish 0.5.7 --dry-run` exits 1 — neither git-flow finish nor
       `git push` runs (branch/main unchanged, `gh` stub not invoked).
-- [ ] **AC6 — finish guard is non-breaking.** `finish 0.5.7 --dry-run` in a repo whose manifests
+- [x] **AC6 — finish guard is non-breaking.** `finish 0.5.7 --dry-run` in a repo whose manifests
       **match** `0.5.7` exits 0 and prints the git-flow + push commands; and the existing
       manifest-LESS harness behaviour is preserved (absent manifests are skipped) — all current
       `tests/test_release_script.py` cases stay green.
-- [ ] **AC7 — help + docs + guards.** `release.sh --help` stdout lists `set-version`; `RELEASING.md`
+- [x] **AC7 — help + docs + guards.** `release.sh --help` stdout lists `set-version`; `RELEASING.md`
       documents `set-version` and the finish guard; `tests/test_release_script.py` (extended) and
       `tests/test_releasing_doc.py` are green; no schema/code outside `scripts/release.sh` +
       `RELEASING.md` is touched.
+- [x] **AC8 — set-version is idempotent** (from VERIFY). Running `set-version X.Y.Z` when the manual
+      manifests are ALREADY at `X.Y.Z` exits 0 (no error), creating no empty commit — under
+      `set -euo pipefail` a no-op `git commit` would otherwise fail "nothing to commit" and exit 1.
+      Re-running is a safe no-op.
 
 ## Estimated size
 Small-medium — one new bash subcommand + a preflight guard in `cmd_finish`, a `usage()` line, a
