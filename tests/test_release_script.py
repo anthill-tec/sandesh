@@ -2045,6 +2045,243 @@ class FinishGuardMatchTest(ReleaseScriptHarness):
 
 
 # ---------------------------------------------------------------------------
+# CR-SAN-042 C4 — set-version idempotency (AC8)
+# ---------------------------------------------------------------------------
+
+
+class SetVersionIdempotencyTest(ReleaseScriptHarness):
+    """AC8 — Running set-version X.Y.Z when manifests are already at X.Y.Z must
+    exit 0 and create no new commit (safe no-op re-run).
+
+    THE BUG (confirmed): cmd_set_version ends with `git add ...; git commit -m ...`.
+    When manifests are already at the target version the regex sub is a no-op,
+    nothing is staged, and `git commit` fails "nothing to commit, working tree clean"
+    — under set -euo pipefail the script exits 1.  These tests FAIL today because the
+    second run exits 1 instead of 0.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Start on hotfix/0.5.7 with manifests committed at 0.0.1
+        self._checkout("hotfix/0.5.7", create=True)
+        _write_manifests(self.repo, version="0.0.1")
+        self._git("add", "integrations/pi/package.json", "server.json")
+        self._git("commit", "-m", "chore: add manifest fixtures")
+
+    def _head_sha(self):
+        return self._git("rev-parse", "HEAD").stdout.strip()
+
+    def _working_tree_status(self):
+        return self._git("status", "--porcelain").stdout.strip()
+
+    def test_ac8_second_run_exits_0(self):
+        """Re-running set-version 0.5.7 (manifests already at 0.5.7) must exit 0.
+
+        FAILS at RED: the second run hits `git commit` with nothing staged → git exits
+        1 → set -euo pipefail propagates → script exits 1 instead of 0.
+        """
+        # First run: bump manifests from 0.0.1 → 0.5.7 (should succeed)
+        first = self._run_release_sh("set-version", "0.5.7")
+        self.assertEqual(
+            first.returncode,
+            0,
+            msg=(
+                f"First set-version 0.5.7 must exit 0 (prerequisite for idempotency "
+                f"test).\nSTDOUT:\n{first.stdout}\nSTDERR:\n{first.stderr}"
+            ),
+        )
+
+        # Second run: manifests are already at 0.5.7 — must be a safe no-op
+        second = self._run_release_sh("set-version", "0.5.7")
+        self.assertEqual(
+            second.returncode,
+            0,
+            msg=(
+                f"Second set-version 0.5.7 (manifests already at 0.5.7) must exit 0 "
+                f"(idempotent no-op), got {second.returncode}.\n"
+                f"This is the AC8 bug: git commit fails 'nothing to commit' under "
+                f"set -euo pipefail.\nSTDOUT:\n{second.stdout}\nSTDERR:\n{second.stderr}"
+            ),
+        )
+
+    def test_ac8_second_run_creates_no_new_commit(self):
+        """Re-running set-version 0.5.7 must not create an extra commit (HEAD unchanged).
+
+        FAILS at RED: if the bug is triggered the script exits 1 before committing,
+        but the no-new-commit assertion is the *correct* post-fix invariant — and under
+        the current code the script errors rather than quietly skipping, so this test
+        must both survive the buggy exit-1 AND assert the SHA constraint once fixed.
+        We test this independently so coverage is explicit even after the bug is fixed.
+        """
+        # First run: legitimate bump
+        self._run_release_sh("set-version", "0.5.7")
+        sha_after_first = self._head_sha()
+
+        # Second run: no-op; HEAD must not move
+        self._run_release_sh("set-version", "0.5.7")
+        sha_after_second = self._head_sha()
+
+        self.assertEqual(
+            sha_after_first,
+            sha_after_second,
+            msg=(
+                f"Second set-version 0.5.7 created a new commit — HEAD moved from "
+                f"{sha_after_first[:8]} to {sha_after_second[:8]}. "
+                f"A no-op re-run must never produce an empty commit."
+            ),
+        )
+
+    def test_ac8_second_run_leaves_clean_tree_and_correct_versions(self):
+        """After both runs the working tree is clean and manifests still read 0.5.7."""
+        # First run
+        self._run_release_sh("set-version", "0.5.7")
+        # Second run (idempotent)
+        self._run_release_sh("set-version", "0.5.7")
+
+        # Working tree must be clean
+        status = self._working_tree_status()
+        self.assertEqual(
+            status,
+            "",
+            msg=(
+                f"Working tree is not clean after idempotent re-run.\n"
+                f"git status --porcelain:\n{status}"
+            ),
+        )
+
+        # package.json must still be at 0.5.7
+        pkg_path = os.path.join(self.repo, "integrations", "pi", "package.json")
+        with open(pkg_path) as f:
+            pkg = json.load(f)
+        self.assertEqual(
+            pkg["version"],
+            "0.5.7",
+            msg=f"package.json version after idempotent re-run: {pkg.get('version')!r}",
+        )
+
+        # server.json must still be at 0.5.7 (both fields)
+        srv_path = os.path.join(self.repo, "server.json")
+        with open(srv_path) as f:
+            srv = json.load(f)
+        self.assertEqual(
+            srv["version"],
+            "0.5.7",
+            msg=f"server.json top-level version after re-run: {srv.get('version')!r}",
+        )
+        self.assertEqual(
+            srv["packages"][0]["version"],
+            "0.5.7",
+            msg=(
+                f"server.json packages[0].version after re-run: "
+                f"{srv['packages'][0].get('version')!r}"
+            ),
+        )
+
+    def test_ac8_already_at_target_single_run_exits_0(self):
+        """set-version 0.5.7 when manifests are ALREADY committed at 0.5.7 exits 0.
+
+        Variant: manifests start at the target version (no prior set-version call
+        needed).  A single invocation must exit 0 and create no commit.
+
+        FAILS at RED for the same reason: git commit fails when nothing is staged.
+        """
+        # Write and commit manifests already at 0.5.7 on a fresh branch
+        fresh_tmp = tempfile.mkdtemp(prefix="sandesh-release-idem-")
+        try:
+            # Use a secondary harness repo for this variant
+            import shutil as _shutil
+
+            fresh_repo = os.path.join(fresh_tmp, "repo")
+            fresh_stub_dir = os.path.join(fresh_tmp, "stub-bin")
+            fresh_gh_record = os.path.join(fresh_tmp, "gh-calls.txt")
+
+            os.makedirs(fresh_repo)
+            os.makedirs(fresh_stub_dir)
+
+            # Write gh stub
+            stub_path = os.path.join(fresh_stub_dir, "gh")
+            with open(stub_path, "w") as f:
+                f.write("#!/bin/sh\n")
+                f.write(f'echo "$@" >> "{fresh_gh_record}"\n')
+                f.write("exit 0\n")
+            os.chmod(stub_path, os.stat(stub_path).st_mode | 0o111)
+
+            # Init repo
+            def _g(*args):
+                return subprocess.run(
+                    ["git", *args],
+                    cwd=fresh_repo,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+
+            _g("init", "-b", "main")
+            _g("config", "user.email", "test@example.com")
+            _g("config", "user.name", "Test User")
+            readme = os.path.join(fresh_repo, "README.md")
+            with open(readme, "w") as f:
+                f.write("test repo\n")
+            _g("add", "README.md")
+            _g("commit", "-m", "initial commit")
+
+            # Checkout hotfix branch, write manifests already at 0.5.7
+            _g("checkout", "-b", "hotfix/0.5.7")
+            _write_manifests(fresh_repo, version="0.5.7")
+            _g("add", "integrations/pi/package.json", "server.json")
+            _g("commit", "-m", "chore: manifests already at 0.5.7")
+
+            sha_before = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=fresh_repo,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+
+            # Run set-version 0.5.7 — manifests are already there
+            env = dict(os.environ)
+            env["PATH"] = fresh_stub_dir + os.pathsep + env.get("PATH", "")
+            result = subprocess.run(
+                ["bash", _RELEASE_SH, "set-version", "0.5.7"],
+                cwd=fresh_repo,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=env,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                msg=(
+                    f"set-version 0.5.7 with manifests already at 0.5.7 must exit 0 "
+                    f"(idempotent), got {result.returncode}.\n"
+                    f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                ),
+            )
+
+            sha_after = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=fresh_repo,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+
+            self.assertEqual(
+                sha_before,
+                sha_after,
+                msg=(
+                    f"set-version 0.5.7 (manifests already at 0.5.7) must not create "
+                    f"a commit. HEAD moved from {sha_before[:8]} to {sha_after[:8]}."
+                ),
+            )
+        finally:
+            _shutil.rmtree(fresh_tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
