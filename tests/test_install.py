@@ -1371,21 +1371,21 @@ class SurfaceChoiceInstallTest(unittest.TestCase):
             xdg_data = os.path.join(home_dir, ".local", "share")
             os.makedirs(home_dir)
             result = self._run_install(home_dir, xdg_data, ["--surface", "claude"])
-        self.assertEqual(
-            result.returncode, 0,
-            msg=(
-                f"install.sh --surface claude exited {result.returncode}, expected 0.\n"
-                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-            ),
-        )
-        self.assertTrue(
-            self._has_mcp_script(xdg_data),
-            msg=(
-                "sandesh-mcp not found in venv bin after --surface claude — "
-                "mcp extra must be installed for surface=claude.\n"
-                f"venv bin: {self._venv_bin(xdg_data)}"
-            ),
-        )
+            self.assertEqual(
+                result.returncode, 0,
+                msg=(
+                    f"install.sh --surface claude exited {result.returncode}, expected 0.\n"
+                    f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                ),
+            )
+            self.assertTrue(
+                self._has_mcp_script(xdg_data),
+                msg=(
+                    "sandesh-mcp not found in venv bin after --surface claude — "
+                    "mcp extra must be installed for surface=claude.\n"
+                    f"venv bin: {self._venv_bin(xdg_data)}"
+                ),
+            )
 
     def test_ac1_surface_both_installs_mcp(self):
         """install.sh --surface both → venv has sandesh-mcp console script.
@@ -1397,20 +1397,20 @@ class SurfaceChoiceInstallTest(unittest.TestCase):
             xdg_data = os.path.join(home_dir, ".local", "share")
             os.makedirs(home_dir)
             result = self._run_install(home_dir, xdg_data, ["--surface", "both"])
-        self.assertEqual(
-            result.returncode, 0,
-            msg=(
-                f"install.sh --surface both exited {result.returncode}, expected 0.\n"
-                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-            ),
-        )
-        self.assertTrue(
-            self._has_mcp_script(xdg_data),
-            msg=(
-                "sandesh-mcp not found in venv bin after --surface both — "
-                "mcp extra must be installed for surface=both."
-            ),
-        )
+            self.assertEqual(
+                result.returncode, 0,
+                msg=(
+                    f"install.sh --surface both exited {result.returncode}, expected 0.\n"
+                    f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                ),
+            )
+            self.assertTrue(
+                self._has_mcp_script(xdg_data),
+                msg=(
+                    "sandesh-mcp not found in venv bin after --surface both — "
+                    "mcp extra must be installed for surface=both."
+                ),
+            )
 
     def test_ac1_surface_pi_excludes_mcp_venv(self):
         """install.sh --surface pi → sandesh-mcp NOT in venv bin (AC2).
@@ -1535,27 +1535,27 @@ class SurfaceChoiceInstallTest(unittest.TestCase):
             xdg_data = os.path.join(home_dir, ".local", "share")
             os.makedirs(home_dir)
             result = self._run_install(home_dir, xdg_data)
-        # If install failed and the venv python doesn't exist → offline/no-cache skip
-        venv_python = os.path.join(xdg_data, "sandesh", ".venv", "bin", "python")
-        if not os.path.isfile(venv_python):
-            self.skipTest(
-                "[mcp,migrate] pip install failed (likely offline/no cache) — "
-                f"install.sh rc={result.returncode}"
+            # If install failed and the venv python doesn't exist → offline/no-cache skip
+            venv_python = os.path.join(xdg_data, "sandesh", ".venv", "bin", "python")
+            if not os.path.isfile(venv_python):
+                self.skipTest(
+                    "[mcp,migrate] pip install failed (likely offline/no cache) — "
+                    f"install.sh rc={result.returncode}"
+                )
+            self.assertEqual(
+                result.returncode, 0,
+                msg=(
+                    f"install.sh (no args, no EXTRAS env) exited {result.returncode}.\n"
+                    f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                ),
             )
-        self.assertEqual(
-            result.returncode, 0,
-            msg=(
-                f"install.sh (no args, no EXTRAS env) exited {result.returncode}.\n"
-                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-            ),
-        )
-        self.assertTrue(
-            self._has_mcp_script(xdg_data),
-            msg=(
-                "sandesh-mcp not found after default install (no --surface, no EXTRAS) — "
-                "default must install [mcp,migrate] (AC6 regression)."
-            ),
-        )
+            self.assertTrue(
+                self._has_mcp_script(xdg_data),
+                msg=(
+                    "sandesh-mcp not found after default install (no --surface, no EXTRAS) — "
+                    "default must install [mcp,migrate] (AC6 regression)."
+                ),
+            )
 
     # ------------------------------------------------------------------
     # AC3 — delegates to init: admin provisioned + no inline heredoc
@@ -1578,37 +1578,37 @@ class SurfaceChoiceInstallTest(unittest.TestCase):
                 home_dir, xdg_data, ["--surface", "claude"],
                 extra_env={"SANDESH_ADMIN": "tester"},
             )
-        # install must complete
-        self.assertEqual(
-            result.returncode, 0,
-            msg=(
-                f"install.sh --surface claude exited {result.returncode}.\n"
-                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-            ),
-        )
-        # Verify admin was set in the store
-        import sqlite3
-        db_path = os.path.join(xdg_data, "sandesh", "sandesh.db")
-        self.assertTrue(
-            os.path.isfile(db_path),
-            msg=f"sandesh.db not found at {db_path} after install.",
-        )
-        con = sqlite3.connect(db_path)
-        try:
-            row = con.execute("SELECT name FROM admin WHERE id=1").fetchone()
-        finally:
-            con.close()
-        self.assertIsNotNone(
-            row,
-            msg="No admin row in sandesh.db after install with SANDESH_ADMIN=tester.",
-        )
-        self.assertEqual(
-            row[0], "tester",
-            msg=(
-                f"admin_name is {row[0]!r}, expected 'tester' after install "
-                "with SANDESH_ADMIN=tester."
-            ),
-        )
+            # install must complete
+            self.assertEqual(
+                result.returncode, 0,
+                msg=(
+                    f"install.sh --surface claude exited {result.returncode}.\n"
+                    f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                ),
+            )
+            # Verify admin was set in the store
+            import sqlite3
+            db_path = os.path.join(xdg_data, "sandesh", "sandesh.db")
+            self.assertTrue(
+                os.path.isfile(db_path),
+                msg=f"sandesh.db not found at {db_path} after install.",
+            )
+            con = sqlite3.connect(db_path)
+            try:
+                row = con.execute("SELECT name FROM admin WHERE id=1").fetchone()
+            finally:
+                con.close()
+            self.assertIsNotNone(
+                row,
+                msg="No admin row in sandesh.db after install with SANDESH_ADMIN=tester.",
+            )
+            self.assertEqual(
+                row[0], "tester",
+                msg=(
+                    f"admin_name is {row[0]!r}, expected 'tester' after install "
+                    "with SANDESH_ADMIN=tester."
+                ),
+            )
 
     def test_ac3_install_source_has_sandesh_init(self):
         """install.sh source must contain 'sandesh init' (delegation, §S2).
@@ -1657,25 +1657,25 @@ class SurfaceChoiceInstallTest(unittest.TestCase):
                 home_dir, xdg_data, ["--surface", "claude"],
                 extra_env={"SANDESH_ADMIN": "tester"},
             )
-        self.assertEqual(result.returncode, 0,
-                         msg=f"install.sh failed: {result.stderr[:300]}")
-        import sqlite3
-        db_path = os.path.join(xdg_data, "sandesh", "sandesh.db")
-        con = sqlite3.connect(db_path)
-        try:
-            rows = con.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='message_fts'"
-            ).fetchall()
-        finally:
-            con.close()
-        self.assertEqual(
-            len(rows), 1,
-            msg=(
-                "message_fts FTS table not found in store after install — "
-                "`sandesh init` must run reindex (§S2).\n"
-                f"DB: {db_path}"
-            ),
-        )
+            self.assertEqual(result.returncode, 0,
+                             msg=f"install.sh failed: {result.stderr[:300]}")
+            import sqlite3
+            db_path = os.path.join(xdg_data, "sandesh", "sandesh.db")
+            con = sqlite3.connect(db_path)
+            try:
+                rows = con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='message_fts'"
+                ).fetchall()
+            finally:
+                con.close()
+            self.assertEqual(
+                len(rows), 1,
+                msg=(
+                    "message_fts FTS table not found in store after install — "
+                    "`sandesh init` must run reindex (§S2).\n"
+                    f"DB: {db_path}"
+                ),
+            )
 
     # ------------------------------------------------------------------
     # AC4 — mandatory migrate on existing behind DB
