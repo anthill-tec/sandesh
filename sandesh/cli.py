@@ -710,7 +710,14 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    return args.fn(args)
+    try:
+        return args.fn(args)
+    except sdb.MigrationRequired as exc:
+        # A schema-behind store with no [migrate] extra: surface the library's
+        # message as a clean '[sandesh]' line (never a raw traceback) and exit
+        # non-zero (CR-SAN-037 AC4).
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

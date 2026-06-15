@@ -731,19 +731,29 @@ def _db_has_yoyo_table(db_path):
 
 
 class MigrateExtraInstallTest(unittest.TestCase):
-    """AC2 — installer tolerates a missing [migrate] extra.
+    """AC2 — installer tolerates a missing [migrate] extra (delegated path).
 
     Run install.sh with SANDESH_INSTALL_EXTRAS="" (empty string forces a
     stdlib-only base install — no [migrate] deps).  Assert:
       - install exits 0 (completes successfully)
-      - output contains a "migrations skipped" notice naming [migrate]
       - installer did NOT abort (the migrate step was skipped, not failed)
+      - output does NOT contain a traceback
+      - the venv python exists (install completed)
 
-    This test exercises the DEC-3 "missing-extra path": when [migrate] is
-    absent, install.sh must skip migrate --all, print the notice, and succeed.
+    After §S2 delegation: `sandesh init` emits "migrate: skipped — the
+    [migrate] extra is not installed (store schema is current)." (or similar)
+    when migrate is absent on a fresh/current store; the OLD inline strings
+    "migrations skipped"/"migrate --all"/"sandesh migrate" are REMOVED from
+    install.sh output.
 
-    RED: install.sh does not yet print the skip notice (it prints a different
-    NOTE about [mcp] only), so the notice assertion fails.
+    DRIFT-1 refresh (CR-SAN-037 C1): the old test asserted the inline notice
+    strings which are removed by delegation to `sandesh init`. Updated to
+    assert the delegated behaviour: install completes (exit 0), no traceback,
+    venv present. Removed the assertion on the removed inline strings.
+
+    RED now: install.sh still has the inline block and does NOT yet call
+    `sandesh init`, so `test_ac2_install_invokes_sandesh_init` fails (the
+    `sandesh init` token is absent from install.sh source).
     """
 
     tmp = None
@@ -806,35 +816,52 @@ class MigrateExtraInstallTest(unittest.TestCase):
             ),
         )
 
-    def test_ac2_output_contains_migrations_skipped_notice(self):
-        """install.sh output must contain a 'migrations skipped' notice that
-        names the [migrate] extra and the sandesh migrate --all command.
+    def test_ac2_output_no_traceback(self):
+        """install.sh with SANDESH_INSTALL_EXTRAS='' must not produce a traceback.
 
-        RED: install.sh does not yet emit this notice (it currently only
-        prints the [mcp] fallback notice — no [migrate] skip message).
+        DRIFT-1 refresh (CR-SAN-037 C1): replaces the old assertion on the
+        removed inline 'migrations skipped'/'sandesh migrate --all' strings.
+        After delegation to `sandesh init` those strings are gone from
+        install.sh output; this test asserts the delegated path is clean.
         """
         self._check_setup()
         combined = self.install_result.stdout + self.install_result.stderr
-        # The notice must name the [migrate] extra.
-        self.assertIn(
-            "[migrate]",
+        self.assertNotIn(
+            "Traceback",
             combined,
             msg=(
-                "install.sh output does not contain '[migrate]' — expected a "
-                "'migrations skipped — install [migrate]' notice.\n"
+                "install.sh produced a Python traceback with SANDESH_INSTALL_EXTRAS=''.\n"
                 f"Full output:\n{combined}"
             ),
         )
-        # The notice must mention how to migrate later.
-        self.assertTrue(
-            any(
-                phrase in combined
-                for phrase in ("migrations skipped", "migrate --all", "sandesh migrate")
-            ),
+
+    def test_ac2_install_invokes_sandesh_init(self):
+        """install.sh source must contain a 'sandesh init' invocation (delegation).
+
+        After §S2: the inline provisioning block (migrate→consolidate→reindex→admin)
+        is replaced by a single `sandesh init` call. This test reads install.sh
+        source and asserts 'sandesh init' appears.
+
+        RED: install.sh currently has the inline block with no 'sandesh init'.
+        """
+        with open(INSTALL_SH, "r") as fh:
+            source = fh.read()
+        self.assertIn(
+            "sandesh init",
+            source,
             msg=(
-                "install.sh output does not contain a 'migrations skipped' / "
-                "'sandesh migrate --all' hint.\n"
-                f"Full output:\n{combined}"
+                "install.sh source does not contain 'sandesh init' — "
+                "provisioning must be delegated to `sandesh init` (§S2).\n"
+                "Current install.sh still has the inline migrate→consolidate→reindex→admin block."
+            ),
+        )
+        # Negative: the old inline admin heredoc must be gone
+        self.assertNotIn(
+            "assign_admin(con",
+            source,
+            msg=(
+                "install.sh source still contains 'assign_admin(con' — "
+                "the inline admin heredoc must be removed when delegation is added (§S2)."
             ),
         )
 
@@ -865,12 +892,13 @@ class MigrateExtraInstallTest(unittest.TestCase):
 
 
 class MigrateOnInstallTest(unittest.TestCase):
-    """AC1 — installer runs migrate --all and upgrades existing stores.
+    """AC1 — installer migrates an existing store (delegated via sandesh init).
 
     Pre-creates a store in the temp XDG_DATA_HOME that has the old schema
     (message.status present, no _yoyo_migration).  Runs install.sh with
     SANDESH_INSTALL_EXTRAS=[mcp,migrate] so the installer venv gets the
     [migrate] deps (yoyo + jsonschema).  After install, asserts:
+      - install exits 0
       - the pre-migration store is fully migrated (0 pending via installed
         `sandesh migrate --status`)
       - message.status column is GONE from the store
@@ -882,8 +910,12 @@ class MigrateOnInstallTest(unittest.TestCase):
     no network/cache, AC1/AC3 will report as SKIPPED, not RED.  The RED
     assertions about migration status only fire when deps are available.
 
-    RED: install.sh does not yet run migrate --all, so after install the
-    store still has message.status (not migrated) and status reports pending.
+    DRIFT-1 refresh (CR-SAN-037 C1): behaviour assertions (status column
+    dropped, yoyo table present, 0 pending) are preserved.  The old comment
+    "RED: install.sh does not yet run migrate --all" is updated: after §S2
+    delegation, install.sh calls `sandesh init` which in turn calls migrate.
+    The core behaviour tests remain and are still RED until GREEN implements
+    the delegation.
     """
 
     tmp = None
@@ -975,8 +1007,8 @@ class MigrateOnInstallTest(unittest.TestCase):
         """After install.sh with [migrate], the pre-migration store must have
         NO message.status column (migration 0002 must have been applied).
 
-        RED: install.sh does not yet run migrate --all → status column still
-        present after install.
+        RED: install.sh does not yet delegate to `sandesh init` → the inline
+        block does not run migrate, so status column still present after install.
         """
         self._check_available()
         db_path = self._db_path()
@@ -998,7 +1030,8 @@ class MigrateOnInstallTest(unittest.TestCase):
         """After install.sh with [migrate], the store must have a _yoyo_migration
         table (yoyo has been run and recorded the applied migrations).
 
-        RED: install.sh does not run migrate --all → no _yoyo_migration table.
+        RED: install.sh does not yet delegate to `sandesh init` → migration
+        not run → no _yoyo_migration table.
         """
         self._check_available()
         db_path = self._db_path()
@@ -1017,11 +1050,11 @@ class MigrateOnInstallTest(unittest.TestCase):
         )
 
     def test_ac1_migrate_status_shows_zero_pending_after_install(self):
-        """After install.sh with [migrate], `sandesh migrate --status --project X`
-        must report 0 pending migrations for the pre-migration store.
+        """After install.sh with [migrate], `sandesh migrate --status` must
+        report 0 pending migrations for the pre-migration store.
 
-        RED: install.sh does not run migrate --all → status shows pending
-        (0002-drop-message-status is pending on the store).
+        RED: install.sh does not yet delegate to `sandesh init` → migration
+        not run → status shows pending (0002-drop-message-status is pending).
         """
         self._check_available()
         sandesh_bin = self._installed_sandesh()
@@ -1074,7 +1107,7 @@ class MigrateOnInstallTest(unittest.TestCase):
 
 
 class FreshInstallMigrateNoOpTest(unittest.TestCase):
-    """AC3 — fresh install with no existing stores: migrate --all is a clean no-op.
+    """AC3 / AC5 — fresh install with no existing stores: migrate is a clean no-op.
 
     Empty XDG_DATA_HOME (no projects/ stores at all).  Run install.sh with
     SANDESH_INSTALL_EXTRAS=[mcp,migrate].  Assert:
@@ -1085,9 +1118,13 @@ class FreshInstallMigrateNoOpTest(unittest.TestCase):
     HARNESS NOTE: same offline/network caveat as MigrateOnInstallTest — skips
     if [mcp,migrate] pip install fails.
 
-    RED: currently install.sh does not call migrate --all at all, so this test
-    passes trivially (no migrate step = no migrate error).  It acts as a guard:
-    after GREEN adds the hook, the fresh-install path must remain clean.
+    DRIFT-1 refresh (CR-SAN-037 C1): After §S2 delegation, `sandesh init`
+    handles the no-op path.  The old comment "RED: install.sh does not call
+    migrate --all at all" is updated: the guard assertions (exit 0, no
+    traceback, no spurious project) are still the right post-delegation
+    expectations and remain in place.  The removed inline strings
+    ("migrate --all aborted") are unchanged — that string was never emitted
+    by the old code either, so the negative assertion survives as-is.
     """
 
     tmp = None
@@ -1151,8 +1188,9 @@ class FreshInstallMigrateNoOpTest(unittest.TestCase):
     def test_ac3_fresh_install_exits_zero(self):
         """install.sh on an empty data-home must exit 0 (no-op migrate is clean).
 
-        RED (guard): install.sh currently has no migrate step — passes now.
-        After GREEN adds the hook, this must remain GREEN (no-op path).
+        DRIFT-1 guard: after §S2 delegation, `sandesh init` runs on a fresh
+        store and must complete without error (migrate no-op, consolidate no-op,
+        reindex 0 messages, admin assigned from $SANDESH_ADMIN or skipped).
         """
         self._check_available()
         self.assertEqual(
@@ -1169,9 +1207,8 @@ class FreshInstallMigrateNoOpTest(unittest.TestCase):
     def test_ac3_fresh_install_no_traceback_in_output(self):
         """install.sh on an empty data-home must not produce a traceback.
 
-        RED (guard): no migrate step currently, so no migrate error possible.
-        After GREEN adds the hook, `migrate --all` over zero stores exits 0
-        silently — no traceback must appear.
+        DRIFT-1 guard: after §S2 delegation, `sandesh init` over a fresh
+        empty store must exit 0 silently — no traceback must appear.
         """
         self._check_available()
         combined = self.install_result.stdout + self.install_result.stderr
@@ -1187,8 +1224,8 @@ class FreshInstallMigrateNoOpTest(unittest.TestCase):
     def test_ac3_fresh_install_no_error_marker_in_output(self):
         """install.sh on an empty data-home must not print an error from migrate.
 
-        Checks that no 'migrate --all aborted' or 'Error:' line appeared —
-        confirming the zero-stores path is truly a no-op.
+        DRIFT-1 guard: checks that no 'migrate --all aborted' or error marker
+        appears in the delegated `sandesh init` output on a fresh store.
         """
         self._check_available()
         combined = self.install_result.stdout + self.install_result.stderr
@@ -1204,7 +1241,7 @@ class FreshInstallMigrateNoOpTest(unittest.TestCase):
 
     def test_ac3_fresh_install_no_spurious_project_created(self):
         """install.sh must not create any project stores as a side effect of
-        running migrate --all on an empty data-home.
+        running `sandesh init` on an empty data-home.
 
         The projects/ directory must either not exist or be empty.
         """
@@ -1220,6 +1257,539 @@ class FreshInstallMigrateNoOpTest(unittest.TestCase):
                     f"{entries}"
                 ),
             )
+
+    def test_ac3_init_done_emitted_on_fresh_install(self):
+        """After delegation (§S2), install.sh must emit 'init: done.' on a
+        fresh install (the `sandesh init` final line).
+
+        DRIFT-1 / RED: install.sh currently has the inline block; it does not
+        call `sandesh init` and therefore never emits 'init: done.'. This test
+        fails until GREEN replaces the inline block with `sandesh init`.
+        """
+        self._check_available()
+        combined = self.install_result.stdout + self.install_result.stderr
+        self.assertIn(
+            "init: done.",
+            combined,
+            msg=(
+                "install.sh output does not contain 'init: done.' on a fresh install — "
+                "expected `sandesh init` to be invoked (§S2 delegation).\n"
+                f"Full output:\n{combined}"
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# CR-SAN-037 C1 — surface choice + delegate to init + mandatory migrate
+# ---------------------------------------------------------------------------
+
+
+def _make_behind_store(xdg_data):
+    """Create a global sandesh.db that is schema-behind for AC4.
+
+    The store has a _yoyo_migration table recording only the 0001-baseline
+    migration — so _store_is_behind() returns True (packaged set contains
+    0002..0005 which are not applied).
+
+    Returns the db_path.
+    """
+    import sqlite3
+    sandesh_dir = os.path.join(xdg_data, "sandesh")
+    os.makedirs(sandesh_dir, exist_ok=True)
+    db_path = os.path.join(sandesh_dir, "sandesh.db")
+    con = sqlite3.connect(db_path)
+    # Bootstrap the 4-table pre-migration schema (same as _PRE_MIGRATION_SCHEMA)
+    con.executescript(_PRE_MIGRATION_SCHEMA)
+    # Add a _yoyo_migration table with only the baseline applied — rest pending
+    con.executescript("""
+        CREATE TABLE IF NOT EXISTS _yoyo_migration (
+            migration_id TEXT NOT NULL PRIMARY KEY,
+            applied_at_utc TEXT NOT NULL
+        );
+        INSERT OR IGNORE INTO _yoyo_migration (migration_id, applied_at_utc)
+            VALUES ('0001-baseline', datetime('now'));
+    """)
+    con.commit()
+    con.close()
+    return db_path
+
+
+class SurfaceChoiceInstallTest(unittest.TestCase):
+    """CR-SAN-037 §S1/§S2/§S3 — surface choice, delegation, mandatory migrate.
+
+    All tests in this class are RED: install.sh does not yet accept --surface,
+    does not delegate to `sandesh init`, and does not enforce mandatory migrate
+    on an existing DB when [migrate] cannot be installed.
+    """
+
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
+    def _run_install(self, home_dir, xdg_data, extra_args=(), extra_env=None,
+                     timeout=300):
+        """Run install.sh with given args + env overrides. Returns CompletedProcess."""
+        env = {
+            **os.environ,
+            "HOME": home_dir,
+            "XDG_DATA_HOME": xdg_data,
+            "SANDESH_ADMIN": "tester",
+        }
+        if extra_env:
+            env.update(extra_env)
+        return subprocess.run(
+            ["bash", INSTALL_SH] + list(extra_args),
+            env=env,
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+    def _venv_bin(self, xdg_data):
+        return os.path.join(xdg_data, "sandesh", ".venv", "bin")
+
+    def _has_mcp_script(self, xdg_data):
+        """Return True if sandesh-mcp console script exists in the venv bin."""
+        return os.path.isfile(os.path.join(self._venv_bin(xdg_data), "sandesh-mcp"))
+
+    def _has_mcp_symlink(self, home_dir):
+        """Return True if the $HOME/.local/bin/sandesh-mcp symlink exists."""
+        return os.path.lexists(os.path.join(home_dir, ".local", "bin", "sandesh-mcp"))
+
+    # ------------------------------------------------------------------
+    # AC1 / AC2 — surface resolution: --surface claude → mcp installed
+    # ------------------------------------------------------------------
+
+    def test_ac1_surface_claude_installs_mcp(self):
+        """install.sh --surface claude → venv has sandesh-mcp console script.
+
+        RED: install.sh rejects --surface flag (falls to the '*' case → exit 2).
+        """
+        with tempfile.TemporaryDirectory(prefix="sandesh-sc-claude-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install(home_dir, xdg_data, ["--surface", "claude"])
+            self.assertEqual(
+                result.returncode, 0,
+                msg=(
+                    f"install.sh --surface claude exited {result.returncode}, expected 0.\n"
+                    f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                ),
+            )
+            self.assertTrue(
+                self._has_mcp_script(xdg_data),
+                msg=(
+                    "sandesh-mcp not found in venv bin after --surface claude — "
+                    "mcp extra must be installed for surface=claude.\n"
+                    f"venv bin: {self._venv_bin(xdg_data)}"
+                ),
+            )
+
+    def test_ac1_surface_both_installs_mcp(self):
+        """install.sh --surface both → venv has sandesh-mcp console script.
+
+        RED: install.sh rejects --surface flag.
+        """
+        with tempfile.TemporaryDirectory(prefix="sandesh-sc-both-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install(home_dir, xdg_data, ["--surface", "both"])
+            self.assertEqual(
+                result.returncode, 0,
+                msg=(
+                    f"install.sh --surface both exited {result.returncode}, expected 0.\n"
+                    f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                ),
+            )
+            self.assertTrue(
+                self._has_mcp_script(xdg_data),
+                msg=(
+                    "sandesh-mcp not found in venv bin after --surface both — "
+                    "mcp extra must be installed for surface=both."
+                ),
+            )
+
+    def test_ac1_surface_pi_excludes_mcp_venv(self):
+        """install.sh --surface pi → sandesh-mcp NOT in venv bin (AC2).
+
+        RED: install.sh rejects --surface flag.
+        """
+        with tempfile.TemporaryDirectory(prefix="sandesh-sc-pi-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install(home_dir, xdg_data, ["--surface", "pi"])
+        self.assertEqual(
+            result.returncode, 0,
+            msg=(
+                f"install.sh --surface pi exited {result.returncode}, expected 0.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+        self.assertFalse(
+            self._has_mcp_script(xdg_data),
+            msg=(
+                "sandesh-mcp IS present in venv bin after --surface pi — "
+                "mcp extra must NOT be installed for surface=pi (AC2).\n"
+                f"venv bin: {self._venv_bin(xdg_data)}"
+            ),
+        )
+
+    def test_ac2_surface_pi_excludes_mcp_symlink(self):
+        """install.sh --surface pi → no $HOME/.local/bin/sandesh-mcp symlink (AC2).
+
+        RED: install.sh rejects --surface flag.
+        """
+        with tempfile.TemporaryDirectory(prefix="sandesh-sc-pi-sym-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._run_install(home_dir, xdg_data, ["--surface", "pi"])
+        self.assertFalse(
+            self._has_mcp_symlink(home_dir),
+            msg=(
+                "$HOME/.local/bin/sandesh-mcp symlink exists after --surface pi — "
+                "no mcp symlink must be created for surface=pi (AC2)."
+            ),
+        )
+
+    def test_ac1_surface_none_excludes_mcp(self):
+        """install.sh --surface none → no sandesh-mcp in venv bin.
+
+        RED: install.sh rejects --surface flag.
+        """
+        with tempfile.TemporaryDirectory(prefix="sandesh-sc-none-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install(home_dir, xdg_data, ["--surface", "none"])
+        self.assertEqual(
+            result.returncode, 0,
+            msg=(
+                f"install.sh --surface none exited {result.returncode}, expected 0.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+        self.assertFalse(
+            self._has_mcp_script(xdg_data),
+            msg="sandesh-mcp IS present after --surface none — must not install mcp.",
+        )
+
+    def test_ac1_extras_env_honored_verbatim_no_mcp(self):
+        """No --surface flag but SANDESH_INSTALL_EXTRAS='[migrate]' → no mcp (AC1).
+
+        The env override is used verbatim (precedence level 2): without 'mcp'
+        in the extras string, sandesh-mcp must not appear in the venv bin.
+
+        RED: install.sh today always tries to install mcp via the fallback
+        path regardless of SANDESH_INSTALL_EXTRAS content — the env is honored
+        only when non-empty but the fallback still installs mcp.
+        Actually the current fallback only fires if the EXTRAS install fails;
+        with EXTRAS='[migrate]' the install succeeds without mcp, which IS
+        the correct behaviour already for level-2 — but --surface is new (RED).
+        This test pins the EXTRAS-only path: no --surface, EXTRAS='[migrate]'.
+        """
+        with tempfile.TemporaryDirectory(prefix="sandesh-sc-extras-env-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install(
+                home_dir, xdg_data,
+                extra_env={"SANDESH_INSTALL_EXTRAS": "[migrate]"},
+            )
+        self.assertEqual(
+            result.returncode, 0,
+            msg=(
+                f"install.sh with SANDESH_INSTALL_EXTRAS='[migrate]' exited "
+                f"{result.returncode}, expected 0.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+        self.assertFalse(
+            self._has_mcp_script(xdg_data),
+            msg=(
+                "sandesh-mcp IS present with SANDESH_INSTALL_EXTRAS='[migrate]' — "
+                "the env override must be used verbatim (no mcp in extras → no mcp)."
+            ),
+        )
+
+    def test_ac1_default_no_flag_no_env_installs_mcp(self):
+        """No --surface flag, no SANDESH_INSTALL_EXTRAS → default [mcp,migrate] → mcp present.
+
+        Preserves AC6 (InstallShTest regression): the default non-interactive
+        path still installs mcp.
+
+        HARNESS NOTE: requires network/pip-cache for [mcp,migrate] deps. If the
+        pip install of mcp fails (offline / no cache), the test is SKIPPED —
+        same pattern as MigrateOnInstallTest. The regression guarantee only
+        fires when deps are available.
+
+        RED: this test is expected to PASS when network is available (install.sh
+        default already installs [mcp,migrate]). It pins the regression guarantee.
+        """
+        with tempfile.TemporaryDirectory(prefix="sandesh-sc-default-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install(home_dir, xdg_data)
+            # If install failed and the venv python doesn't exist → offline/no-cache skip
+            venv_python = os.path.join(xdg_data, "sandesh", ".venv", "bin", "python")
+            if not os.path.isfile(venv_python):
+                self.skipTest(
+                    "[mcp,migrate] pip install failed (likely offline/no cache) — "
+                    f"install.sh rc={result.returncode}"
+                )
+            self.assertEqual(
+                result.returncode, 0,
+                msg=(
+                    f"install.sh (no args, no EXTRAS env) exited {result.returncode}.\n"
+                    f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                ),
+            )
+            self.assertTrue(
+                self._has_mcp_script(xdg_data),
+                msg=(
+                    "sandesh-mcp not found after default install (no --surface, no EXTRAS) — "
+                    "default must install [mcp,migrate] (AC6 regression)."
+                ),
+            )
+
+    # ------------------------------------------------------------------
+    # AC3 — delegates to init: admin provisioned + no inline heredoc
+    # ------------------------------------------------------------------
+
+    def test_ac3_fresh_install_admin_provisioned_via_init(self):
+        """After install.sh --surface claude with SANDESH_ADMIN=tester, the store
+        must have admin_name == 'tester' (provisioned by `sandesh init`).
+
+        RED: install.sh does not yet call `sandesh init`; the inline heredoc
+        runs `assign_admin` directly, so admin IS set — but via the wrong path.
+        This test also asserts install.sh source contains 'sandesh init' and
+        does NOT contain 'assign_admin(con', which still fails RED.
+        """
+        with tempfile.TemporaryDirectory(prefix="sandesh-sc-ac3-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install(
+                home_dir, xdg_data, ["--surface", "claude"],
+                extra_env={"SANDESH_ADMIN": "tester"},
+            )
+            # install must complete
+            self.assertEqual(
+                result.returncode, 0,
+                msg=(
+                    f"install.sh --surface claude exited {result.returncode}.\n"
+                    f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                ),
+            )
+            # Verify admin was set in the store
+            import sqlite3
+            db_path = os.path.join(xdg_data, "sandesh", "sandesh.db")
+            self.assertTrue(
+                os.path.isfile(db_path),
+                msg=f"sandesh.db not found at {db_path} after install.",
+            )
+            con = sqlite3.connect(db_path)
+            try:
+                row = con.execute("SELECT name FROM admin WHERE id=1").fetchone()
+            finally:
+                con.close()
+            self.assertIsNotNone(
+                row,
+                msg="No admin row in sandesh.db after install with SANDESH_ADMIN=tester.",
+            )
+            self.assertEqual(
+                row[0], "tester",
+                msg=(
+                    f"admin_name is {row[0]!r}, expected 'tester' after install "
+                    "with SANDESH_ADMIN=tester."
+                ),
+            )
+
+    def test_ac3_install_source_has_sandesh_init(self):
+        """install.sh source must contain 'sandesh init' (delegation, §S2).
+
+        RED: install.sh currently has the inline block; 'sandesh init' absent.
+        """
+        with open(INSTALL_SH, "r") as fh:
+            source = fh.read()
+        self.assertIn(
+            "sandesh init",
+            source,
+            msg=(
+                "install.sh source does not contain 'sandesh init' — "
+                "provisioning must be delegated to `sandesh init` (§S2)."
+            ),
+        )
+
+    def test_ac3_install_source_no_inline_admin_heredoc(self):
+        """install.sh source must NOT contain 'assign_admin(con' (old inline heredoc).
+
+        RED: install.sh currently has the inline admin heredoc with this string.
+        """
+        with open(INSTALL_SH, "r") as fh:
+            source = fh.read()
+        self.assertNotIn(
+            "assign_admin(con",
+            source,
+            msg=(
+                "install.sh source still contains 'assign_admin(con' — "
+                "the inline admin heredoc must be removed when delegation is added (§S2)."
+            ),
+        )
+
+    def test_ac3_fresh_install_fts_index_built(self):
+        """After install.sh --surface claude with SANDESH_ADMIN=tester, the FTS
+        index must exist in the store (reindex ran via `sandesh init`).
+
+        RED: install.sh does not yet call `sandesh init` (uses --surface which
+        is rejected today).
+        """
+        with tempfile.TemporaryDirectory(prefix="sandesh-sc-ac3-fts-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install(
+                home_dir, xdg_data, ["--surface", "claude"],
+                extra_env={"SANDESH_ADMIN": "tester"},
+            )
+            self.assertEqual(result.returncode, 0,
+                             msg=f"install.sh failed: {result.stderr[:300]}")
+            import sqlite3
+            db_path = os.path.join(xdg_data, "sandesh", "sandesh.db")
+            con = sqlite3.connect(db_path)
+            try:
+                rows = con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='message_fts'"
+                ).fetchall()
+            finally:
+                con.close()
+            self.assertEqual(
+                len(rows), 1,
+                msg=(
+                    "message_fts FTS table not found in store after install — "
+                    "`sandesh init` must run reindex (§S2).\n"
+                    f"DB: {db_path}"
+                ),
+            )
+
+    # ------------------------------------------------------------------
+    # AC4 — mandatory migrate on existing behind DB
+    # ------------------------------------------------------------------
+
+    def test_ac4_existing_behind_db_no_migrate_extra_fails_loudly(self):
+        """With an existing behind sandesh.db and SANDESH_INSTALL_EXTRAS=''
+        (no [migrate] in venv), install.sh must exit non-zero AND the error
+        must be surfaced via `sandesh init` (the delegated path).
+
+        After §S2 delegation: `sandesh init` detects the behind store, cannot
+        migrate (no [migrate] extra), prints '[sandesh] Sandesh store schema
+        is behind...' to stderr, and exits 1 — install.sh propagates the exit.
+
+        RED: install.sh does not yet call `sandesh init`. The current inline
+        block's consolidate step incidentally triggers MigrationRequired via
+        connect(), so the install does exit non-zero BUT the error message
+        comes from the consolidate traceback, not from `sandesh init`. The
+        assertion on '[sandesh]' prefix (the init error format) is what is RED:
+        current output has 'sandesh.sandesh_db.MigrationRequired:' not
+        '[sandesh] Sandesh store schema is behind'.
+        """
+        with tempfile.TemporaryDirectory(prefix="sandesh-sc-ac4-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            # Pre-create a behind store (_yoyo_migration table with only baseline applied)
+            _make_behind_store(xdg_data)
+            result = self._run_install(
+                home_dir, xdg_data,
+                extra_env={"SANDESH_INSTALL_EXTRAS": ""},
+            )
+        # Must fail non-zero (existing behaviour; also required post-GREEN)
+        self.assertNotEqual(
+            result.returncode, 0,
+            msg=(
+                "install.sh exited 0 with a behind sandesh.db and no [migrate] extra — "
+                "must fail loudly (non-zero) instead of silently skipping migration (AC4).\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+        # After delegation: the error must be surfaced via `sandesh init` with the
+        # '[sandesh]' prefix that cmd_init uses (not a raw MigrationRequired traceback).
+        combined = result.stdout + result.stderr
+        self.assertIn(
+            "[sandesh]",
+            combined,
+            msg=(
+                "install.sh AC4 error output does not contain '[sandesh]' prefix — "
+                "expected `sandesh init` to surface the migration-required error with "
+                "its '[sandesh]' prefix (current code emits a raw traceback instead).\n"
+                f"Full output:\n{combined}"
+            ),
+        )
+        # Negative: no raw Python traceback (clean error, not incidental crash)
+        self.assertNotIn(
+            "Traceback (most recent call last)",
+            combined,
+            msg=(
+                "install.sh AC4 error contains a Python traceback — "
+                "after §S2 delegation the error must be a clean '[sandesh]' message, "
+                "not a raw exception traceback.\n"
+                f"Full output:\n{combined}"
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # AC5 — fresh best-effort: no DB + no [migrate] → exit 0
+    # ------------------------------------------------------------------
+
+    def test_ac5_fresh_no_db_no_migrate_extra_exits_zero(self):
+        """Empty XDG + SANDESH_INSTALL_EXTRAS='' → install exits 0.
+
+        No existing sandesh.db → `sandesh init` treats the store as fresh/current
+        (no _yoyo_migration table → _store_is_behind returns False) → migrate
+        skipped with notice → init continues → exit 0.
+
+        RED: install.sh does not yet use --surface / sandesh init, so
+        SANDESH_INSTALL_EXTRAS='' causes the old fallback to install base only —
+        this currently exits 0 ALREADY (existing behaviour). However this test
+        also implicitly requires that install.sh didn't call `sandesh init`
+        (which would emit 'init: done.'). We assert exit 0 AND that 'init: done.'
+        is present in output after GREEN delegates. Until delegation, this test
+        is RED on the 'init: done.' assertion.
+        """
+        with tempfile.TemporaryDirectory(prefix="sandesh-sc-ac5-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install(
+                home_dir, xdg_data,
+                extra_env={"SANDESH_INSTALL_EXTRAS": ""},
+            )
+        self.assertEqual(
+            result.returncode, 0,
+            msg=(
+                "install.sh exited non-zero on a fresh store with no [migrate] extra — "
+                "must exit 0 (AC5 best-effort fresh install).\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+        combined = result.stdout + result.stderr
+        # After delegation, `sandesh init` emits "init: done." on a fresh store
+        # even without [migrate] (no behind → skips migrate, continues to completion).
+        self.assertIn(
+            "init: done.",
+            combined,
+            msg=(
+                "install.sh output does not contain 'init: done.' on a fresh store "
+                "with SANDESH_INSTALL_EXTRAS='' — after §S2 delegation, `sandesh init` "
+                "must complete (skipping migrate) and emit 'init: done.'.\n"
+                f"Full output:\n{combined}"
+            ),
+        )
 
 
 class UninstallShTest(unittest.TestCase):

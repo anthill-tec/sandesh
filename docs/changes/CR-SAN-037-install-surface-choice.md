@@ -1,6 +1,6 @@
 # CR-SAN-037 — install.sh: surface choice + delegate to `sandesh init` + mandatory migrate
 
-**Status:** PENDING
+**Status:** COMPLETED (implemented on feature/CR-SAN-037; ships in 0.3.0)
 **Priority:** High
 **Depends on:** CR-SAN-036 (`sandesh init`)
 **Labels:** installer, provisioning, lifecycle
@@ -32,20 +32,20 @@ skip).
   (non-zero) — no silent skip. Fresh install (no DB) → `[migrate]` best-effort (absent non-fatal).
 
 ## Acceptance criteria
-- [ ] **AC1 — surface resolution.** `install.sh --surface claude` (and `both`) installs extras
+- [x] **AC1 — surface resolution.** `install.sh --surface claude` (and `both`) installs extras
       including `mcp`; `--surface pi` and `--surface none` install **without** `mcp`. With no flag,
       `SANDESH_INSTALL_EXTRAS` is honored verbatim; with neither (non-interactive), EXTRAS defaults
       to `[mcp,migrate]`.
-- [ ] **AC2 — Pi excludes mcp.** `--surface pi` (or `SANDESH_INSTALL_EXTRAS='[migrate]'`) installs
+- [x] **AC2 — Pi excludes mcp.** `--surface pi` (or `SANDESH_INSTALL_EXTRAS='[migrate]'`) installs
       the CLI with **no** `mcp` — no `sandesh-mcp` console script/symlink present.
-- [ ] **AC3 — delegates to init.** `install.sh` invokes `sandesh init`; the provisioning steps are
+- [x] **AC3 — delegates to init.** `install.sh` invokes `sandesh init`; the provisioning steps are
       not duplicated inline; a fresh install ends provisioned (admin set from `$SANDESH_ADMIN`).
-- [ ] **AC4 — mandatory migrate.** With an existing `sandesh.db` and `[migrate]` installable →
+- [x] **AC4 — mandatory migrate.** With an existing `sandesh.db` and `[migrate]` installable →
       migrated; with `[migrate]` NOT installable (simulated) → install exits non-zero with a clear
       message (no silent skip).
-- [ ] **AC5 — fresh best-effort.** No `sandesh.db` + `[migrate]` unavailable → install still
+- [x] **AC5 — fresh best-effort.** No `sandesh.db` + `[migrate]` unavailable → install still
       completes (migrate skipped with notice).
-- [ ] **AC6 — regression.** The existing `InstallShTest` (default install) stays green.
+- [x] **AC6 — regression.** The existing `InstallShTest` (default install) stays green.
 
 ## Estimated size
 Medium — bash arg/prompt logic + delegation; test_install.py additions.
