@@ -1222,5 +1222,605 @@ class FreshInstallMigrateNoOpTest(unittest.TestCase):
             )
 
 
+class UninstallShTest(unittest.TestCase):
+    """CR-SAN-035 C1 — install.sh --uninstall [--purge] / -h / bad-flag.
+
+    Mirrors InstallShTest's isolated-env harness but FABRICATES a footprint
+    instead of running a real pip install:
+      - $XDG/sandesh/.venv/bin/  (dummy venv directory tree)
+      - $XDG/sandesh/sandesh.db  (dummy data file)
+      - $XDG/sandesh/projects/   (dummy data directory)
+      - $HOME/.local/bin/sandesh       symlink → dummy venv/bin/sandesh
+      - $HOME/.local/bin/sandesh-mcp   symlink → dummy venv/bin/sandesh-mcp
+      - $HOME/.local/bin/other         plain sentinel file (must survive uninstall)
+
+    All tests in this class are RED: install.sh today ignores --uninstall,
+    --purge, -h, and --bogus, so none of the new behaviours exist yet.
+    """
+
+    def _make_footprint(self, home_dir, xdg_data):
+        """Fabricate a minimal Sandesh install footprint under home_dir/xdg_data."""
+        dest = os.path.join(xdg_data, "sandesh")
+        venv_bin = os.path.join(dest, ".venv", "bin")
+        os.makedirs(venv_bin, exist_ok=True)
+        # Dummy venv executables (regular files — symlinks target these)
+        for name in ("sandesh", "sandesh-mcp"):
+            dummy = os.path.join(venv_bin, name)
+            with open(dummy, "w") as f:
+                f.write("#!/bin/sh\necho dummy\n")
+            os.chmod(dummy, 0o755)
+        # Dummy data store
+        db_path = os.path.join(dest, "sandesh.db")
+        with open(db_path, "w") as f:
+            f.write("DUMMY DB\n")
+        # Dummy projects directory
+        projects_dir = os.path.join(dest, "projects")
+        os.makedirs(projects_dir, exist_ok=True)
+        # Dummy project data so projects/ is non-empty
+        proj_dir = os.path.join(projects_dir, "TestProject", "messages")
+        os.makedirs(proj_dir, exist_ok=True)
+        with open(os.path.join(proj_dir, "msg-001.md"), "w") as f:
+            f.write("# test message\n")
+        # Symlinks in $BINDIR
+        bindir = os.path.join(home_dir, ".local", "bin")
+        os.makedirs(bindir, exist_ok=True)
+        os.symlink(os.path.join(venv_bin, "sandesh"), os.path.join(bindir, "sandesh"))
+        os.symlink(os.path.join(venv_bin, "sandesh-mcp"), os.path.join(bindir, "sandesh-mcp"))
+        # Sentinel sibling file that must NOT be removed by uninstall
+        with open(os.path.join(bindir, "other"), "w") as f:
+            f.write("sentinel\n")
+
+    def _run_install_sh(self, home_dir, xdg_data, args, timeout=30):
+        """Run install.sh with given args in an isolated env; return CompletedProcess."""
+        env = {
+            **os.environ,
+            "HOME": home_dir,
+            "XDG_DATA_HOME": xdg_data,
+            # Prevent real pip/venv operations from running if install body fires
+            "SANDESH_INSTALL_EXTRAS": "",
+        }
+        return subprocess.run(
+            ["bash", INSTALL_SH] + args,
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+
+    # ------------------------------------------------------------------
+    # AC1 — --uninstall removes software, keeps data
+    # ------------------------------------------------------------------
+
+    def test_ac1_uninstall_exits_zero(self):
+        """install.sh --uninstall must exit 0."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac1-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            result = self._run_install_sh(home_dir, xdg_data, ["--uninstall"])
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(
+                f"install.sh --uninstall exited {result.returncode}, expected 0.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac1_uninstall_removes_sandesh_symlink(self):
+        """install.sh --uninstall must remove $BINDIR/sandesh."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac1-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            self._run_install_sh(home_dir, xdg_data, ["--uninstall"])
+            sandesh_link = os.path.join(home_dir, ".local", "bin", "sandesh")
+            # Assert inside the with block while tmp still exists
+            self.assertFalse(
+                os.path.lexists(sandesh_link),
+                msg=f"$BINDIR/sandesh still exists after --uninstall: {sandesh_link}",
+            )
+
+    def test_ac1_uninstall_removes_sandesh_mcp_symlink(self):
+        """install.sh --uninstall must remove $BINDIR/sandesh-mcp."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac1-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            self._run_install_sh(home_dir, xdg_data, ["--uninstall"])
+            mcp_link = os.path.join(home_dir, ".local", "bin", "sandesh-mcp")
+            # Assert inside the with block while tmp still exists
+            self.assertFalse(
+                os.path.lexists(mcp_link),
+                msg=f"$BINDIR/sandesh-mcp still exists after --uninstall: {mcp_link}",
+            )
+
+    def test_ac1_uninstall_removes_venv(self):
+        """install.sh --uninstall must remove $VENV ($DEST/.venv)."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac1-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            self._run_install_sh(home_dir, xdg_data, ["--uninstall"])
+            venv_dir = os.path.join(xdg_data, "sandesh", ".venv")
+            # Assert inside the with block while tmp still exists
+            self.assertFalse(
+                os.path.exists(venv_dir),
+                msg=f"$VENV still exists after --uninstall: {venv_dir}",
+            )
+
+    def test_ac1_uninstall_keeps_sandesh_db(self):
+        """install.sh --uninstall (without --purge) must keep sandesh.db."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac1-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            self._run_install_sh(home_dir, xdg_data, ["--uninstall"])
+            db_path = os.path.join(xdg_data, "sandesh", "sandesh.db")
+            # Assert inside the with block — tmp survives until we exit
+            self.assertTrue(
+                os.path.isfile(db_path),
+                msg=f"sandesh.db was removed by --uninstall (without --purge); expected it to be kept: {db_path}",
+            )
+
+    def test_ac1_uninstall_keeps_projects_dir(self):
+        """install.sh --uninstall (without --purge) must keep projects/."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac1-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            self._run_install_sh(home_dir, xdg_data, ["--uninstall"])
+            projects_dir = os.path.join(xdg_data, "sandesh", "projects")
+            # Assert inside the with block — tmp survives until we exit
+            self.assertTrue(
+                os.path.isdir(projects_dir),
+                msg=f"projects/ was removed by --uninstall (without --purge); expected it to be kept: {projects_dir}",
+            )
+
+    def test_ac1_uninstall_stdout_contains_mcp_remove_reminder(self):
+        """install.sh --uninstall stdout must contain 'claude mcp remove sandesh'."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac1-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            result = self._run_install_sh(home_dir, xdg_data, ["--uninstall"])
+        combined = result.stdout + result.stderr
+        self.assertIn(
+            "claude mcp remove sandesh",
+            combined,
+            msg=(
+                "install.sh --uninstall output does not contain the required "
+                "'claude mcp remove sandesh' reminder.\n"
+                f"Full output:\n{combined}"
+            ),
+        )
+
+    def test_ac1_uninstall_stdout_contains_data_kept_note(self):
+        """install.sh --uninstall stdout must note that the data store was kept."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac1-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            result = self._run_install_sh(home_dir, xdg_data, ["--uninstall"])
+        combined = result.stdout + result.stderr
+        # The output must contain some phrase indicating data was preserved
+        data_kept_phrases = ("data kept", "data store kept", "store kept", "--purge")
+        self.assertTrue(
+            any(phrase in combined.lower() for phrase in data_kept_phrases),
+            msg=(
+                "install.sh --uninstall output does not contain a 'data kept' note "
+                f"(looked for: {data_kept_phrases}).\n"
+                f"Full output:\n{combined}"
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # AC2 — --uninstall --purge removes data too
+    # ------------------------------------------------------------------
+
+    def test_ac2_purge_exits_zero(self):
+        """install.sh --uninstall --purge must exit 0."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac2-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            result = self._run_install_sh(home_dir, xdg_data, ["--uninstall", "--purge"])
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(
+                f"install.sh --uninstall --purge exited {result.returncode}, expected 0.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac2_purge_removes_sandesh_symlink(self):
+        """install.sh --uninstall --purge must remove $BINDIR/sandesh."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac2-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            self._run_install_sh(home_dir, xdg_data, ["--uninstall", "--purge"])
+            sandesh_link = os.path.join(home_dir, ".local", "bin", "sandesh")
+            # Assert inside the with block while tmp still exists
+            self.assertFalse(
+                os.path.lexists(sandesh_link),
+                msg=f"$BINDIR/sandesh still exists after --uninstall --purge: {sandesh_link}",
+            )
+
+    def test_ac2_purge_removes_entire_dest(self):
+        """install.sh --uninstall --purge must remove the entire $DEST directory."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac2-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            self._run_install_sh(home_dir, xdg_data, ["--uninstall", "--purge"])
+            dest = os.path.join(xdg_data, "sandesh")
+            # Assert inside the with block while tmp still exists
+            self.assertFalse(
+                os.path.exists(dest),
+                msg=(
+                    f"$DEST ({dest}) still exists after --uninstall --purge; "
+                    "expected the entire directory to be removed."
+                ),
+            )
+
+    def test_ac2_purge_removes_sandesh_db(self):
+        """install.sh --uninstall --purge must remove sandesh.db."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac2-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            self._run_install_sh(home_dir, xdg_data, ["--uninstall", "--purge"])
+            db_path = os.path.join(xdg_data, "sandesh", "sandesh.db")
+            # Assert inside the with block while tmp still exists
+            self.assertFalse(
+                os.path.exists(db_path),
+                msg=f"sandesh.db still exists after --uninstall --purge: {db_path}",
+            )
+
+    def test_ac2_purge_removes_projects_dir(self):
+        """install.sh --uninstall --purge must remove the projects/ directory."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac2-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            self._run_install_sh(home_dir, xdg_data, ["--uninstall", "--purge"])
+            projects_dir = os.path.join(xdg_data, "sandesh", "projects")
+            # Assert inside the with block while tmp still exists
+            self.assertFalse(
+                os.path.exists(projects_dir),
+                msg=f"projects/ still exists after --uninstall --purge: {projects_dir}",
+            )
+
+    # ------------------------------------------------------------------
+    # AC3 — idempotent: second --uninstall on already-clean env exits 0
+    # ------------------------------------------------------------------
+
+    def test_ac3_idempotent_exits_zero_on_clean_env(self):
+        """install.sh --uninstall on an already-clean env must exit 0 (no error)."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac3-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            # Create only BINDIR — no sandesh footprint at all
+            bindir = os.path.join(home_dir, ".local", "bin")
+            os.makedirs(bindir)
+            result = self._run_install_sh(home_dir, xdg_data, ["--uninstall"])
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(
+                f"install.sh --uninstall on a clean env exited {result.returncode}, expected 0.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac3_idempotent_second_run_exits_zero(self):
+        """Running --uninstall twice must exit 0 both times (idempotent)."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac3-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            # First uninstall
+            self._run_install_sh(home_dir, xdg_data, ["--uninstall"])
+            # Second uninstall — must also exit 0
+            result2 = self._run_install_sh(home_dir, xdg_data, ["--uninstall"])
+        self.assertEqual(
+            result2.returncode,
+            0,
+            msg=(
+                f"Second install.sh --uninstall exited {result2.returncode}, expected 0.\n"
+                f"STDOUT:\n{result2.stdout}\nSTDERR:\n{result2.stderr}"
+            ),
+        )
+
+    def test_ac3_idempotent_stdout_contains_already_removed_notice(self):
+        """install.sh --uninstall on a clean env must print an 'already removed' / 'nothing to do' notice."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac3-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            bindir = os.path.join(home_dir, ".local", "bin")
+            os.makedirs(bindir)
+            result = self._run_install_sh(home_dir, xdg_data, ["--uninstall"])
+        combined = result.stdout + result.stderr
+        already_phrases = ("already removed", "nothing to do", "already uninstalled", "not found")
+        self.assertTrue(
+            any(phrase in combined.lower() for phrase in already_phrases),
+            msg=(
+                "install.sh --uninstall on a clean env does not print an "
+                f"'already removed / nothing to do' notice (looked for: {already_phrases}).\n"
+                f"Full output:\n{combined}"
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # AC4 — -h / --help exits 0 with usage; unknown flag exits 2
+    # ------------------------------------------------------------------
+
+    def test_ac4_help_short_flag_exits_zero(self):
+        """install.sh -h must exit 0."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac4-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install_sh(home_dir, xdg_data, ["-h"])
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(
+                f"install.sh -h exited {result.returncode}, expected 0.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac4_help_long_flag_exits_zero(self):
+        """install.sh --help must exit 0."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac4-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install_sh(home_dir, xdg_data, ["--help"])
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(
+                f"install.sh --help exited {result.returncode}, expected 0.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac4_help_stdout_mentions_uninstall(self):
+        """install.sh -h usage block must mention '--uninstall'."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac4-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install_sh(home_dir, xdg_data, ["-h"])
+        combined = result.stdout + result.stderr
+        self.assertIn(
+            "--uninstall",
+            combined,
+            msg=(
+                "install.sh -h output does not contain '--uninstall'.\n"
+                f"Full output:\n{combined}"
+            ),
+        )
+
+    def test_ac4_help_stdout_mentions_purge(self):
+        """install.sh -h usage block must mention '--purge'."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac4-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install_sh(home_dir, xdg_data, ["-h"])
+        combined = result.stdout + result.stderr
+        self.assertIn(
+            "--purge",
+            combined,
+            msg=(
+                "install.sh -h output does not contain '--purge'.\n"
+                f"Full output:\n{combined}"
+            ),
+        )
+
+    def test_ac4_help_stdout_mentions_install_default(self):
+        """install.sh -h usage block must describe the default install mode."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac4-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install_sh(home_dir, xdg_data, ["-h"])
+        combined = result.stdout + result.stderr
+        install_phrases = ("install.sh", "./install.sh", "install")
+        self.assertTrue(
+            any(phrase in combined for phrase in install_phrases),
+            msg=(
+                "install.sh -h output does not name the default install mode "
+                f"(looked for: {install_phrases}).\n"
+                f"Full output:\n{combined}"
+            ),
+        )
+
+    def test_ac4_help_does_not_start_install(self):
+        """install.sh -h must NOT build a venv (install body must not run)."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac4-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._run_install_sh(home_dir, xdg_data, ["-h"])
+            venv_dir = os.path.join(xdg_data, "sandesh", ".venv")
+            # Assert inside the with block while tmp still exists
+            self.assertFalse(
+                os.path.exists(venv_dir),
+                msg=(
+                    f"install.sh -h built a venv at {venv_dir} — the install body "
+                    "must not run when -h is given."
+                ),
+            )
+
+    def test_ac4_unknown_flag_exits_two(self):
+        """install.sh --bogus must exit 2."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac4-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install_sh(home_dir, xdg_data, ["--bogus"])
+        self.assertEqual(
+            result.returncode,
+            2,
+            msg=(
+                f"install.sh --bogus exited {result.returncode}, expected 2.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac4_unknown_flag_usage_on_stderr(self):
+        """install.sh --bogus must print usage to stderr (not only stdout)."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac4-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            result = self._run_install_sh(home_dir, xdg_data, ["--bogus"])
+        self.assertTrue(
+            len(result.stderr.strip()) > 0,
+            msg=(
+                "install.sh --bogus produced no stderr output — expected usage on stderr.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac4_unknown_flag_does_not_build_venv(self):
+        """install.sh --bogus must NOT build a venv (install body must not run)."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac4-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._run_install_sh(home_dir, xdg_data, ["--bogus"])
+            venv_dir = os.path.join(xdg_data, "sandesh", ".venv")
+            # Assert inside the with block while tmp still exists
+            self.assertFalse(
+                os.path.exists(venv_dir),
+                msg=(
+                    f"install.sh --bogus built a venv at {venv_dir} — the install body "
+                    "must not run when an unknown flag is given."
+                ),
+            )
+
+    # ------------------------------------------------------------------
+    # AC6 — scoping safety: sentinel file + $BINDIR itself survive
+    # ------------------------------------------------------------------
+
+    def test_ac6_sentinel_other_file_survives_uninstall(self):
+        """install.sh --uninstall must not remove $BINDIR/other (sibling file)."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac6-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)  # creates $BINDIR/other
+            self._run_install_sh(home_dir, xdg_data, ["--uninstall"])
+            other_file = os.path.join(home_dir, ".local", "bin", "other")
+            # Assert inside the with block — tmp survives until we exit
+            self.assertTrue(
+                os.path.isfile(other_file),
+                msg=(
+                    f"$BINDIR/other was removed by --uninstall — uninstall must only "
+                    f"remove the two sandesh* symlinks.\n"
+                    f"Expected sentinel at: {other_file}"
+                ),
+            )
+
+    def test_ac6_bindir_itself_survives_uninstall(self):
+        """install.sh --uninstall must not remove $BINDIR itself."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac6-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            self._run_install_sh(home_dir, xdg_data, ["--uninstall"])
+            bindir = os.path.join(home_dir, ".local", "bin")
+            # Assert inside the with block — tmp survives until we exit
+            self.assertTrue(
+                os.path.isdir(bindir),
+                msg=(
+                    f"$BINDIR ({bindir}) was removed by --uninstall — "
+                    "uninstall must never delete $BINDIR itself."
+                ),
+            )
+
+    def test_ac6_sentinel_other_file_survives_purge(self):
+        """install.sh --uninstall --purge must not remove $BINDIR/other."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac6-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            self._run_install_sh(home_dir, xdg_data, ["--uninstall", "--purge"])
+            other_file = os.path.join(home_dir, ".local", "bin", "other")
+            # Assert inside the with block — tmp survives until we exit
+            self.assertTrue(
+                os.path.isfile(other_file),
+                msg=(
+                    f"$BINDIR/other was removed by --uninstall --purge — purge must "
+                    f"only extend removal to $DEST, not to sibling files in $BINDIR.\n"
+                    f"Expected sentinel at: {other_file}"
+                ),
+            )
+
+    def test_ac6_bindir_itself_survives_purge(self):
+        """install.sh --uninstall --purge must not remove $BINDIR itself."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac6-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            self._run_install_sh(home_dir, xdg_data, ["--uninstall", "--purge"])
+            bindir = os.path.join(home_dir, ".local", "bin")
+            # Assert inside the with block — tmp survives until we exit
+            self.assertTrue(
+                os.path.isdir(bindir),
+                msg=(
+                    f"$BINDIR ({bindir}) was removed by --uninstall --purge — "
+                    "purge must not delete $BINDIR itself."
+                ),
+            )
+
+    def test_ac6_source_checkout_untouched_by_uninstall(self):
+        """install.sh --uninstall must not remove files from the source checkout ($SRC)."""
+        with tempfile.TemporaryDirectory(prefix="sandesh-uninstall-ac6-") as tmp:
+            home_dir = os.path.join(tmp, "home")
+            xdg_data = os.path.join(home_dir, ".local", "share")
+            os.makedirs(home_dir)
+            self._make_footprint(home_dir, xdg_data)
+            self._run_install_sh(home_dir, xdg_data, ["--uninstall"])
+        # install.sh itself must still exist in $SRC
+        self.assertTrue(
+            os.path.isfile(INSTALL_SH),
+            msg=f"install.sh was removed from the source checkout: {INSTALL_SH}",
+        )
+        # The sandesh package directory must still exist
+        pkg_dir = os.path.join(REPO, "sandesh")
+        self.assertTrue(
+            os.path.isdir(pkg_dir),
+            msg=f"sandesh/ package dir was removed from the source checkout: {pkg_dir}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
