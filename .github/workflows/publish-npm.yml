@@ -45,7 +45,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0          # guard needs origin/main history for the ancestry check
+      - name: Guard — tag ref + on-main ancestry
+        run: |
+          if ! [[ "$GITHUB_REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::refusing to publish: $GITHUB_REF is not a clean version tag (^refs/tags/v[0-9]+.[0-9]+.[0-9]+$)"
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::refusing to publish: $GITHUB_SHA is not an ancestor of origin/main"
+            exit 1
+          fi
       - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v4
         with:
