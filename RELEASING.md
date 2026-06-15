@@ -48,57 +48,102 @@ Repo → *Settings → Environments* → create:
 PEP 740 **attestations** are generated and uploaded automatically by
 `pypa/gh-action-pypi-publish` (≥ v1.11) for trusted-publishing flows — nothing to configure.
 
+### 4. GitHub repo secret — `RELEASE_PAT` (required by the auto-release chain)
+The push-to-`main` step that auto-creates the GitHub Release uses a **non-default token**: a Release
+created with the default `GITHUB_TOKEN` does **not** re-trigger an `on: release` workflow (GitHub's
+anti-recursion rule), so the publish would never fire. Create a fine-grained **PAT** (or GitHub App
+token) with **Contents: write** on `anthill-tec/sandesh` and store it as the repo secret
+**`RELEASE_PAT`**. Without it, `create-release` still makes the Release, but nothing publishes.
+(The job is gated to `push: main` only — never PRs — so the secret is never exposed to forked-PR code.)
+
 ---
 
 ## The workflow (`.github/workflows/publish-pypi.yml`)
 
-One `build` job feeds two event-gated publish jobs:
+One `build` job feeds the event-gated jobs below:
 
 | Job | Runs on | Target |
 |---|---|---|
-| `build` | `pull_request`, `push` (develop), `release`, `workflow_dispatch` | builds sdist+wheel, `twine check`, uploads `dist/` artifact — **CI-verifies packaging without publishing** |
-| `publish-pypi` | **`release: published`** only | **PyPI** (env `pypi`, OIDC, paused for required-reviewer approval) |
+| `build` | `pull_request`, `push` (`develop`, `main`), `release`, `workflow_dispatch` | builds sdist+wheel, `twine check`, uploads `dist/` artifact — **CI-verifies packaging without publishing** |
+| `create-release` | **`push` to `main`** carrying a new `vX.Y.Z` tag | runs `gh release create` (using `RELEASE_PAT`) → fires `release: published`. Idempotent (skips if the Release exists); a no-op on ordinary `main` commits with no version tag |
+| `publish-pypi` | **`release: published`** only | **PyPI** (env `pypi`, OIDC, paused for required-reviewer approval) — **guarded** (see below) |
 | `publish-testpypi` | **`workflow_dispatch`** only | **TestPyPI** (env `testpypi`, OIDC) |
 
 `build` checks out with `fetch-depth: 0` so hatch-vcs sees the tag → the artifact version is the
 tag's `X.Y.Z`.
 
+**Publish branch guard.** Before any upload, `publish-pypi` (and `publish-npm`) assert the ref is a
+`^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$` tag **and** that its commit is reachable from `origin/main`
+(`git merge-base --is-ancestor "$GITHUB_SHA" origin/main`). A Release cut from any other ref fails
+the guard before publishing — the publish can only happen for a real release tag on `main`.
+
 ---
 
-## TestPyPI dry-run (rehearse before the first real release)
+## TestPyPI checkpoint (rehearse from the hotfix/release branch, before finishing)
+
+A TestPyPI upload is a **`workflow_dispatch`** that builds from whatever ref you dispatch. The
+helper makes it one command from the branch you're working on:
+
+```bash
+scripts/release.sh checkpoint            # on a hotfix/* or release/* branch
+# → gh workflow run publish-pypi.yml --ref <that branch>
+```
 
 1. Ensure the TestPyPI pending publisher (prereq #2) + the `testpypi` environment (#3) exist.
-2. GitHub → *Actions* → **Publish to PyPI** → **Run workflow** (`workflow_dispatch`).
-3. It builds and publishes to **TestPyPI**. Verify the project page on test.pypi.org and a trial
-   install: `uv tool install --index-url https://test.pypi.org/simple/ 'sandesh-relay[mcp]'`
+2. Run the checkpoint above (or, manually: GitHub → *Actions* → **Publish to PyPI** → **Run
+   workflow** on the branch). It builds and publishes to **TestPyPI**.
+3. Verify: `uv tool install --index-url https://test.pypi.org/simple/ 'sandesh-relay[mcp]'`
    (deps from real PyPI may need `--extra-index-url https://pypi.org/simple/`).
 
-> A `workflow_dispatch` run builds from the current ref. If that ref is **untagged**, the version
-> is a `devN+g<sha>` string — fine for a TestPyPI rehearsal; the real release publishes a clean
-> `X.Y.Z` (below).
+> **Versioning on an untagged branch.** `pyproject.toml` sets
+> `[tool.hatch.version] raw-options = { local_scheme = "no-local-version" }`, so an untagged
+> `hotfix/*`/`release/*` build derives a clean **`X.Y.Z.devN`** (PEP 440 dev release) instead of a
+> `…devN+g<sha>` *local* version. PyPI/TestPyPI **reject** local versions, so this is what makes a
+> pre-finish checkpoint uploadable — **no rc tag required.** (Each checkpoint at a new commit gets a
+> higher `devN`, keeping the version unique.)
 
 ---
 
-## Cutting a real release (PyPI)
+## Cutting a real release (PyPI) — push-`main` → Release → publish
 
-Releases are built from `main` via git-flow; the version comes from the tag.
+Publishing is a **consequence of landing a `vX.Y.Z` tag on `main`**; you never create the GitHub
+Release by hand. The chain:
 
-1. **git-flow release** off `develop`:
-   ```bash
-   git flow release start X.Y.Z        # e.g. 0.1.0
-   # (no version file to edit — hatch-vcs derives it from the tag)
-   git flow release finish X.Y.Z       # merges to main + develop, creates tag vX.Y.Z
-   git push origin main develop --tags
-   ```
-   git-flow tags as `vX.Y.Z` — exactly what hatch-vcs expects.
-2. **Create a GitHub Release** for the `vX.Y.Z` tag (GitHub → *Releases* → *Draft a new release* →
-   pick the tag → *Publish release*). This fires `release: published`.
-3. The **`publish-pypi`** job runs, **pauses for your approval** (the `pypi` environment reviewer),
-   then uploads `sandesh-relay X.Y.Z` to PyPI with attestations.
-4. Verify: `uv tool install 'sandesh-relay[mcp]'` (or `pipx install 'sandesh-relay[mcp]'`).
+> **push to `main` (new `vX.Y.Z` tag) → `create-release` runs `gh release create` (auth via
+> `RELEASE_PAT`) → `release: published` → guarded `publish-pypi` (+`publish-npm`) upload.**
 
-The **first** release is `v0.1.0` — it also converts the *pending* publishers (prereqs #1/#2) to
-active and creates the PyPI project.
+git-flow puts that tag on `main` on a `release`/`hotfix` *finish*; pushing `main` is the trigger.
+Use the helper:
+
+```bash
+# from the hotfix/* or release/* branch you've been working on:
+scripts/release.sh finish X.Y.Z
+#   → git flow <hotfix|release> finish X.Y.Z   (merges to main + develop, tags vX.Y.Z)
+#   → git push origin main develop --tags      (the main push starts the chain above)
+```
+
+Equivalently by hand:
+
+```bash
+git flow release start X.Y.Z          # off develop  (or: git flow hotfix start X.Y.Z, off main)
+git flow release finish X.Y.Z         # merges to main + develop, creates tag vX.Y.Z
+git push origin main develop --tags   # the main push fires create-release → release → publish
+```
+
+Then:
+1. CI on `main` runs `create-release`, which `gh release create vX.Y.Z --generate-notes` (idempotent).
+2. That `release: published` event runs **`publish-pypi`**, which **passes the branch guard**
+   (`vX.Y.Z` tag reachable from `origin/main`), then **pauses for your approval** (the `pypi`
+   environment reviewer), then uploads `sandesh-relay X.Y.Z` to PyPI with attestations.
+3. Verify: `uv tool install 'sandesh-relay[mcp]'` (or `pipx install 'sandesh-relay[mcp]'`).
+
+You can still publish the **manual** way (GitHub → *Releases* → *Draft a new release* → pick the
+`vX.Y.Z` tag → *Publish release*); the same guarded `publish-pypi` runs. The auto path just removes
+the manual step.
+
+The **first** release converts the *pending* publishers (prereqs #1/#2) to active and creates the
+PyPI project; ensure **`RELEASE_PAT`** (prereq #4) exists first, or the auto chain stops at the
+created Release.
 
 ---
 
