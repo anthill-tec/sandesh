@@ -2,9 +2,9 @@
 
 **Status:** PENDING
 **Priority:** High (users can't operate the software from the docs today — the *how* is missing)
-**Depends on:** —
-**Labels:** docs, dx, usability, hotfix-0.3.1
-**Wave:** hotfix 0.3.1
+**Depends on:** CR-SAN-041 (the MCP `/` prompts + enable-listening instructions this guide documents)
+**Labels:** docs, dx, usability, patch-0.3.1
+**Wave:** patch 0.3.1
 **Design reference:** README/`docs/INSTALL.md` current state; `CLAUDE.md` wake mechanism; `notify.py`
 EXIT CODES docstring (verified). Plain-language, goal-first — no unexplained internal jargon.
 
@@ -20,11 +20,14 @@ wake** built into the extension (no manual listener). That handholding lives onl
   - **Intro:** what Sandesh does for cooperating agent sessions (a coordinator + workers leaving
     each other messages); the wake idea in plain words (an idle session can only be woken by its own
     harness). No "Model-B"/"notifier"/"exit code N" as the *lead* framing — define or avoid jargon.
-  - **For MCP users (Claude & MCP clients):** register `sandesh-mcp`; the verbs are tools; to be
-    woken, **run the listener in the background** — `sandesh notify --to "<you>"` via the host's
-    background-run tool; the loop (register → background listen → on stop, `fetch` → act → `reply` →
-    listen again; `send` anytime); a plain **"why the listener stopped"** table (mail / timeout /
-    project retired-don't-restart / taken-over).
+  - **For MCP users (Claude & MCP clients):** register `sandesh-mcp`; the verbs are tools; the **5
+    lifecycle `/` commands** (`/mcp__sandesh__setup|register|unregister|archive|unarchive`, from
+    CR-SAN-041) are the human on-ramp, while the **messaging tools are model-callable and won't
+    appear under `/` — confirm them under `/mcp`**. To be woken, **run the listener in the
+    background** — `sandesh notify --to "<you>"` via the host's background-run tool; the loop
+    (register → background listen → on stop, `fetch` → act → `reply` → listen again; `send` anytime);
+    a plain **"why the listener stopped"** table (mail / timeout / project retired-don't-restart /
+    taken-over).
   - **For Pi extension users:** install via `pi install npm:@anthill-tec/sandesh-pi`; the verbs are
     Pi tools; the extension **wakes the session itself (native wake) — you do NOT run
     `sandesh notify`**; how that behaves. Note Pi needs the `sandesh` CLI (uvx-on-demand / install).
