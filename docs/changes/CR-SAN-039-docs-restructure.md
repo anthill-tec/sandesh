@@ -1,6 +1,6 @@
 # CR-SAN-039 — docs restructure: slim README + per-route/surface install guide + uninstall matrix
 
-**Status:** PENDING
+**Status:** IN_PROGRESS
 **Priority:** Medium
 **Depends on:** CR-SAN-036, CR-SAN-037, CR-SAN-038, CR-SAN-035 (documents their behaviours)
 **Labels:** docs, lifecycle
