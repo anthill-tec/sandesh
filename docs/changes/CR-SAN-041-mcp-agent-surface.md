@@ -1,6 +1,6 @@
 # CR-SAN-041 — MCP agent surface: enable-listening directive + 5 lifecycle `/` prompts
 
-**Status:** PENDING
+**Status:** IN_PROGRESS
 **Priority:** High (the agent can't discover the wake; users have no `/` entry points)
 **Depends on:** —
 **Labels:** mcp, dx, usability, patch-0.3.1
