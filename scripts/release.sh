@@ -66,6 +66,11 @@ Usage: release.sh <subcommand> [args] [--dry-run] [--verbose] [-h|--help]
 Branch-gated release pipeline driver for Sandesh.
 
 Subcommands:
+  set-version <X.Y.Z>
+                    Rewrite the manual manifest version strings to X.Y.Z and
+                    commit them. Allowed only on hotfix/* or release/* branches.
+                    Touches: integrations/pi/package.json, server.json.
+
   checkpoint        Dispatch the PyPI publish workflow for the current branch.
                     Allowed only on hotfix/* or release/* branches.
                     Runs: gh workflow run publish-pypi.yml --ref <branch>
@@ -119,6 +124,81 @@ branch_kind() {
 # Subcommand implementations
 # ============================================================================
 
+# Rewrite the manual manifest version strings to $VERSION and commit them.
+# Branch-gated (hotfix/* or release/* only) and version-validated (X.Y.Z).
+cmd_set_version() {
+    local branch
+    branch="$(require_release_branch)"
+
+    # Validate the version string (must be exactly X.Y.Z).
+    if [ -z "$VERSION" ] || ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        error "set-version requires a version X.Y.Z (got: '$VERSION')" "$EXIT_USAGE"
+    fi
+
+    # Anchor manifest paths to the repo root, not the cwd, so the script is
+    # correct when invoked by absolute path.
+    local root
+    root="$(git rev-parse --show-toplevel)"
+
+    local manifests=(
+        "$root/integrations/pi/package.json"
+        "$root/server.json"
+    )
+
+    # Collect the manifests that actually exist (absent ones are skipped).
+    local present=()
+    local f
+    for f in "${manifests[@]}"; do
+        if [ -f "$f" ]; then
+            present+=("$f")
+        fi
+    done
+
+    if [ "$DRY_RUN" = true ]; then
+        echo "set-version: would set version to $VERSION in:"
+        if [ "${#present[@]}" -eq 0 ]; then
+            echo "  (no manifests found)"
+        else
+            for f in "${present[@]}"; do
+                echo "  $f"
+            done
+        fi
+        return "$EXIT_SUCCESS"
+    fi
+
+    if [ "${#present[@]}" -eq 0 ]; then
+        info "set-version: no manifests found; nothing to do"
+        return "$EXIT_SUCCESS"
+    fi
+
+    # Format-preserving rewrite: replace only the values of "version": keys,
+    # leaving all other bytes/formatting untouched (no JSON re-serialization).
+    for f in "${present[@]}"; do
+        python3 - "$f" "$VERSION" <<'PY'
+import re
+import sys
+
+path, new_version = sys.argv[1], sys.argv[2]
+with open(path, "r", encoding="utf-8") as fh:
+    text = fh.read()
+text = re.sub(
+    r'("version"\s*:\s*")[^"]*(")',
+    lambda m: m.group(1) + new_version + m.group(2),
+    text,
+)
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write(text)
+PY
+    done
+
+    git add "${present[@]}"
+    if git diff --cached --quiet; then
+        info "set-version: manifests already at $VERSION; nothing to commit"
+        return "$EXIT_SUCCESS"
+    fi
+    git commit -m "chore(release): set manual manifests to $VERSION"
+}
+
 cmd_checkpoint() {
     local branch
     branch="$(require_release_branch)"
@@ -141,6 +221,36 @@ cmd_finish() {
     if [ -z "$VERSION" ]; then
         error "finish requires a version: release.sh finish <X.Y.Z>" "$EXIT_USAGE"
     fi
+
+    # Manifest-version guard: refuse to finish if any present manual manifest
+    # carries a version other than $VERSION.  Placed before the --dry-run
+    # early-return so dry-run is a true preflight.  Absent manifests are skipped.
+    local root
+    root="$(git rev-parse --show-toplevel)"
+
+    local guard_manifests=(
+        "$root/integrations/pi/package.json"
+        "$root/server.json"
+    )
+
+    local mf found
+    for mf in "${guard_manifests[@]}"; do
+        if [ ! -f "$mf" ]; then
+            continue
+        fi
+        found="$(python3 - "$mf" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+print(data.get("version", ""))
+PY
+)"
+        if [ "$found" != "$VERSION" ]; then
+            error "$(basename "$mf") version '$found' does not match finish version '$VERSION' — run: scripts/release.sh set-version $VERSION" "$EXIT_ERROR"
+        fi
+    done
 
     local kind
     kind="$(branch_kind "$branch")"
@@ -227,6 +337,9 @@ fi
 # ============================================================================
 
 case "$SUBCOMMAND" in
+    set-version)
+        cmd_set_version
+        ;;
     checkpoint)
         cmd_checkpoint
         ;;
