@@ -1,6 +1,6 @@
 # CR-SAN-038 — Pi surface: uvx-on-demand CLI + provision nudge
 
-**Status:** IN_PROGRESS
+**Status:** COMPLETED (implemented on feature/CR-SAN-038; ships in 0.3.0)
 **Priority:** Medium
 **Depends on:** CR-SAN-036 (`sandesh init`)
 **Labels:** pi, lifecycle, dx
@@ -34,20 +34,20 @@ them to provision the store.
   tool. The CLI's `[migrate]`-absent / provision error passes through verbatim (existing error-passthrough).
 
 ## Acceptance criteria
-- [ ] **AC0 — `init --check` probe (python).** On a provisioned store (exists + admin set)
+- [x] **AC0 — `init --check` probe (python).** On a provisioned store (exists + admin set)
       `sandesh init --check` exits 0; on a store with no admin it exits non-zero with an
       admin-unset message; on an absent store it exits non-zero with a store-absent message. It
       writes NOTHING (no migrate/consolidate/reindex/admin side-effects — verify the store is
       byte-unchanged), and there is no MCP `init`/`check` tool.
-- [ ] **AC1 — uvx invocation (bun).** With no local `sandesh`, the extension builds
+- [x] **AC1 — uvx invocation (bun).** With no local `sandesh`, the extension builds
       `uvx --from 'sandesh-relay[migrate]' sandesh …` (extra contains `migrate`, NOT `mcp`); with a
       local `sandesh`, it uses the local binary.
-- [ ] **AC2 — provision nudge (bun).** The session gate runs `sandesh init --check`; on non-zero it
+- [x] **AC2 — provision nudge (bun).** The session gate runs `sandesh init --check`; on non-zero it
       emits a one-line nudge naming `sandesh init`; on exit 0 (provisioned) it emits none.
-- [ ] **AC3 — version gate preserved.** The ≥0.2.0 CLI gate still fires on an out-of-date CLI.
-- [ ] **AC4 — no init/admin/migrate tool.** The registered-tool inventory is unchanged (no new
+- [x] **AC3 — version gate preserved.** The ≥0.2.0 CLI gate still fires on an out-of-date CLI.
+- [x] **AC4 — no init/admin/migrate tool.** The registered-tool inventory is unchanged (no new
       provisioning tools).
-- [ ] **AC5 — error passthrough.** A `[migrate]`-absent / provision error from the CLI surfaces
+- [x] **AC5 — error passthrough.** A `[migrate]`-absent / provision error from the CLI surfaces
       verbatim (no shim, no self-install).
 
 ## Estimated size
