@@ -1,6 +1,6 @@
 # CR-SAN-039 — docs restructure: slim README + per-route/surface install guide + uninstall matrix
 
-**Status:** PENDING
+**Status:** COMPLETED (implemented on feature/CR-SAN-039; ships in 0.3.0)
 **Priority:** Medium
 **Depends on:** CR-SAN-036, CR-SAN-037, CR-SAN-038, CR-SAN-035 (documents their behaviours)
 **Labels:** docs, lifecycle
@@ -31,19 +31,19 @@ runs last, once the behaviours it describes are final.
   steps every route shares (remove the **data store**; `claude mcp remove sandesh`).
 
 ## Acceptance criteria
-- [ ] **AC1 — README slimmed.** README no longer contains the multi-route install command blocks
+- [x] **AC1 — README slimmed.** README no longer contains the multi-route install command blocks
       (only a pointer/link to the install guide); retains what/why/model.
-- [ ] **AC2 — install guide exists** with per-route × per-surface sections (Claude/Pi/both) each
+- [x] **AC2 — install guide exists** with per-route × per-surface sections (Claude/Pi/both) each
       covering install→init→manage→uninstall.
-- [ ] **AC3 — AUR install route removed from README** (no `yay`/`paru`/`AUR` tokens, and no AUR
+- [x] **AC3 — AUR install route removed from README** (no `yay`/`paru`/`AUR` tokens, and no AUR
       install section, in README; any surviving `pacman` mention is only a non-AUR uv/pipx-bootstrap
       hint IF kept — preferred: relocated to the install guide). `packaging/aur/PKGBUILD` +
       RELEASING.md unchanged; `test_pkgbuild.py` stays green.
-- [ ] **AC6 — mcp-name marker preserved.** README still contains
+- [x] **AC6 — mcp-name marker preserved.** README still contains
       `mcp-name: io.github.anthill-tec/sandesh` (`test_server_json.py` stays green).
-- [ ] **AC4 — uninstall matrix present** (all routes + Pi + the data-store + `claude mcp remove`
+- [x] **AC4 — uninstall matrix present** (all routes + Pi + the data-store + `claude mcp remove`
       manual steps).
-- [ ] **AC5 — boundary test green.** `test_migration_docs_boundary.py` still passes (migration
+- [x] **AC5 — boundary test green.** `test_migration_docs_boundary.py` still passes (migration
       documented in RELEASING/CLAUDE + the new install guide; engine boundary intact).
 
 ## Estimated size
