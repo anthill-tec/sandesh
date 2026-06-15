@@ -1,6 +1,6 @@
 # CR-SAN-041 — MCP agent surface: enable-listening directive + 5 lifecycle `/` prompts
 
-**Status:** IN_PROGRESS
+**Status:** COMPLETED (implemented on release/0.3.1; ships in 0.3.1)
 **Priority:** High (the agent can't discover the wake; users have no `/` entry points)
 **Depends on:** —
 **Labels:** mcp, dx, usability, patch-0.3.1
@@ -37,19 +37,19 @@ have none.
   (not exposed at all).
 
 ## Acceptance criteria
-- [ ] **AC1 — enable-listening directive.** `SANDESH_INSTRUCTIONS` contains an imperative directive
+- [x] **AC1 — enable-listening directive.** `SANDESH_INSTRUCTIONS` contains an imperative directive
       that names `sandesh notify`, the background-task launch, and the on-exit `sandesh_fetch` +
       relaunch loop (grep markers).
-- [ ] **AC2 — tool pointers.** The `register` tool description (and `setup`) mention enabling
+- [x] **AC2 — tool pointers.** The `register` tool description (and `setup`) mention enabling
       listening via a background `sandesh notify`.
-- [ ] **AC3 — exactly 5 prompts.** The server registers exactly 5 prompts named `setup`, `register`,
+- [x] **AC3 — exactly 5 prompts.** The server registers exactly 5 prompts named `setup`, `register`,
       `unregister`, `archive`, `unarchive` (assert via the FastMCP prompt registry / `prompts/list`);
       each prompt's rendered content references its matching tool and accepts the expected args.
-- [ ] **AC4 — register prompt nudges listening.** The `register` prompt's rendered text instructs
+- [x] **AC4 — register prompt nudges listening.** The `register` prompt's rendered text instructs
       the agent to enable listening (background `sandesh notify`) after registering.
-- [ ] **AC5 — boundary.** No prompt exists for `send`/`reply`/`fetch`/`inbox`/`thread`/`search`/
+- [x] **AC5 — boundary.** No prompt exists for `send`/`reply`/`fetch`/`inbox`/`thread`/`search`/
       `addressbook` or for tombstone/grant/revoke; the **12 tools** are unchanged (still registered).
-- [ ] **AC6 — real MCP.** Over the stdio server (or in-process FastMCP), `prompts/list` returns the
+- [x] **AC6 — real MCP.** Over the stdio server (or in-process FastMCP), `prompts/list` returns the
       5 prompts and `prompts/get` renders one with args; tools/list still returns 12.
 
 ## Estimated size
