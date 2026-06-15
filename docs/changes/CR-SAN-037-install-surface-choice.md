@@ -1,6 +1,6 @@
 # CR-SAN-037 — install.sh: surface choice + delegate to `sandesh init` + mandatory migrate
 
-**Status:** PENDING
+**Status:** IN_PROGRESS
 **Priority:** High
 **Depends on:** CR-SAN-036 (`sandesh init`)
 **Labels:** installer, provisioning, lifecycle
