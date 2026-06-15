@@ -1,6 +1,6 @@
 # CR-SAN-034 — branch-gated release pipeline (push-to-main → Release → PyPI) + `scripts/release.sh`
 
-**Status:** IN_PROGRESS
+**Status:** COMPLETED (implemented on `hotfix/0.2.2`; ships on the 0.2.2 finish)
 **Priority:** High (codifies the publish policy; closes the "publish from anywhere" hole before the first real PyPI release)
 **Depends on:** —
 **Labels:** release, ci, packaging, tooling, hotfix-0.2.2
@@ -97,33 +97,33 @@ auto-detect, `info`/`error`/`success` helpers, usage block). **Subcommands:**
 
 ## Acceptance criteria
 
-- [ ] **AC1 — no local segment.** With `raw-options = { local_scheme = "no-local-version" }`, the
+- [x] **AC1 — no local segment.** With `raw-options = { local_scheme = "no-local-version" }`, the
       version derived on an untagged commit matches `^\d+\.\d+\.\d+\.dev\d+$` (no `+`); on an exact
       `vX.Y.Z` checkout it is exactly `X.Y.Z`. (Test derives both via the version machinery.)
-- [ ] **AC2 — create-release gating.** `publish-pypi.yml` parses to: a `create-release` job whose
+- [x] **AC2 — create-release gating.** `publish-pypi.yml` parses to: a `create-release` job whose
       `if` is exactly `github.event_name == 'push' && github.ref == 'refs/heads/main'`, that
       checks out `fetch-depth: 0`, only acts when a `^v\d+\.\d+\.\d+$` tag points at HEAD, is
       idempotent on an existing Release, and invokes `gh release create` with
       `GH_TOKEN: ${{ secrets.RELEASE_PAT }}`. Triggers include `push: branches:` containing `main`.
-- [ ] **AC3 — publish guard.** The `publish-pypi` job contains a guard step, ordered before the
+- [x] **AC3 — publish guard.** The `publish-pypi` job contains a guard step, ordered before the
       `pypa/gh-action-pypi-publish` step, that (a) checks out `fetch-depth: 0`, (b) asserts
       `github.ref` matches `^refs/tags/v\d+\.\d+\.\d+$`, and (c) runs
       `git merge-base --is-ancestor` against `origin/main`. (YAML-structure test + `act` dry-run.)
-- [ ] **AC4 — npm guard parity.** `publish-npm.yml`'s `publish-npm` job has the same `v*`-tag guard
+- [x] **AC4 — npm guard parity.** `publish-npm.yml`'s `publish-npm` job has the same `v*`-tag guard
       step before `npm publish`; no `create-release` job is duplicated there.
-- [ ] **AC5 — testpypi sanity.** `publish-testpypi` stays `workflow_dispatch`-only and has a
+- [x] **AC5 — testpypi sanity.** `publish-testpypi` stays `workflow_dispatch`-only and has a
       version-sanity step that fails if the version contains `+`.
-- [ ] **AC6 — `scripts/release.sh` branch gating.** `checkpoint` and `finish` exit 2 with a
+- [x] **AC6 — `scripts/release.sh` branch gating.** `checkpoint` and `finish` exit 2 with a
       branch-error message when run on `develop`/`main`/`feature/*`; `--help` exits 2-or-0 with a
       usage block; `--dry-run checkpoint` on a `hotfix/x`/`release/x` branch prints the
       `gh workflow run … --ref <branch>` command and does **not** dispatch. (Tested in temp git
       repos with `gh` stubbed.)
-- [ ] **AC7 — `scripts/release.sh status`.** On a temp repo at tag `v9.9.9`, `status` prints
+- [x] **AC7 — `scripts/release.sh status`.** On a temp repo at tag `v9.9.9`, `status` prints
       `9.9.9` as the derived version and the current branch; exit 0.
-- [ ] **AC8 — docs.** RELEASING.md no longer contains the string "fine for a TestPyPI rehearsal"
+- [x] **AC8 — docs.** RELEASING.md no longer contains the string "fine for a TestPyPI rehearsal"
       tied to an untagged dev version, and DOES contain the `RELEASE_PAT` prerequisite, the
       push-main→Release→publish chain, and the `scripts/release.sh` flow (grep markers).
-- [ ] **AC9 — `act` validation.** `act push -n` (main ref) reaches the `create-release` job, and
+- [x] **AC9 — `act` validation.** `act push -n` (main ref) reaches the `create-release` job, and
       `act release -n` reaches the guarded `publish-pypi` job, with no YAML/structural error.
 
 ## Assets / tooling required (per cycle)
