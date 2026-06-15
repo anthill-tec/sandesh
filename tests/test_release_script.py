@@ -1683,6 +1683,368 @@ class SetVersionHelpTest(ReleaseScriptHarness):
 
 
 # ---------------------------------------------------------------------------
+# CR-SAN-042 C2 — finish manifest-version guard (AC5 + AC6)
+# ---------------------------------------------------------------------------
+
+class FinishGuardMismatchTest(ReleaseScriptHarness):
+    """AC5 — finish rejects mismatched manifest versions (even --dry-run).
+
+    Current behaviour (pre-guard): finish 0.5.7 --dry-run exits 0 and prints
+    the git-flow command regardless of manifest content.  Every assertion here
+    that contradicts that behaviour is intentionally RED until GREEN adds the guard.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Create hotfix/0.5.7 branch and commit manifests at wrong version 0.0.1
+        self._checkout("hotfix/0.5.7", create=True)
+        _write_manifests(self.repo, version="0.0.1")
+        self._git("add", "integrations/pi/package.json", "server.json")
+        self._git("commit", "-m", "chore: add manifest fixtures at 0.0.1")
+
+    # ------------------------------------------------------------------
+    # Dry-run variant (guard must fire BEFORE the dry-run early-return)
+    # ------------------------------------------------------------------
+
+    def test_ac5_dry_run_mismatch_exits_1(self):
+        """finish 0.5.7 --dry-run with manifests at 0.0.1 must exit 1.
+
+        FAILS at RED: guard absent — today exits 0.
+        """
+        result = self._run_release_sh("finish", "0.5.7", "--dry-run")
+        self.assertEqual(
+            result.returncode,
+            1,
+            msg=(
+                f"Expected exit 1 when manifests mismatch the finish version, "
+                f"got {result.returncode}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac5_dry_run_mismatch_stderr_names_package_json(self):
+        """finish --dry-run mismatch stderr must name 'package.json'.
+
+        FAILS at RED: no guard → no error message on stderr.
+        """
+        result = self._run_release_sh("finish", "0.5.7", "--dry-run")
+        self.assertIn(
+            "package.json",
+            result.stderr,
+            msg=(
+                f"Expected 'package.json' in stderr when manifest version mismatches.\n"
+                f"STDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac5_dry_run_mismatch_stderr_contains_found_version(self):
+        """finish --dry-run mismatch stderr must show the found version '0.0.1'.
+
+        FAILS at RED: no guard → no error message on stderr.
+        """
+        result = self._run_release_sh("finish", "0.5.7", "--dry-run")
+        self.assertIn(
+            "0.0.1",
+            result.stderr,
+            msg=(
+                f"Expected found version '0.0.1' in stderr.\n"
+                f"STDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac5_dry_run_mismatch_stderr_contains_expected_version(self):
+        """finish --dry-run mismatch stderr must show the expected version '0.5.7'.
+
+        FAILS at RED: no guard → no error message on stderr.
+        """
+        result = self._run_release_sh("finish", "0.5.7", "--dry-run")
+        self.assertIn(
+            "0.5.7",
+            result.stderr,
+            msg=(
+                f"Expected target version '0.5.7' in stderr.\n"
+                f"STDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac5_dry_run_mismatch_stderr_contains_remediation_hint(self):
+        """finish --dry-run mismatch stderr must mention 'set-version' as remediation.
+
+        FAILS at RED: no guard → no error message on stderr.
+        """
+        result = self._run_release_sh("finish", "0.5.7", "--dry-run")
+        self.assertIn(
+            "set-version",
+            result.stderr,
+            msg=(
+                f"Expected 'set-version' remediation hint in stderr.\n"
+                f"STDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac5_dry_run_mismatch_does_not_print_git_flow_command(self):
+        """finish --dry-run mismatch must NOT print the git-flow command to stdout.
+
+        FAILS at RED: today stdout DOES contain 'git flow ... finish'.
+        """
+        result = self._run_release_sh("finish", "0.5.7", "--dry-run")
+        self.assertNotIn(
+            "git flow",
+            result.stdout,
+            msg=(
+                f"stdout contains 'git flow' — guard must abort before printing "
+                f"the dry-run plan.\nSTDOUT:\n{result.stdout}"
+            ),
+        )
+
+    def test_ac5_dry_run_mismatch_does_not_invoke_gh(self):
+        """finish --dry-run mismatch must NOT invoke the gh stub.
+
+        FAILS at RED: guard absent (though today --dry-run also skips gh, this
+        assertion is included so it stays explicit post-guard).
+        This test currently PASSES at RED (gh was already not invoked in --dry-run),
+        but combined with the exit-1 check it is a meaningful guard assertion.
+        """
+        self._run_release_sh("finish", "0.5.7", "--dry-run")
+        self.assertFalse(
+            self._gh_was_called(),
+            msg=(
+                "gh stub was invoked during a mismatched finish --dry-run — "
+                "the guard must prevent any downstream action."
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # Live variant: guard must reject BEFORE git-flow runs
+    # ------------------------------------------------------------------
+
+    def test_ac5_live_mismatch_exits_1(self):
+        """finish 0.5.7 (live, no --dry-run) with manifests at 0.0.1 must exit 1.
+
+        FAILS at RED: guard absent — today exits 0 (and git-flow would attempt to
+        run, but our temp repo has no git-flow config so it would error with
+        non-zero anyway; the guard must fire first and exit 1 cleanly).
+
+        Safety note: this test is only safe at RED because the guard will reject
+        before git-flow is invoked.  At GREEN the guard exits 1 → git-flow never
+        runs — so this test can never trigger a real git-flow finish.
+        """
+        result = self._run_release_sh("finish", "0.5.7")
+        self.assertEqual(
+            result.returncode,
+            1,
+            msg=(
+                f"Expected exit 1 (manifest mismatch) for live finish 0.5.7, "
+                f"got {result.returncode}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac5_live_mismatch_branch_unchanged(self):
+        """Live finish 0.5.7 mismatch: hotfix/0.5.7 branch still exists, main unmoved.
+
+        FAILS at RED: guard absent — git-flow may alter branches or error out
+        in an uncontrolled way.  The guard must ensure no git state changes.
+        """
+        # Record main HEAD before
+        before_main = subprocess.run(
+            ["git", "rev-parse", "main"],
+            cwd=self.repo,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+        self._run_release_sh("finish", "0.5.7")
+
+        # main must be unchanged
+        after_main = subprocess.run(
+            ["git", "rev-parse", "main"],
+            cwd=self.repo,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        self.assertEqual(
+            before_main,
+            after_main,
+            msg=(
+                "main branch moved during a mismatched live finish — "
+                "the guard must abort before git-flow runs."
+            ),
+        )
+
+        # hotfix/0.5.7 must still exist
+        branches = subprocess.run(
+            ["git", "branch", "--list", "hotfix/0.5.7"],
+            cwd=self.repo,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        self.assertIn(
+            "hotfix/0.5.7",
+            branches,
+            msg=(
+                "hotfix/0.5.7 was deleted during a mismatched live finish — "
+                "the guard must abort before git-flow runs."
+            ),
+        )
+
+    def test_ac5_live_mismatch_does_not_invoke_gh(self):
+        """Live finish 0.5.7 mismatch must NOT invoke the gh stub.
+
+        FAILS at RED: guard absent (non-zero from git-flow means gh is skipped
+        in current impl anyway, but the guard must ensure this for the right reason).
+        """
+        self._run_release_sh("finish", "0.5.7")
+        self.assertFalse(
+            self._gh_was_called(),
+            msg=(
+                "gh stub was invoked during a mismatched live finish — "
+                "guard must prevent any downstream action."
+            ),
+        )
+
+
+class FinishGuardMatchTest(ReleaseScriptHarness):
+    """AC6 — finish guard is non-breaking when manifests match or are absent.
+
+    These tests verify two non-regression paths:
+    (a) manifests present and matching → finish --dry-run proceeds normally.
+    (b) manifests absent → guard skips → finish --dry-run proceeds normally.
+
+    Path (a) currently PASSES at RED (today's finish exits 0 with any manifests
+    because no guard exists yet); it must STAY green post-guard.  Its value is
+    that it becomes the definitive proof of a correct guard pass once GREEN ships.
+
+    Path (b) is already covered by the existing FinishDryRunTest class (manifest-
+    less repo).  A focused duplicate is added here for explicit AC6 traceability.
+    """
+
+    # ------------------------------------------------------------------
+    # (a) Manifests present, matching version → guard passes, --dry-run proceeds
+    # ------------------------------------------------------------------
+
+    def setUp(self):
+        super().setUp()
+        self._checkout("hotfix/0.5.7", create=True)
+
+    def test_ac6_matching_manifests_dry_run_exits_0(self):
+        """finish 0.5.7 --dry-run with manifests already at 0.5.7 must exit 0.
+
+        Non-regression: guard must pass when versions match.
+        Currently PASSES at RED (no guard → always exits 0); must stay green post-guard.
+        """
+        _write_manifests(self.repo, version="0.5.7")
+        self._git("add", "integrations/pi/package.json", "server.json")
+        self._git("commit", "-m", "chore: manifests at 0.5.7")
+
+        result = self._run_release_sh("finish", "0.5.7", "--dry-run")
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(
+                f"Expected exit 0 when manifests match finish version, "
+                f"got {result.returncode}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac6_matching_manifests_dry_run_prints_git_flow_hotfix_finish(self):
+        """finish 0.5.7 --dry-run with matching manifests must print 'git flow hotfix finish'.
+
+        Non-regression: guard passes → dry-run plan is printed as normal.
+        Currently PASSES at RED (no guard → always prints); must stay green post-guard.
+        """
+        _write_manifests(self.repo, version="0.5.7")
+        self._git("add", "integrations/pi/package.json", "server.json")
+        self._git("commit", "-m", "chore: manifests at 0.5.7")
+
+        result = self._run_release_sh("finish", "0.5.7", "--dry-run")
+        self.assertIn(
+            "git flow hotfix finish",
+            result.stdout,
+            msg=(
+                f"stdout does not contain 'git flow hotfix finish' when manifests match.\n"
+                f"STDOUT:\n{result.stdout}"
+            ),
+        )
+
+    def test_ac6_matching_manifests_dry_run_prints_push_command(self):
+        """finish 0.5.7 --dry-run with matching manifests must print the push command.
+
+        Non-regression: guard passes → full dry-run output is printed.
+        Currently PASSES at RED (no guard); must stay green post-guard.
+        """
+        _write_manifests(self.repo, version="0.5.7")
+        self._git("add", "integrations/pi/package.json", "server.json")
+        self._git("commit", "-m", "chore: manifests at 0.5.7")
+
+        result = self._run_release_sh("finish", "0.5.7", "--dry-run")
+        self.assertIn(
+            "git push origin main develop --tags",
+            result.stdout,
+            msg=(
+                f"stdout does not contain push command when manifests match.\n"
+                f"STDOUT:\n{result.stdout}"
+            ),
+        )
+
+    def test_ac6_matching_manifests_dry_run_does_not_invoke_gh(self):
+        """finish --dry-run with matching manifests must NOT invoke gh.
+
+        Non-regression: --dry-run never invokes gh (whether guard is present or not).
+        Currently PASSES at RED; must stay green post-guard.
+        """
+        _write_manifests(self.repo, version="0.5.7")
+        self._git("add", "integrations/pi/package.json", "server.json")
+        self._git("commit", "-m", "chore: manifests at 0.5.7")
+
+        self._run_release_sh("finish", "0.5.7", "--dry-run")
+        self.assertFalse(
+            self._gh_was_called(),
+            msg="gh stub invoked during finish --dry-run with matching manifests.",
+        )
+
+    # ------------------------------------------------------------------
+    # (b) No manifests → guard skips absent files → finish --dry-run proceeds
+    # ------------------------------------------------------------------
+
+    def test_ac6_absent_manifests_dry_run_exits_0(self):
+        """finish 0.5.7 --dry-run in a manifest-LESS repo must exit 0.
+
+        Non-regression (focused duplicate of FinishDryRunTest): absent manifests
+        are skipped by the guard (not treated as errors).
+        Currently PASSES at RED; must stay green post-guard.
+        """
+        # No manifests written — the repo is manifest-less (only README.md from init)
+        result = self._run_release_sh("finish", "0.5.7", "--dry-run")
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(
+                f"Expected exit 0 in a manifest-less repo (absent manifests must be "
+                f"skipped), got {result.returncode}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac6_absent_manifests_dry_run_prints_git_flow_command(self):
+        """finish 0.5.7 --dry-run in a manifest-LESS repo must still print git-flow command.
+
+        Non-regression: absent manifests → guard skips → dry-run proceeds as before.
+        Currently PASSES at RED; must stay green post-guard.
+        """
+        result = self._run_release_sh("finish", "0.5.7", "--dry-run")
+        self.assertIn(
+            "git flow hotfix finish",
+            result.stdout,
+            msg=(
+                f"stdout does not contain 'git flow hotfix finish' in manifest-less repo.\n"
+                f"STDOUT:\n{result.stdout}"
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
