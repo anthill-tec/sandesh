@@ -4,10 +4,11 @@
 **Priority:** Low (tooling symmetry — an installer should remove itself)
 **Depends on:** —
 **Labels:** tooling, installer, dx
-**Wave:** post-0.2.2 tooling
-**Design reference:** `install.sh` (the script itself — no PRD; tooling) + the uninstall contract
-executed manually this session (remove symlinks + venv; `--purge` also removes the data store;
-advise `claude mcp remove`).
+**Wave:** provisioning-lifecycle (0.3.0) — the **teardown** half
+**Design reference:** PRD-provisioning-lifecycle §4.5 (teardown) + `install.sh` + the uninstall
+contract executed manually this session (remove symlinks + venv; `--purge` also removes the data
+store; advise `claude mcp remove`). NOTE: the full per-route **uninstall matrix docs** are
+**CR-SAN-039**; this CR is the `install.sh --uninstall` mechanics + its own `-h` usage only.
 
 ## Context
 
