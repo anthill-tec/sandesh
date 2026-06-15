@@ -147,6 +147,35 @@ created Release.
 
 ---
 
+## Bumping the manual manifests — `set-version` (before `finish`)
+
+Two version files are **hand-maintained** and are NOT covered by hatch-vcs: the Pi extension's
+`integrations/pi/package.json` and the repo-root MCP registry manifest `server.json`. Before you
+call `finish`, bump them to the release version with the helper, **on the release/hotfix branch**:
+
+```bash
+# from the hotfix/* or release/* branch you've been working on:
+scripts/release.sh set-version X.Y.Z
+#   → sets integrations/pi/package.json "version" and server.json's version to X.Y.Z,
+#     then commits the manifest changes on the branch.
+```
+
+`set-version` touches **only** those two manual manifests — it does **NOT** touch `pyproject.toml`.
+The PyPI/Python package version stays **tag-derived** by **hatch-vcs** (the `vX.Y.Z` tag is the
+single source of truth; see the top of this file), so there is nothing to hand-edit for the Python
+package.
+
+**`finish` guards on a manifest mismatch.** `scripts/release.sh finish X.Y.Z` runs a preflight
+check and **refuses** (exits non-zero) if `integrations/pi/package.json` or `server.json` does not
+already match `X.Y.Z`, telling you to run `set-version` first. The manual manifests **must match**
+the release version before a tag is cut, so a forgotten bump cannot reach a published tag — this
+guard is what the 0.3.1 → 0.3.2 version-sync hotfix existed to make unnecessary.
+
+So the release-branch order is: `set-version X.Y.Z` (bump + commit the manifests) → `finish X.Y.Z`
+(guard passes → git-flow finish → push `main` → publish chain).
+
+---
+
 ## Schema-migration release steps (before tagging)
 
 Sandesh's schema is versioned by the migration subsystem (`sandesh migrate` + the `migrations/`
