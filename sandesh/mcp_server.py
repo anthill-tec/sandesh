@@ -74,10 +74,16 @@ cannot talk to each other directly. Addresses represent orchestrators, formatted
 
 Two channels, one boundary: this MCP server carries the VERBS (send, reply, fetch,
 inbox, register, ...). The WAKE is out-of-band and is NOT an MCP tool — an MCP server
-cannot re-invoke a sleeping agent. To be woken, an agent launches the standalone
-`sandesh notify` process via its host's `run_in_background` mechanism; when mail
-addressed to it arrives, that background watcher exits and the host wakes the agent,
-which then calls sandesh_fetch.
+cannot re-invoke a sleeping agent.
+
+TO RECEIVE MESSAGES YOU MUST ENABLE LISTENING. Right after registering your address,
+you MUST launch the standalone watcher `sandesh notify --to "<your address>"` via your
+host's background-task tool (e.g. run_in_background) — do NOT run it inline, it blocks.
+When that background watcher EXITS, it means mail addressed to you has arrived: call
+`sandesh_fetch` to read it, act on it, then RELAUNCH `sandesh notify` the same way to
+keep listening. Repeat that loop for the life of your session. Sending (sandesh_send /
+sandesh_reply) needs NO listener — only receiving does. The full loop, exit codes and
+Model-B walkthrough live in the `sandesh://usage` resource.
 
 Lifecycle without a status field: reading a message (fetch) means "received and now
 being acted on"; sending a reply means done — reply signals completion of the
@@ -125,6 +131,9 @@ was lazily rebuilt first (harmless)."""
         Called by anyone bootstrapping a project (typically Mainline at the start of a
         workflow). One Sandesh install serves many projects side by side, each in its own
         isolated store. Returns the store dir path.
+
+        Next: register your address, then enable listening with a background
+        `sandesh notify` (see sandesh_register).
         """
         try:
             return sandesh_db.setup(_resolve_project(project_id))
@@ -427,6 +436,10 @@ was lazily rebuilt first (harmless)."""
 
         Called by a joining orchestrator (Mainline or a new Track) once, at the start of its
         participation, before it can send or receive. Returns the registered address.
+
+        After registering you MUST enable listening to receive messages: launch
+        `sandesh notify --to "<your address>"` in the background (via your host's
+        run_in_background tool); when it exits, call sandesh_fetch then relaunch it.
         """
         con = None
         try:
@@ -673,6 +686,73 @@ was lazily rebuilt first (harmless)."""
         finally:
             if con is not None:
                 con.close()
+
+
+    @mcp.prompt()
+    def setup(project_id: str) -> str:
+        """Guided turn: provision a project's Sandesh store."""
+        return (
+            f"Provision the Sandesh store for project '{project_id}'. "
+            f"Call the sandesh_setup tool with project_id='{project_id}'. "
+            "It is idempotent, so it is safe to run once at the start of the workflow. "
+            "Then register your address and enable listening with a background "
+            "`sandesh notify` (see the register prompt)."
+        )
+
+
+    @mcp.prompt()
+    def register(addr: str, kind: str = "", project_id: str = "") -> str:
+        """Guided turn: register an address, then enable listening."""
+        kind_clause = f" with kind='{kind}'" if kind else ""
+        proj_clause = f" in project '{project_id}'" if project_id else ""
+        return (
+            f"Register the address '{addr}'{proj_clause}{kind_clause}. "
+            f"Call the sandesh_register tool with addr='{addr}'"
+            + (f", kind='{kind}'" if kind else "")
+            + (f", project_id='{project_id}'" if project_id else "")
+            + ". "
+            "Then, to RECEIVE messages, you MUST enable listening: launch "
+            f"`sandesh notify --to \"{addr}\"` via your host's background-task tool "
+            "(run_in_background) — never inline, it blocks. When that background watcher "
+            "exits, call sandesh_fetch to read your mail, act on it, then relaunch "
+            "`sandesh notify` the same way to keep listening."
+        )
+
+
+    @mcp.prompt()
+    def unregister(recipient: str, requester: str) -> str:
+        """Guided turn: remove an address from the addressbook."""
+        return (
+            f"Unregister the address '{recipient}'. "
+            f"Call the sandesh_unregister tool with recipient='{recipient}' and "
+            f"requester='{requester}'. Mainline may remove anyone; any address may "
+            "remove itself. If the target's notify watcher is still live the call "
+            "returns ('tombstoned', pid) — re-run sandesh_unregister once it is offline."
+        )
+
+
+    @mcp.prompt()
+    def archive(project_id: str, by: str) -> str:
+        """Guided turn: archive (reversibly pause) a project."""
+        return (
+            f"Archive project '{project_id}'. "
+            f"Call the sandesh_archive tool with project_id='{project_id}' and by='{by}'. "
+            "This is a REVERSIBLE soft-close (sandesh_unarchive restores it): while "
+            "archived, participants can neither send nor receive, but nothing is deleted. "
+            "`by` must be the project's own Mainline."
+        )
+
+
+    @mcp.prompt()
+    def unarchive(project_id: str, by: str) -> str:
+        """Guided turn: reactivate an archived project."""
+        return (
+            f"Unarchive project '{project_id}'. "
+            f"Call the sandesh_unarchive tool with project_id='{project_id}' and by='{by}'. "
+            "This reverses sandesh_archive (state back to 'active'); messages, read state "
+            "and any cross-project grant survive untouched. Participants should relaunch "
+            "their `sandesh notify` watchers afterwards. `by` must be the project's own Mainline."
+        )
 
 
     _USAGE_FALLBACK = """# Sandesh — Usage (fallback)

@@ -627,7 +627,27 @@ def build_parser():
     p.add_argument("--id", type=int, required=True)
     p.set_defaults(fn=cmd_thread)
 
-    p = sub.add_parser("notify", parents=[common], help="block until 'to' mail arrives (the mailbox watcher)")
+    p = sub.add_parser(
+        "notify", parents=[common],
+        help="block until 'to' mail arrives (the mailbox watcher)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Run this in the background via your host's background-task mechanism;\n"
+            "when it stops, your harness wakes you. It can stop for several reasons:\n"
+            "\n"
+            "Why the listener stopped\n"
+            "  mail arrived   new 'to' mail is waiting — resume and `sandesh fetch`.\n"
+            "  timed out      no mail arrived before --timeout expired — just relaunch\n"
+            "                 the listener and keep waiting.\n"
+            "  project retired (tombstoned) — the whole project was permanently\n"
+            "                 retired; do NOT relaunch the listener.\n"
+            "  taken over     another listener (another notifier) evicted this one and\n"
+            "                 took the address over — do not relaunch.\n"
+            "  already live   a duplicate listener was already running for this address\n"
+            "                 (dedup) — this one did not start.\n"
+            "  error          a usage or config problem — fix it, then relaunch.\n"
+        ),
+    )
     p.add_argument("--to", required=True)
     p.add_argument("--timeout", type=int, default=_notify.DEFAULT_TIMEOUT_SECS)
     p.set_defaults(fn=cmd_notify)
