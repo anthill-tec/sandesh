@@ -1,6 +1,6 @@
 # CR-SAN-040 — user guide (MCP + Pi sections) + leaner README + `notify --help` epilog
 
-**Status:** PENDING
+**Status:** IN_PROGRESS
 **Priority:** High (users can't operate the software from the docs today — the *how* is missing)
 **Depends on:** CR-SAN-041 (the MCP `/` prompts + enable-listening instructions this guide documents)
 **Labels:** docs, dx, usability, patch-0.3.1
