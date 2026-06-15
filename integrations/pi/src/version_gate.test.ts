@@ -37,6 +37,28 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import registerExtension from "./index";
 import pkgJson from "../package.json";
+import { spawnSync } from "node:child_process";
+
+/**
+ * The version package.json MUST equal, derived from git context:
+ *  - on a `release/X.Y.Z` branch → "X.Y.Z" (catch a forgotten Pi version bump
+ *    on the release branch, before the CI version-sync gate does, at publish).
+ *  - on an exact `vX.Y.Z` tag → "X.Y.Z".
+ *  - otherwise (develop/feature) → null (only assert well-formed semver).
+ */
+function expectedReleaseVersion(): string | null {
+  const git = (args: string[]): string => {
+    const r = spawnSync("git", args, { cwd: import.meta.dir, encoding: "utf-8" });
+    return r.status === 0 ? (r.stdout ?? "").trim() : "";
+  };
+  const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
+  const rel = /^release\/(\d+\.\d+\.\d+)$/.exec(branch);
+  if (rel) return rel[1];
+  const tag = git(["describe", "--tags", "--exact-match"]);
+  const vt = /^v(\d+\.\d+\.\d+)$/.exec(tag);
+  if (vt) return vt[1];
+  return null;
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -760,10 +782,18 @@ describe("AC4 — error passthrough: cross-project grant error", () => {
  *   - pagination / offset wording in search description
  */
 
-describe("AC5 — package.json version is 0.2.0", () => {
-  test("package.json version field is '0.2.0'", () => {
-    // RED: currently "0.1.0" — this fails until GREEN bumps package.json
-    expect(pkgJson.version).toBe("0.2.0");
+describe("AC5 — package.json version tracks the release", () => {
+  test("package.json version matches release/tag context (else well-formed semver)", () => {
+    // Was a brittle hardcoded `toBe("0.2.0")` that broke on every release bump.
+    // On a release/X.Y.Z branch (or vX.Y.Z tag) it MUST equal that version —
+    // catching a forgotten Pi bump before CI's publish-time version-sync gate.
+    // Off a release context, just assert it is present and well-formed.
+    const expected = expectedReleaseVersion();
+    if (expected !== null) {
+      expect(pkgJson.version).toBe(expected);
+    } else {
+      expect(pkgJson.version).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/);
+    }
   });
 });
 

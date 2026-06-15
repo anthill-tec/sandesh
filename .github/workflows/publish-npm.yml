@@ -89,12 +89,33 @@ jobs:
             echo "::error::server.json .packages[0].version ($SERVER_PKG_VERSION) != release tag ($VERSION)"
             exit 1
           fi
+      - name: Detect NPM_TOKEN (skip the npm publish if absent — Pi deferred)
+        id: npmtok
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::notice::NPM_TOKEN not set — skipping the npm publish (Pi extension deferred until the token is configured). PyPI is unaffected; re-run this job once NPM_TOKEN exists."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Upgrade npm (>= 11.5.1 for OIDC trusted publishing)
+        if: steps.npmtok.outputs.publish == 'true'
         run: npm install -g npm@latest
       - name: Publish to npm
+        if: steps.npmtok.outputs.publish == 'true'
         working-directory: integrations/pi
-        run: npm publish --access public
-        # no token secret — OIDC trusted publishing only (provenance auto)
+        # INAUGURAL publish of a NEW scoped package: npm has NO "pending publishers"
+        # (unlike PyPI), so a trusted publisher can't be configured until the package
+        # exists. Bootstrap with a token (NODE_AUTH_TOKEN ← the NPM_TOKEN secret;
+        # setup-node's registry-url wires it into .npmrc). --provenance still attaches a
+        # build attestation via the id-token: write permission above. Once the package
+        # exists, configure Trusted Publishing on npmjs.com and revert to OIDC-only
+        # (drop this env + the NPM_TOKEN secret).
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
 
   dry-run:
     needs: build-check
