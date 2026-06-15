@@ -922,6 +922,625 @@ class StatusSubcommandTest(ReleaseScriptHarness):
 
 
 # ---------------------------------------------------------------------------
+# CR-SAN-042 C1 — set-version subcommand (AC1, AC2, AC3, AC4 + help)
+# ---------------------------------------------------------------------------
+
+import json
+import os
+
+
+def _write_manifests(repo_root, version="0.0.1"):
+    """Write minimal but realistic package.json + server.json at *version* and
+    commit them.  Called from setUp so set-version edits a TRACKED file and
+    AC3's clean-tree assertion is meaningful.
+
+    package.json  →  integrations/pi/package.json
+    server.json   →  repo root / server.json
+    """
+    # integrations/pi/package.json
+    pi_dir = os.path.join(repo_root, "integrations", "pi")
+    os.makedirs(pi_dir, exist_ok=True)
+    pkg = {
+        "name": "@anthill-tec/sandesh-pi",
+        "version": version,
+        "type": "module",
+    }
+    with open(os.path.join(pi_dir, "package.json"), "w") as f:
+        json.dump(pkg, f, indent=2)
+        f.write("\n")
+
+    # server.json
+    srv = {
+        "$schema": "https://example.com/server-schema.json",
+        "name": "io.github.anthill-tec/sandesh",
+        "version": version,
+        "packages": [
+            {
+                "registryType": "pypi",
+                "identifier": "sandesh-relay",
+                "version": version,
+            }
+        ],
+    }
+    with open(os.path.join(repo_root, "server.json"), "w") as f:
+        json.dump(srv, f, indent=2)
+        f.write("\n")
+
+
+class SetVersionAC1PackageJsonTest(ReleaseScriptHarness):
+    """AC1 — set-version writes the correct version into package.json."""
+
+    def setUp(self):
+        super().setUp()
+        # Create a hotfix branch and commit the manifests
+        self._checkout("hotfix/0.5.7", create=True)
+        _write_manifests(self.repo, version="0.0.1")
+        self._git("add", "integrations/pi/package.json", "server.json")
+        self._git("commit", "-m", "chore: add manifest fixtures")
+
+    def test_ac1_set_version_exits_0_on_hotfix_branch(self):
+        """set-version 0.5.7 on hotfix/0.5.7 must exit 0.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        result = self._run_release_sh("set-version", "0.5.7")
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(
+                f"Expected exit 0 for set-version on hotfix/0.5.7, "
+                f"got {result.returncode}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac1_set_version_writes_version_to_package_json(self):
+        """set-version 0.5.7 sets package.json top-level version to '0.5.7'.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._run_release_sh("set-version", "0.5.7")
+        pkg_path = os.path.join(self.repo, "integrations", "pi", "package.json")
+        with open(pkg_path) as f:
+            data = json.load(f)
+        self.assertEqual(
+            data["version"],
+            "0.5.7",
+            msg=f"package.json version not updated. Got: {data.get('version')!r}",
+        )
+
+    def test_ac1_package_json_remains_valid_json(self):
+        """After set-version 0.5.7, package.json must still be valid JSON.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._run_release_sh("set-version", "0.5.7")
+        pkg_path = os.path.join(self.repo, "integrations", "pi", "package.json")
+        try:
+            with open(pkg_path) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as exc:
+            self.fail(f"package.json is not valid JSON after set-version: {exc}")
+        # Confirm the file parsed (implicit — no exception above)
+        self.assertIsInstance(data, dict)
+
+    def test_ac1_package_json_non_version_keys_unchanged(self):
+        """set-version must not alter non-version keys in package.json.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._run_release_sh("set-version", "0.5.7")
+        pkg_path = os.path.join(self.repo, "integrations", "pi", "package.json")
+        with open(pkg_path) as f:
+            data = json.load(f)
+        self.assertEqual(
+            data["name"],
+            "@anthill-tec/sandesh-pi",
+            msg=f"package.json 'name' was altered. Got: {data.get('name')!r}",
+        )
+        self.assertEqual(
+            data["type"],
+            "module",
+            msg=f"package.json 'type' was altered. Got: {data.get('type')!r}",
+        )
+
+    def test_ac1_set_version_exits_0_on_release_branch(self):
+        """set-version 0.5.7 on release/0.5.7 must also exit 0 (both branch prefixes allowed).
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        # Switch to a release/* branch (manifests already committed on hotfix above)
+        self._checkout("release/0.5.7", create=True)
+        result = self._run_release_sh("set-version", "0.5.7")
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(
+                f"Expected exit 0 for set-version on release/0.5.7, "
+                f"got {result.returncode}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+
+class SetVersionAC2ServerJsonTest(ReleaseScriptHarness):
+    """AC2 — set-version writes both version fields in server.json."""
+
+    def setUp(self):
+        super().setUp()
+        self._checkout("hotfix/0.5.7", create=True)
+        _write_manifests(self.repo, version="0.0.1")
+        self._git("add", "integrations/pi/package.json", "server.json")
+        self._git("commit", "-m", "chore: add manifest fixtures")
+
+    def test_ac2_server_json_top_level_version_updated(self):
+        """set-version 0.5.7 must update server.json top-level version to '0.5.7'.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._run_release_sh("set-version", "0.5.7")
+        srv_path = os.path.join(self.repo, "server.json")
+        with open(srv_path) as f:
+            data = json.load(f)
+        self.assertEqual(
+            data["version"],
+            "0.5.7",
+            msg=f"server.json top-level version not updated. Got: {data.get('version')!r}",
+        )
+
+    def test_ac2_server_json_packages_version_updated(self):
+        """set-version 0.5.7 must update server.json packages[0].version to '0.5.7'.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._run_release_sh("set-version", "0.5.7")
+        srv_path = os.path.join(self.repo, "server.json")
+        with open(srv_path) as f:
+            data = json.load(f)
+        self.assertEqual(
+            data["packages"][0]["version"],
+            "0.5.7",
+            msg=(
+                f"server.json packages[0].version not updated. "
+                f"Got: {data['packages'][0].get('version')!r}"
+            ),
+        )
+
+    def test_ac2_server_json_remains_valid_json(self):
+        """After set-version, server.json must still be valid JSON.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._run_release_sh("set-version", "0.5.7")
+        srv_path = os.path.join(self.repo, "server.json")
+        try:
+            with open(srv_path) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as exc:
+            self.fail(f"server.json is not valid JSON after set-version: {exc}")
+        self.assertIsInstance(data, dict)
+
+    def test_ac2_server_json_non_version_keys_unchanged(self):
+        """set-version must not alter non-version keys in server.json.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._run_release_sh("set-version", "0.5.7")
+        srv_path = os.path.join(self.repo, "server.json")
+        with open(srv_path) as f:
+            data = json.load(f)
+        self.assertEqual(
+            data["name"],
+            "io.github.anthill-tec/sandesh",
+            msg=f"server.json 'name' was altered. Got: {data.get('name')!r}",
+        )
+        self.assertEqual(
+            data["packages"][0]["identifier"],
+            "sandesh-relay",
+            msg=(
+                f"server.json packages[0].identifier was altered. "
+                f"Got: {data['packages'][0].get('identifier')!r}"
+            ),
+        )
+
+    def test_ac2_both_version_fields_updated_atomically(self):
+        """Both server.json version fields must be set to the same new value.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._run_release_sh("set-version", "0.5.7")
+        srv_path = os.path.join(self.repo, "server.json")
+        with open(srv_path) as f:
+            data = json.load(f)
+        top_ver = data["version"]
+        pkg_ver = data["packages"][0]["version"]
+        self.assertEqual(
+            top_ver,
+            pkg_ver,
+            msg=(
+                f"server.json top-level version ({top_ver!r}) "
+                f"differs from packages[0].version ({pkg_ver!r})"
+            ),
+        )
+        self.assertEqual(
+            top_ver,
+            "0.5.7",
+            msg=f"server.json versions were not set to '0.5.7'. Got: {top_ver!r}",
+        )
+
+
+class SetVersionAC3CommitAndDryRunTest(ReleaseScriptHarness):
+    """AC3 — live set-version commits; --dry-run prints plan and changes nothing."""
+
+    def setUp(self):
+        super().setUp()
+        self._checkout("hotfix/0.5.7", create=True)
+        _write_manifests(self.repo, version="0.0.1")
+        self._git("add", "integrations/pi/package.json", "server.json")
+        self._git("commit", "-m", "chore: add manifest fixtures")
+
+    def _head_sha(self):
+        return self._git("rev-parse", "HEAD").stdout.strip()
+
+    def _working_tree_status(self):
+        """Return git status --porcelain output (empty string means clean)."""
+        return self._git("status", "--porcelain").stdout.strip()
+
+    def _head_changed_files(self):
+        """Return list of files changed in HEAD commit (from git show --name-only)."""
+        out = self._git(
+            "show", "--name-only", "--format=", "HEAD"
+        ).stdout.strip()
+        return [line for line in out.splitlines() if line]
+
+    def test_ac3_live_set_version_leaves_clean_working_tree(self):
+        """Live set-version 0.5.7 must leave a clean working tree (no uncommitted changes).
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._run_release_sh("set-version", "0.5.7")
+        status = self._working_tree_status()
+        self.assertEqual(
+            status,
+            "",
+            msg=(
+                f"Working tree is not clean after set-version.\n"
+                f"git status --porcelain:\n{status}"
+            ),
+        )
+
+    def test_ac3_live_set_version_creates_new_head_commit(self):
+        """Live set-version 0.5.7 must create a new HEAD commit (SHA changes).
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        before_sha = self._head_sha()
+        self._run_release_sh("set-version", "0.5.7")
+        after_sha = self._head_sha()
+        self.assertNotEqual(
+            before_sha,
+            after_sha,
+            msg="HEAD SHA did not change — set-version did not create a commit.",
+        )
+
+    def test_ac3_live_set_version_commit_includes_both_manifests(self):
+        """The new HEAD commit must include both manifest files.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._run_release_sh("set-version", "0.5.7")
+        changed = self._head_changed_files()
+        # Normalize to forward-slash paths
+        changed_normalized = [p.replace("\\", "/") for p in changed]
+        self.assertTrue(
+            any("integrations/pi/package.json" in p for p in changed_normalized),
+            msg=(
+                f"HEAD commit does not include integrations/pi/package.json.\n"
+                f"Changed files in HEAD: {changed}"
+            ),
+        )
+        self.assertTrue(
+            any("server.json" in p for p in changed_normalized),
+            msg=(
+                f"HEAD commit does not include server.json.\n"
+                f"Changed files in HEAD: {changed}"
+            ),
+        )
+
+    def test_ac3_dry_run_exits_0(self):
+        """set-version 0.5.7 --dry-run must exit 0.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        result = self._run_release_sh("set-version", "0.5.7", "--dry-run")
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(
+                f"Expected exit 0 for set-version --dry-run, "
+                f"got {result.returncode}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac3_dry_run_prints_non_empty_plan_to_stdout(self):
+        """set-version 0.5.7 --dry-run must print a non-empty plan to stdout.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        result = self._run_release_sh("set-version", "0.5.7", "--dry-run")
+        self.assertTrue(
+            len(result.stdout.strip()) > 0,
+            msg="--dry-run produced no stdout — expected a plan summary.",
+        )
+
+    def test_ac3_dry_run_does_not_change_manifest_contents(self):
+        """set-version --dry-run must NOT alter package.json or server.json on disk.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        pkg_path = os.path.join(self.repo, "integrations", "pi", "package.json")
+        srv_path = os.path.join(self.repo, "server.json")
+
+        with open(pkg_path) as f:
+            pkg_before = json.load(f)
+        with open(srv_path) as f:
+            srv_before = json.load(f)
+
+        self._run_release_sh("set-version", "0.5.7", "--dry-run")
+
+        with open(pkg_path) as f:
+            pkg_after = json.load(f)
+        with open(srv_path) as f:
+            srv_after = json.load(f)
+
+        self.assertEqual(
+            pkg_after["version"],
+            "0.0.1",
+            msg=(
+                f"package.json version was altered by --dry-run. "
+                f"Before: '0.0.1', After: {pkg_after.get('version')!r}"
+            ),
+        )
+        self.assertEqual(
+            srv_after["version"],
+            "0.0.1",
+            msg=(
+                f"server.json version was altered by --dry-run. "
+                f"Before: '0.0.1', After: {srv_after.get('version')!r}"
+            ),
+        )
+
+    def test_ac3_dry_run_does_not_create_new_commit(self):
+        """set-version --dry-run must NOT create a new git commit.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        before_sha = self._head_sha()
+        self._run_release_sh("set-version", "0.5.7", "--dry-run")
+        after_sha = self._head_sha()
+        self.assertEqual(
+            before_sha,
+            after_sha,
+            msg=(
+                f"HEAD SHA changed during --dry-run — a commit must NOT be created.\n"
+                f"Before: {before_sha}\nAfter: {after_sha}"
+            ),
+        )
+
+    def test_ac3_dry_run_leaves_clean_working_tree(self):
+        """set-version --dry-run must NOT stage or modify any files.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._run_release_sh("set-version", "0.5.7", "--dry-run")
+        status = self._working_tree_status()
+        self.assertEqual(
+            status,
+            "",
+            msg=(
+                f"Working tree or index was dirtied by --dry-run.\n"
+                f"git status --porcelain:\n{status}"
+            ),
+        )
+
+
+class SetVersionAC4GatingAndValidationTest(ReleaseScriptHarness):
+    """AC4 — branch gating and version-string validation for set-version."""
+
+    def setUp(self):
+        super().setUp()
+        # Manifests on main (the default branch after _git_init)
+        _write_manifests(self.repo, version="0.0.1")
+        self._git("add", "integrations/pi/package.json", "server.json")
+        self._git("commit", "-m", "chore: add manifest fixtures")
+
+    def _pkg_version(self):
+        pkg_path = os.path.join(self.repo, "integrations", "pi", "package.json")
+        with open(pkg_path) as f:
+            return json.load(f)["version"]
+
+    def _srv_version(self):
+        srv_path = os.path.join(self.repo, "server.json")
+        with open(srv_path) as f:
+            return json.load(f)["version"]
+
+    # --- Branch-gating tests ---
+
+    def test_ac4_set_version_on_develop_exits_2(self):
+        """set-version 0.5.7 on develop must exit 2 with a branch error.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._checkout("develop", create=True)
+        result = self._run_release_sh("set-version", "0.5.7")
+        self.assertEqual(
+            result.returncode,
+            2,
+            msg=(
+                f"Expected exit 2 on develop branch, got {result.returncode}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+        combined_err = result.stderr
+        self.assertTrue(
+            any(kw in combined_err.lower() for kw in ("hotfix", "release", "branch")),
+            msg=f"stderr does not mention branch requirement.\nstderr:\n{combined_err}",
+        )
+
+    def test_ac4_set_version_on_main_exits_2(self):
+        """set-version 0.5.7 on main must exit 2 with a branch error.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        # Already on main after setUp
+        result = self._run_release_sh("set-version", "0.5.7")
+        self.assertEqual(
+            result.returncode,
+            2,
+            msg=(
+                f"Expected exit 2 on main branch, got {result.returncode}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac4_set_version_on_feature_branch_exits_2(self):
+        """set-version 0.5.7 on feature/x must exit 2 with a branch error.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._checkout("feature/x", create=True)
+        result = self._run_release_sh("set-version", "0.5.7")
+        self.assertEqual(
+            result.returncode,
+            2,
+            msg=(
+                f"Expected exit 2 on feature/x branch, got {result.returncode}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac4_set_version_on_invalid_branch_leaves_manifests_untouched(self):
+        """set-version on a non-release branch must NOT modify manifests.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._checkout("develop", create=True)
+        self._run_release_sh("set-version", "0.5.7")
+        self.assertEqual(
+            self._pkg_version(),
+            "0.0.1",
+            msg="package.json was modified despite being on a non-release branch.",
+        )
+        self.assertEqual(
+            self._srv_version(),
+            "0.0.1",
+            msg="server.json was modified despite being on a non-release branch.",
+        )
+
+    # --- Version-format validation tests ---
+
+    def test_ac4_malformed_version_missing_patch_exits_2(self):
+        """set-version 1.2 (missing patch) on a hotfix branch must exit 2.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._checkout("hotfix/0.5.7", create=True)
+        result = self._run_release_sh("set-version", "1.2")
+        self.assertEqual(
+            result.returncode,
+            2,
+            msg=(
+                f"Expected exit 2 for malformed version '1.2', "
+                f"got {result.returncode}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac4_malformed_version_leading_v_exits_2(self):
+        """set-version v1.2.3 (leading 'v') on a hotfix branch must exit 2.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._checkout("hotfix/0.5.7", create=True)
+        result = self._run_release_sh("set-version", "v1.2.3")
+        self.assertEqual(
+            result.returncode,
+            2,
+            msg=(
+                f"Expected exit 2 for version with leading 'v', "
+                f"got {result.returncode}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac4_malformed_version_four_parts_exits_2(self):
+        """set-version 1.2.3.4 (four-part) on a hotfix branch must exit 2.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._checkout("hotfix/0.5.7", create=True)
+        result = self._run_release_sh("set-version", "1.2.3.4")
+        self.assertEqual(
+            result.returncode,
+            2,
+            msg=(
+                f"Expected exit 2 for four-part version '1.2.3.4', "
+                f"got {result.returncode}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+
+    def test_ac4_malformed_version_writes_nothing(self):
+        """A malformed version on a valid branch must NOT modify manifests.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        self._checkout("hotfix/0.5.7", create=True)
+        # Try each bad form
+        for bad_ver in ("1.2", "v1.2.3", "1.2.3.4"):
+            with self.subTest(bad_ver=bad_ver):
+                self._run_release_sh("set-version", bad_ver)
+                self.assertEqual(
+                    self._pkg_version(),
+                    "0.0.1",
+                    msg=f"package.json was modified by malformed version '{bad_ver}'.",
+                )
+                self.assertEqual(
+                    self._srv_version(),
+                    "0.0.1",
+                    msg=f"server.json was modified by malformed version '{bad_ver}'.",
+                )
+
+
+class SetVersionHelpTest(ReleaseScriptHarness):
+    """§S3 help — release.sh --help must list set-version."""
+
+    def test_help_lists_set_version(self):
+        """--help stdout must mention 'set-version' alongside existing subcommands.
+
+        FAILS at RED: set-version subcommand does not exist yet.
+        """
+        result = self._run_release_sh("--help")
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(
+                f"Expected exit 0 for --help, got {result.returncode}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+        self.assertIn(
+            "set-version",
+            result.stdout,
+            msg=(
+                f"--help output does not contain 'set-version'.\n"
+                f"STDOUT:\n{result.stdout}"
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
