@@ -1,6 +1,6 @@
 # CR-SAN-036 — provisioning core: `sandesh init` + lazy auto-migrate
 
-**Status:** PENDING
+**Status:** COMPLETED (implemented on feature/CR-SAN-036; ships in 0.3.0)
 **Priority:** High (the capability every install route depends on)
 **Depends on:** —
 **Labels:** provisioning, migration, cli, lifecycle
@@ -38,20 +38,20 @@ package as a CLI command and makes migration self-healing on store open — so e
   the existing different-name-re-assign refusal holds). **CLI-only — never an MCP tool.**
 
 ## Acceptance criteria
-- [ ] **AC1 — lazy migrate applies.** Opening a schema-behind store with `[migrate]` present
+- [x] **AC1 — lazy migrate applies.** Opening a schema-behind store with `[migrate]` present
       auto-applies pending migrations (store ends current); a current store is untouched (no-op).
-- [ ] **AC2 — actionable error, no self-pip.** A schema-behind store with `[migrate]` absent raises
+- [x] **AC2 — actionable error, no self-pip.** A schema-behind store with `[migrate]` absent raises
       an error containing an install-method-specific remediation command; no `pip`/`uv` subprocess
       is spawned.
-- [ ] **AC3 — `init` idempotent.** First `sandesh init` provisions (migrate+consolidate+reindex,
+- [x] **AC3 — `init` idempotent.** First `sandesh init` provisions (migrate+consolidate+reindex,
       admin if provided); a second run exits 0 as a clean no-op.
-- [ ] **AC4 — `init` admin.** `sandesh init --admin X` assigns admin `X`; a later
+- [x] **AC4 — `init` admin.** `sandesh init --admin X` assigns admin `X`; a later
       `--admin Y` is refused with the existing error; `admin_name` unchanged.
-- [ ] **AC5 — `init` without `[migrate]`.** On a current/empty store, `sandesh init` (no migrate
+- [x] **AC5 — `init` without `[migrate]`.** On a current/empty store, `sandesh init` (no migrate
       extra) runs consolidate+reindex and exits 0 with a migrate-skipped notice; on a *behind* store
       it exits non-zero with the §S1 remediation.
-- [ ] **AC6 — no MCP surface.** `tools/list` contains no `init`/`admin`/`migrate` tool (grep).
-- [ ] **AC7 — fresh store is not "behind" (no false-positive).** A store freshly created by
+- [x] **AC6 — no MCP surface.** `tools/list` contains no `init`/`admin`/`migrate` tool (grep).
+- [x] **AC7 — fresh store is not "behind" (no false-positive).** A store freshly created by
       `connect()` (current `_SCHEMA`, **no `_yoyo_migration` table**) opens with **no** migration
       attempted and **no** `MigrationRequired` raised — even when `[migrate]` is absent (the cheap
       detector treats a yoyo-table-less store as current).

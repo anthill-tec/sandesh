@@ -397,6 +397,89 @@ def cmd_reindex(args):
     return 0
 
 
+def cmd_init(args):
+    """Global provisioning sweep (CR-SAN-036 §S3) — idempotent.
+
+    In order: migrate → consolidate → reindex → admin. Reuses the existing
+    library pieces; never reimplements them. CLI-only (never an MCP tool).
+
+      1. Migrate: if the [migrate] extra is importable, apply pending migrations
+         via the engine. If it is absent, detect whether the store is *behind*
+         (the stdlib-only _store_is_behind probe): if behind, exit non-zero with
+         the install-method remediation; if current/empty, print a
+         migrate-skipped notice and continue.
+      2. Consolidate: import any legacy per-project stores (stdlib-only).
+      3. Reindex: rebuild the FTS index.
+      4. Admin: resolve from --admin > $SANDESH_ADMIN > interactive prompt (only
+         when stdin is a tty and not --yes) > skip-with-notice; then assign_admin.
+         A different-name re-assign surfaces the library's refusal (non-zero exit).
+    """
+    # 1. migrate -----------------------------------------------------------
+    try:
+        import yoyo  # noqa: F401
+        import jsonschema  # noqa: F401
+        have_migrate = True
+    except ImportError:
+        have_migrate = False
+
+    if have_migrate:
+        _migrate.apply()
+    else:
+        # [migrate] absent: probe whether the store is schema-behind without
+        # importing yoyo. A behind store cannot self-heal → exit with remediation.
+        os.makedirs(sdb.root_dir(), exist_ok=True)
+        import sqlite3
+        probe = sqlite3.connect(sdb.db_path())
+        probe.row_factory = sqlite3.Row
+        try:
+            probe.executescript(sdb._SCHEMA)
+            probe.commit()
+            behind = sdb._store_is_behind(probe)
+        finally:
+            probe.close()
+        if behind:
+            print("[sandesh] " + str(sdb.MigrationRequired(
+                "Sandesh store schema is behind and the [migrate] extra is not "
+                "installed, so it cannot be auto-upgraded.\n"
+                "          Install it with:  " + sdb.install_method_hint())),
+                file=sys.stderr)
+            sys.exit(1)
+        print("migrate: skipped — the [migrate] extra is not installed "
+              "(store schema is current).")
+
+    # 2. consolidate -------------------------------------------------------
+    summaries = sdb.consolidate()
+    imported = sum(1 for e in summaries if not e.get("skipped"))
+    print(f"consolidate: {imported} legacy store(s) imported.")
+
+    # 3. reindex -----------------------------------------------------------
+    con = sdb.connect()
+    try:
+        n = sdb.reindex(con)
+        print(f"reindex: {n} message(s) indexed.")
+
+        # 4. admin ---------------------------------------------------------
+        name = getattr(args, "admin", None) or os.environ.get("SANDESH_ADMIN")
+        if not name and not getattr(args, "yes", False) and sys.stdin.isatty():
+            entered = input("Sandesh admin name (blank to skip): ").strip()
+            name = entered or None
+        if name:
+            try:
+                sdb.assign_admin(con, name)
+            except ValueError as exc:
+                print(f"[sandesh] {exc}", file=sys.stderr)
+                sys.exit(1)
+            print(f"admin: {name!r} assigned.")
+        else:
+            print("admin: skipped — no name given "
+                  "(pass --admin <name> or set $SANDESH_ADMIN).")
+    finally:
+        con.close()
+
+    print("init: done.")
+    return 0
+
+
 def build_parser():
     # --project is shared so it works BOTH before and after the subcommand:
     #   sandesh --project X setup    AND    sandesh setup --project X
@@ -609,6 +692,19 @@ def build_parser():
     p.add_argument("--dry-run", dest="dry_run", action="store_true",
                    help="report would-be purge counts; write nothing")
     p.set_defaults(fn=cmd_tombstone)
+
+    # CR-SAN-036 §S3: global provisioning sweep (migrate → consolidate →
+    # reindex → admin). Parentless like migrate/consolidate/reindex — it
+    # provisions the single global DB, so it takes no --project. CLI-only
+    # (never an MCP tool — AC6).
+    p = sub.add_parser("init",
+                       help="provision the global store "
+                            "(migrate + consolidate + reindex + admin)")
+    p.add_argument("--admin", help="assign the Sandesh admin name "
+                                   "(or set $SANDESH_ADMIN)")
+    p.add_argument("--yes", action="store_true",
+                   help="non-interactive: skip the admin prompt when no name given")
+    p.set_defaults(fn=cmd_init)
     return ap
 
 
