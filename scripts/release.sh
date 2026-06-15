@@ -192,6 +192,10 @@ PY
     done
 
     git add "${present[@]}"
+    if git diff --cached --quiet; then
+        info "set-version: manifests already at $VERSION; nothing to commit"
+        return "$EXIT_SUCCESS"
+    fi
     git commit -m "chore(release): set manual manifests to $VERSION"
 }
 
