@@ -1,6 +1,6 @@
 # CR-SAN-036 — provisioning core: `sandesh init` + lazy auto-migrate
 
-**Status:** PENDING
+**Status:** IN_PROGRESS
 **Priority:** High (the capability every install route depends on)
 **Depends on:** —
 **Labels:** provisioning, migration, cli, lifecycle
