@@ -12,23 +12,38 @@ The Pi extension is the Pi-path agent surface (a replacement for the MCP server 
 `[mcp]`). Today a Pi user must separately install the `sandesh` CLI (two steps), and nothing nudges
 them to provision the store.
 
+**Spans two stacks:** a tiny **python** CLI add (`sandesh init --check`) + the **bun** Pi changes.
+
 ## Scope
-- **§S1 — uvx-on-demand CLI.** When a local `sandesh` is not on PATH, the extension invokes the CLI
-  via `uvx --from 'sandesh-relay[migrate]' sandesh …` (**no `mcp`** in the extra); when a local
-  `sandesh` is present, it uses that. (Configurable; documented.)
-- **§S2 — provision nudge.** Extend the existing ≥0.2.0 CLI session gate to also detect an
-  **unprovisioned store** (super-admin unset / store absent) and emit a one-line nudge to run
-  `sandesh init`. The version gate is preserved.
-- **§S3 — no new tools.** No `init`/`admin`/`migrate` tool is registered (Pi mirrors the MCP
-  surface, which excludes them). The CLI's `[migrate]`-absent / provision error is passed through
-  verbatim (existing error-passthrough).
+- **§S0 — `sandesh init --check` probe (python, cli.py).** A read-only, idempotent, **non-mutating**
+  status probe (gap-analysis DRIFT-2 — admin is non-listable, so Pi has no way to detect
+  "unprovisioned" without it). `sandesh init --check`: **exit 0** when the store is provisioned
+  (store/DB exists AND a super-admin is assigned), **non-zero + a one-line message** otherwise
+  (distinguishing "store absent" vs "admin unset"). Writes nothing; mutually exclusive with the
+  normal provisioning run. Still CLI-only — never MCP.
+- **§S1 — uvx-on-demand CLI (bun).** When a local `sandesh` is not on PATH, the extension invokes
+  the CLI via `uvx --from 'sandesh-relay[migrate]' sandesh …` (**no `mcp`** in the extra); when a
+  local `sandesh` is present, it uses that. A shared binary-resolution helper applied at ALL exec
+  sites (`runSandesh`, the `--version` probe, the `notify` wake).
+- **§S2 — provision nudge (bun).** Extend the `session_start` gate: after the ≥0.2.0 version check,
+  run `sandesh init --check`; on non-zero, emit a one-line nudge to run `sandesh init` (surfacing
+  the probe's store-absent vs admin-unset message). The version gate is preserved; provisioned
+  stores get no nudge.
+- **§S3 — no new tools (bun).** No `init`/`admin`/`migrate` tool is registered (Pi mirrors the MCP
+  surface, which excludes them) — `init --check` is used only by the session gate, never as a Pi
+  tool. The CLI's `[migrate]`-absent / provision error passes through verbatim (existing error-passthrough).
 
 ## Acceptance criteria
-- [ ] **AC1 — uvx invocation.** With no local `sandesh`, the extension builds
+- [ ] **AC0 — `init --check` probe (python).** On a provisioned store (exists + admin set)
+      `sandesh init --check` exits 0; on a store with no admin it exits non-zero with an
+      admin-unset message; on an absent store it exits non-zero with a store-absent message. It
+      writes NOTHING (no migrate/consolidate/reindex/admin side-effects — verify the store is
+      byte-unchanged), and there is no MCP `init`/`check` tool.
+- [ ] **AC1 — uvx invocation (bun).** With no local `sandesh`, the extension builds
       `uvx --from 'sandesh-relay[migrate]' sandesh …` (extra contains `migrate`, NOT `mcp`); with a
       local `sandesh`, it uses the local binary.
-- [ ] **AC2 — provision nudge.** Against an unprovisioned store (probe), the session gate emits a
-      nudge naming `sandesh init`; against a provisioned store it emits none.
+- [ ] **AC2 — provision nudge (bun).** The session gate runs `sandesh init --check`; on non-zero it
+      emits a one-line nudge naming `sandesh init`; on exit 0 (provisioned) it emits none.
 - [ ] **AC3 — version gate preserved.** The ≥0.2.0 CLI gate still fires on an out-of-date CLI.
 - [ ] **AC4 — no init/admin/migrate tool.** The registered-tool inventory is unchanged (no new
       provisioning tools).
