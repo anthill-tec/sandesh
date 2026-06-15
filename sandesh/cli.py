@@ -413,7 +413,17 @@ def cmd_init(args):
       4. Admin: resolve from --admin > $SANDESH_ADMIN > interactive prompt (only
          when stdin is a tty and not --yes) > skip-with-notice; then assign_admin.
          A different-name re-assign surfaces the library's refusal (non-zero exit).
+
+    With --check (CR-SAN-038 §S0): run a read-only, non-mutating status probe and
+    return WITHOUT the provisioning sweep. It reports one of three states and
+    writes nothing to disk (no DB creation, no migrate/consolidate/reindex/assign):
+      * store absent      → non-zero, suggest `sandesh init`;
+      * admin unset        → non-zero, suggest `sandesh init`;
+      * fully provisioned  → exit 0.
     """
+    if getattr(args, "check", False):
+        return _cmd_init_check()
+
     # 1. migrate -----------------------------------------------------------
     try:
         import yoyo  # noqa: F401
@@ -477,6 +487,49 @@ def cmd_init(args):
         con.close()
 
     print("init: done.")
+    return 0
+
+
+def _cmd_init_check():
+    """Read-only provisioning probe for `sandesh init --check` (CR-SAN-038 §S0).
+
+    Reports the store's provisioning state and writes NOTHING. Never calls
+    sdb.connect() (which would CREATE the DB via executescript(_SCHEMA)); the
+    admin check opens the existing DB read-only (URI mode=ro) so no bytes change.
+
+    Returns 0 when fully provisioned; 1 when the store is absent or the admin
+    is unset (each with a distinct remediation message that names `sandesh init`).
+    """
+    db = sdb.db_path()
+    if not os.path.exists(db):
+        print(
+            "[sandesh] store not found — no sandesh.db at "
+            f"{db}. Run `sandesh init` to provision the global store.",
+            file=sys.stderr,
+        )
+        return 1
+
+    import sqlite3
+    # immutable=1 (not just mode=ro): a WAL-mode store would otherwise create
+    # the -wal/-shm sidecar files on open. immutable promises no concurrent
+    # writer so SQLite skips the WAL machinery → zero new files, zero byte change.
+    con = sqlite3.connect(f"file:{db}?immutable=1", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        admin = sdb.admin_name(con)
+    finally:
+        con.close()
+
+    if admin is None:
+        print(
+            "[sandesh] admin not assigned — the store exists but has no Sandesh "
+            "admin. Run `sandesh init --admin <name>` (or set $SANDESH_ADMIN) "
+            "to finish provisioning.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"init --check: provisioned (admin {admin!r}).")
     return 0
 
 
@@ -704,6 +757,9 @@ def build_parser():
                                    "(or set $SANDESH_ADMIN)")
     p.add_argument("--yes", action="store_true",
                    help="non-interactive: skip the admin prompt when no name given")
+    p.add_argument("--check", action="store_true",
+                   help="read-only status probe: report provisioning state and "
+                        "exit (writes nothing; non-zero if store absent or admin unset)")
     p.set_defaults(fn=cmd_init)
     return ap
 
