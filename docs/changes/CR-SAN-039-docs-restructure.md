@@ -15,10 +15,17 @@ runs last, once the behaviours it describes are final.
 ## Scope
 - **§S1 — slim README.** Keep what/why/model + a quick-start pointer; remove the multi-route install
   blocks (link out to the install guide). Frame the product as CLI + a chosen surface (MCP or Pi).
+  **MUST PRESERVE** the `<!-- mcp-name: io.github.anthill-tec/sandesh -->` ownership marker
+  (gap-analysis NOTE-1: `test_server_json.py::ReadmeMcpOwnershipMarkerTest` pins it; the MCP
+  registry verifies it against the PyPI long-description).
 - **§S2 — install guide** (`docs/INSTALL.md` or `docs/install/`): per **route × surface**
   (Claude / Pi / both), each with **install → `sandesh init` → manage (auto-migrate, admin) →
   uninstall**. `[mcp]` only on the Claude path; Pi path uses uvx-on-demand (no mcp).
-- **§S3 — remove AUR from README** (the PKGBUILD + RELEASING steps stay for when it ships).
+- **§S3 — remove the AUR install route from README** (the `### Arch Linux (AUR)` section + the
+  AUR PEP-668 asides + the Roadmap AUR line). The legit **non-AUR** `pacman`-bootstrap-for-uv/pipx
+  hints (`sudo pacman -S uv` / `python-pipx`) are **relocated into the install guide** (§S2), not
+  left orphaned in README (gap-analysis DRIFT-3). `packaging/aur/PKGBUILD` + RELEASING AUR steps
+  stay untouched (for when AUR ships).
 - **§S4 — uninstall matrix:** per route (`uv tool uninstall` / `pipx uninstall` / `pip uninstall`
   +orphans caveat / `install.sh --uninstall [--purge]` / Pi extension removal) + the two manual
   steps every route shares (remove the **data store**; `claude mcp remove sandesh`).
@@ -28,8 +35,12 @@ runs last, once the behaviours it describes are final.
       (only a pointer/link to the install guide); retains what/why/model.
 - [ ] **AC2 — install guide exists** with per-route × per-surface sections (Claude/Pi/both) each
       covering install→init→manage→uninstall.
-- [ ] **AC3 — AUR removed from README** (no `yay`/`pacman`/AUR tokens in README; `packaging/aur/` +
-      RELEASING.md unchanged).
+- [ ] **AC3 — AUR install route removed from README** (no `yay`/`paru`/`AUR` tokens, and no AUR
+      install section, in README; any surviving `pacman` mention is only a non-AUR uv/pipx-bootstrap
+      hint IF kept — preferred: relocated to the install guide). `packaging/aur/PKGBUILD` +
+      RELEASING.md unchanged; `test_pkgbuild.py` stays green.
+- [ ] **AC6 — mcp-name marker preserved.** README still contains
+      `mcp-name: io.github.anthill-tec/sandesh` (`test_server_json.py` stays green).
 - [ ] **AC4 — uninstall matrix present** (all routes + Pi + the data-store + `claude mcp remove`
       manual steps).
 - [ ] **AC5 — boundary test green.** `test_migration_docs_boundary.py` still passes (migration
