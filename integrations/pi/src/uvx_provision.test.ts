@@ -377,13 +377,17 @@ describe("AC1 — uvx-on-demand: verb exec site uses uvx when sandesh is absent"
     const execCalls: Array<[string, string[]]> = [];
 
     let callIdx = 0;
-    // Sequence: --version probe fails, uvx --version succeeds, then verb call
+    // Sequence: --version probe fails, uvx --version succeeds, init --check
+    // provisioned, notify terminal (wake loop stops), then the setup verb call.
+    // The notify must terminate (exit 3) BEFORE the verb call so the wake loop
+    // does not consume the verb's "setup done" result. (Mirrors AC1h's pattern:
+    // probe, uvx-probe, init --check, notify… — with the verb result last.)
     const execSequence: Array<ExecResult | "reject"> = [
       exit(127, "sandesh: command not found"),  // direct probe fails
       ok("sandesh 0.2.0"),                      // uvx probe succeeds
       ok(""),                                   // init --check (provisioned)
+      exit(3),                                  // notify terminal (wake loop stops)
       ok("setup done"),                         // setup verb call
-      exit(3),                                  // notify terminal
     ];
 
     const execMock = mock(
