@@ -162,9 +162,10 @@ That writes an `mcpServers` entry (`~/.claude.json` for user scope, or a committ
 `.mcp.json` for `--scope project`). Manage with `claude mcp list` / `claude mcp get sandesh`
 / `claude mcp remove sandesh`; the in-session `/mcp` panel shows status + tools.
 
-**Nine tools**, each taking `project_id` (falls back to `$SANDESH_PROJECT`): `sandesh_setup`,
+**Twelve tools**, each taking `project_id` (falls back to `$SANDESH_PROJECT`): `sandesh_setup`,
 `sandesh_register`, `sandesh_unregister`, `sandesh_addressbook`, `sandesh_send`,
-`sandesh_reply`, `sandesh_inbox`, `sandesh_fetch`, `sandesh_thread`. The server also returns
+`sandesh_reply`, `sandesh_inbox`, `sandesh_fetch`, `sandesh_thread`, `sandesh_archive`,
+`sandesh_unarchive`, `sandesh_search`. The server also returns
 usage `instructions` on `initialize` and serves the full scenarios doc as the `sandesh://usage`
 resource. (Lifecycle: **read = being acted on, reply = done** — there is no separate status tool.)
 

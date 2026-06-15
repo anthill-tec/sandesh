@@ -1,6 +1,6 @@
 # CR-SAN-040 — user guide (MCP + Pi sections) + leaner README + `notify --help` epilog
 
-**Status:** IN_PROGRESS
+**Status:** COMPLETED (implemented on release/0.3.1; ships in 0.3.1)
 **Priority:** High (users can't operate the software from the docs today — the *how* is missing)
 **Depends on:** CR-SAN-041 (the MCP `/` prompts + enable-listening instructions this guide documents)
 **Labels:** docs, dx, usability, patch-0.3.1
@@ -41,21 +41,21 @@ wake** built into the extension (no manual listener). That handholding lives onl
   guide; drop/condense the verbose Roadmap. **Preserve** the `mcp-name` marker.
 
 ## Acceptance criteria
-- [ ] **AC1 — guide exists, both surfaces.** `docs/USER_GUIDE.md` exists with a **MCP-users** section
+- [x] **AC1 — guide exists, both surfaces.** `docs/USER_GUIDE.md` exists with a **MCP-users** section
       and a **Pi-extension-users** section; the MCP section tells the reader to run `sandesh notify`
       in the background and describes the listen→fetch→reply→listen loop; the Pi section states the
       extension wakes the session itself (**native wake, no manual `sandesh notify`**).
-- [ ] **AC2 — stop-reasons documented.** The guide contains a plain "why the listener stopped" table
+- [x] **AC2 — stop-reasons documented.** The guide contains a plain "why the listener stopped" table
       covering mail-arrived, timeout, project-retired (do-not-restart), and taken-over.
-- [ ] **AC3 — README leaner + must-read link.** README links `docs/USER_GUIDE.md` as a prominent
-      must-read near the top, and is shorter than before (e.g. the verbose Roadmap removed/condensed);
-      what/why/model retained.
-- [ ] **AC4 — `notify --help` epilog.** `sandesh notify --help` output contains the stop-reason /
+- [x] **AC3 — README leaner + must-read link.** README links `docs/USER_GUIDE.md` as a prominent
+      must-read near the top, and is shorter than before (the verbose Roadmap condensed); what/why/
+      model retained. (Also corrected the stale "Nine tools" → "Twelve tools" count.)
+- [x] **AC4 — `notify --help` epilog.** `sandesh notify --help` output contains the stop-reason /
       exit-code explanations (assert the help text includes the plain descriptions).
-- [ ] **AC5 — guards green.** `test_server_json.py` (mcp-name marker) and `test_pkgbuild.py` stay
-      green; full regression unaffected.
-- [ ] **AC6 — plain-language gate.** The guide leads each surface section with what the *user does*
-      (a `sandesh …` command / `pi install …`) before any internals; assert the guide does NOT use
+- [x] **AC5 — guards green.** `test_server_json.py` (mcp-name marker) and `test_pkgbuild.py` stay
+      green; full regression unaffected (53/53 test files green).
+- [x] **AC6 — plain-language gate.** The guide leads each surface section with what the *user does*
+      (a `sandesh …` command / `pi install …`) before any internals; the guide does NOT use
       the bare term "exit code" as the user-facing heading (stop-reasons are framed plainly).
 
 ## Estimated size
