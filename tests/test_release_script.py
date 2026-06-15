@@ -1194,9 +1194,11 @@ class SetVersionAC3CommitAndDryRunTest(ReleaseScriptHarness):
         return [line for line in out.splitlines() if line]
 
     def test_ac3_live_set_version_leaves_clean_working_tree(self):
-        """Live set-version 0.5.7 must leave a clean working tree (no uncommitted changes).
+        """Live set-version 0.5.7 must leave a clean working tree AND a bumped commit.
 
-        FAILS at RED: set-version subcommand does not exist yet.
+        FAILS at RED: set-version subcommand does not exist yet — the tree is already
+        clean at fixture time, but the committed package.json still has '0.0.1', so
+        the version assertion below catches the missing implementation.
         """
         self._run_release_sh("set-version", "0.5.7")
         status = self._working_tree_status()
@@ -1206,6 +1208,22 @@ class SetVersionAC3CommitAndDryRunTest(ReleaseScriptHarness):
             msg=(
                 f"Working tree is not clean after set-version.\n"
                 f"git status --porcelain:\n{status}"
+            ),
+        )
+        # The tree is clean only because everything was committed — verify the
+        # committed version is actually '0.5.7', not the fixture's '0.0.1'.
+        # Pre-impl the fixture commit stays at '0.0.1' → fails here.
+        pkg_blob = self._git(
+            "show", "HEAD:integrations/pi/package.json"
+        ).stdout
+        pkg_committed = json.loads(pkg_blob)
+        self.assertEqual(
+            pkg_committed["version"],
+            "0.5.7",
+            msg=(
+                f"Working tree is clean but HEAD:package.json version is "
+                f"{pkg_committed.get('version')!r} — set-version did not commit "
+                f"the bumped manifests."
             ),
         )
 
@@ -1224,9 +1242,11 @@ class SetVersionAC3CommitAndDryRunTest(ReleaseScriptHarness):
         )
 
     def test_ac3_live_set_version_commit_includes_both_manifests(self):
-        """The new HEAD commit must include both manifest files.
+        """The new HEAD commit must include both manifest files with version 0.5.7.
 
-        FAILS at RED: set-version subcommand does not exist yet.
+        FAILS at RED: set-version subcommand does not exist yet — the HEAD commit
+        at fixture-setup time has version '0.0.1'; these assertions require '0.5.7'
+        to be present in the committed content.
         """
         self._run_release_sh("set-version", "0.5.7")
         changed = self._head_changed_files()
@@ -1244,6 +1264,30 @@ class SetVersionAC3CommitAndDryRunTest(ReleaseScriptHarness):
             msg=(
                 f"HEAD commit does not include server.json.\n"
                 f"Changed files in HEAD: {changed}"
+            ),
+        )
+        # Verify the committed content actually contains the bumped version, not
+        # the fixture's '0.0.1'.  Pre-impl HEAD is the fixture commit → fails here.
+        pkg_blob = self._git(
+            "show", "HEAD:integrations/pi/package.json"
+        ).stdout
+        pkg_committed = json.loads(pkg_blob)
+        self.assertEqual(
+            pkg_committed["version"],
+            "0.5.7",
+            msg=(
+                f"HEAD commit has package.json version "
+                f"{pkg_committed.get('version')!r}, expected '0.5.7'."
+            ),
+        )
+        srv_blob = self._git("show", "HEAD:server.json").stdout
+        srv_committed = json.loads(srv_blob)
+        self.assertEqual(
+            srv_committed["version"],
+            "0.5.7",
+            msg=(
+                f"HEAD commit has server.json version "
+                f"{srv_committed.get('version')!r}, expected '0.5.7'."
             ),
         )
 
@@ -1387,6 +1431,18 @@ class SetVersionAC4GatingAndValidationTest(ReleaseScriptHarness):
             any(kw in combined_err.lower() for kw in ("hotfix", "release", "branch")),
             msg=f"stderr does not mention branch requirement.\nstderr:\n{combined_err}",
         )
+        # A recognized set-version must NOT fall through to the unknown-subcommand
+        # handler.  Pre-impl, release.sh emits "unknown subcommand: set-version" here.
+        combined_all = (result.stdout + result.stderr).lower()
+        self.assertNotIn(
+            "unknown subcommand",
+            combined_all,
+            msg=(
+                "stdout/stderr contains 'unknown subcommand' — set-version is not yet "
+                "a recognized subcommand. Implement it so branch-gating fires instead "
+                "of the catch-all unknown-subcommand handler."
+            ),
+        )
 
     def test_ac4_set_version_on_main_exits_2(self):
         """set-version 0.5.7 on main must exit 2 with a branch error.
@@ -1401,6 +1457,18 @@ class SetVersionAC4GatingAndValidationTest(ReleaseScriptHarness):
             msg=(
                 f"Expected exit 2 on main branch, got {result.returncode}.\n"
                 f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+        # A recognized set-version must NOT fall through to the unknown-subcommand
+        # handler.  Pre-impl, release.sh emits "unknown subcommand: set-version" here.
+        combined_all = (result.stdout + result.stderr).lower()
+        self.assertNotIn(
+            "unknown subcommand",
+            combined_all,
+            msg=(
+                "stdout/stderr contains 'unknown subcommand' — set-version is not yet "
+                "a recognized subcommand. Implement it so branch-gating fires instead "
+                "of the catch-all unknown-subcommand handler."
             ),
         )
 
@@ -1419,6 +1487,18 @@ class SetVersionAC4GatingAndValidationTest(ReleaseScriptHarness):
                 f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
             ),
         )
+        # A recognized set-version must NOT fall through to the unknown-subcommand
+        # handler.  Pre-impl, release.sh emits "unknown subcommand: set-version" here.
+        combined_all = (result.stdout + result.stderr).lower()
+        self.assertNotIn(
+            "unknown subcommand",
+            combined_all,
+            msg=(
+                "stdout/stderr contains 'unknown subcommand' — set-version is not yet "
+                "a recognized subcommand. Implement it so branch-gating fires instead "
+                "of the catch-all unknown-subcommand handler."
+            ),
+        )
 
     def test_ac4_set_version_on_invalid_branch_leaves_manifests_untouched(self):
         """set-version on a non-release branch must NOT modify manifests.
@@ -1426,7 +1506,7 @@ class SetVersionAC4GatingAndValidationTest(ReleaseScriptHarness):
         FAILS at RED: set-version subcommand does not exist yet.
         """
         self._checkout("develop", create=True)
-        self._run_release_sh("set-version", "0.5.7")
+        result = self._run_release_sh("set-version", "0.5.7")
         self.assertEqual(
             self._pkg_version(),
             "0.0.1",
@@ -1436,6 +1516,18 @@ class SetVersionAC4GatingAndValidationTest(ReleaseScriptHarness):
             self._srv_version(),
             "0.0.1",
             msg="server.json was modified despite being on a non-release branch.",
+        )
+        # A recognized set-version must NOT fall through to the unknown-subcommand
+        # handler.  Pre-impl, release.sh emits "unknown subcommand: set-version" here.
+        combined_all = (result.stdout + result.stderr).lower()
+        self.assertNotIn(
+            "unknown subcommand",
+            combined_all,
+            msg=(
+                "stdout/stderr contains 'unknown subcommand' — set-version is not yet "
+                "a recognized subcommand. Implement it so branch-gating fires instead "
+                "of the catch-all unknown-subcommand handler."
+            ),
         )
 
     # --- Version-format validation tests ---
@@ -1456,6 +1548,18 @@ class SetVersionAC4GatingAndValidationTest(ReleaseScriptHarness):
                 f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
             ),
         )
+        # A recognized set-version must NOT fall through to the unknown-subcommand
+        # handler.  Pre-impl, release.sh emits "unknown subcommand: set-version" here.
+        combined_all = (result.stdout + result.stderr).lower()
+        self.assertNotIn(
+            "unknown subcommand",
+            combined_all,
+            msg=(
+                "stdout/stderr contains 'unknown subcommand' — set-version is not yet "
+                "a recognized subcommand. Implement it so version-validation fires "
+                "instead of the catch-all unknown-subcommand handler."
+            ),
+        )
 
     def test_ac4_malformed_version_leading_v_exits_2(self):
         """set-version v1.2.3 (leading 'v') on a hotfix branch must exit 2.
@@ -1471,6 +1575,18 @@ class SetVersionAC4GatingAndValidationTest(ReleaseScriptHarness):
                 f"Expected exit 2 for version with leading 'v', "
                 f"got {result.returncode}.\n"
                 f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            ),
+        )
+        # A recognized set-version must NOT fall through to the unknown-subcommand
+        # handler.  Pre-impl, release.sh emits "unknown subcommand: set-version" here.
+        combined_all = (result.stdout + result.stderr).lower()
+        self.assertNotIn(
+            "unknown subcommand",
+            combined_all,
+            msg=(
+                "stdout/stderr contains 'unknown subcommand' — set-version is not yet "
+                "a recognized subcommand. Implement it so version-validation fires "
+                "instead of the catch-all unknown-subcommand handler."
             ),
         )
 
@@ -1490,6 +1606,18 @@ class SetVersionAC4GatingAndValidationTest(ReleaseScriptHarness):
                 f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
             ),
         )
+        # A recognized set-version must NOT fall through to the unknown-subcommand
+        # handler.  Pre-impl, release.sh emits "unknown subcommand: set-version" here.
+        combined_all = (result.stdout + result.stderr).lower()
+        self.assertNotIn(
+            "unknown subcommand",
+            combined_all,
+            msg=(
+                "stdout/stderr contains 'unknown subcommand' — set-version is not yet "
+                "a recognized subcommand. Implement it so version-validation fires "
+                "instead of the catch-all unknown-subcommand handler."
+            ),
+        )
 
     def test_ac4_malformed_version_writes_nothing(self):
         """A malformed version on a valid branch must NOT modify manifests.
@@ -1500,7 +1628,7 @@ class SetVersionAC4GatingAndValidationTest(ReleaseScriptHarness):
         # Try each bad form
         for bad_ver in ("1.2", "v1.2.3", "1.2.3.4"):
             with self.subTest(bad_ver=bad_ver):
-                self._run_release_sh("set-version", bad_ver)
+                result = self._run_release_sh("set-version", bad_ver)
                 self.assertEqual(
                     self._pkg_version(),
                     "0.0.1",
@@ -1510,6 +1638,20 @@ class SetVersionAC4GatingAndValidationTest(ReleaseScriptHarness):
                     self._srv_version(),
                     "0.0.1",
                     msg=f"server.json was modified by malformed version '{bad_ver}'.",
+                )
+                # A recognized set-version must NOT fall through to the
+                # unknown-subcommand handler.  Pre-impl, release.sh emits
+                # "unknown subcommand: set-version" here.
+                combined_all = (result.stdout + result.stderr).lower()
+                self.assertNotIn(
+                    "unknown subcommand",
+                    combined_all,
+                    msg=(
+                        f"stdout/stderr contains 'unknown subcommand' for bad version "
+                        f"'{bad_ver}' — set-version is not yet a recognized subcommand. "
+                        f"Implement it so version-validation fires instead of the "
+                        f"catch-all unknown-subcommand handler."
+                    ),
                 )
 
 
