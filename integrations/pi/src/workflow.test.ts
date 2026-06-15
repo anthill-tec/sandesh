@@ -20,7 +20,7 @@
  *   6.  A job with if: referencing github.event_name == 'release' (release-gated publish).
  *   7.  Publish job declares environment: npm.
  *   8.  Publish job declares permissions.id-token: write.
- *   9.  NPM_TOKEN does NOT appear anywhere in the file (OIDC only — no secret-based auth).
+ *   9.  npm auth is secret-sourced (secrets.NPM_TOKEN bootstrap) + --provenance; no hardcoded token literal.
  *  10.  A step running "npm install -g npm@latest" (npm ≥ 11.5.1 upgrade before publish).
  *  11.  A step running "npm publish" with --access public from working-directory: integrations/pi.
  *  12.  oven-sh/setup-bun action present (bun runtime).
@@ -191,11 +191,26 @@ describe("publish-npm.yml — publish job: release-gated + OIDC (AC1)", () => {
     ).toBe("write");
   });
 
-  test("NPM_TOKEN does NOT appear anywhere in the file (OIDC only — no secret-based auth)", () => {
+  test("npm auth is secret-sourced + provenance retained; no hardcoded token literal", () => {
     expect(fileExists).toBe(true);
+    // CR-SAN-040 (0.3.0): npm has NO pending-publishers, so the INAUGURAL publish of a
+    // new scoped package bootstraps with a token (NODE_AUTH_TOKEN ← secrets.NPM_TOKEN);
+    // OIDC/`--provenance` are retained, and this reverts to OIDC-only once trusted
+    // publishing is configured. So NPM_TOKEN MAY appear — but only via the secrets context.
+    if (wfText.includes("NPM_TOKEN")) {
+      expect(
+        wfText.includes("secrets.NPM_TOKEN"),
+        "the npm token must come from secrets.NPM_TOKEN (never hardcoded)",
+      ).toBe(true);
+      expect(
+        wfText.includes("--provenance"),
+        "the token bootstrap must keep --provenance (id-token: write is present)",
+      ).toBe(true);
+    }
+    // never a plaintext npm token literal in the workflow
     expect(
-      wfText.includes("NPM_TOKEN"),
-      "NPM_TOKEN must NOT appear in the workflow — use OIDC trusted publishing only",
+      /npm_[A-Za-z0-9]{20,}/.test(wfText),
+      "no hardcoded npm_* token literal may appear in the workflow",
     ).toBe(false);
   });
 });
