@@ -1,6 +1,6 @@
 # CR-SAN-035 — `install.sh --uninstall [--purge]` (installer self-removal)
 
-**Status:** PENDING
+**Status:** IN_PROGRESS
 **Priority:** Low (tooling symmetry — an installer should remove itself)
 **Depends on:** —
 **Labels:** tooling, installer, dx
@@ -50,7 +50,8 @@ store; advise `claude mcp remove`). NOTE: the full per-route **uninstall matrix 
   and `ln -s` the two launchers into `$HOME/.local/bin`. Drive `bash install.sh --uninstall …`.
 
 ### §S5 — docs
-- README `install.sh` subsection gains one line: `./install.sh --uninstall [--purge]`.
+- **Deferred to CR-SAN-039** (docs restructure / uninstall matrix). This CR ships only the
+  `install.sh --uninstall` mechanics + its own `-h/--help` usage block (§S3).
 
 ## Acceptance criteria
 
