@@ -126,6 +126,18 @@ auto-detect, `info`/`error`/`success` helpers, usage block). **Subcommands:**
 - [ ] **AC9 — `act` validation.** `act push -n` (main ref) reaches the `create-release` job, and
       `act release -n` reaches the guarded `publish-pypi` job, with no YAML/structural error.
 
+## Assets / tooling required (per cycle)
+
+| Asset | Used by | Status / how |
+|---|---|---|
+| `.venv/bin/python` (+ hatch-vcs/setuptools_scm) | C1 version-derivation test | present (dev venv) |
+| `act` ≥ 0.2.89 + Docker | C2/C3 YAML structure, C6 dry-run gate | installed; Docker daemon up |
+| `gh` ≥ 2.9 | `scripts/release.sh` (`gh workflow run`, `gh release`) | present — **PATH-stubbed in C4 tests** (no live calls) |
+| git-flow (`git flow` config) | `scripts/release.sh finish`; C4 tests | configured (`master=main`, tag `v`) — **finish path tested via `--dry-run` only**; never runs a real finish in tests |
+| Crucible (`localhost:3849`, project key) | every cycle's test ingest | `~/.claude/scripts/python-crucible.py` |
+| temp git repos | C4/C7 script tests, C1 tag-checkout test | created in-test |
+| **`RELEASE_PAT`** repo secret | runtime publish only (Option 3 chain) | **maintainer prereq — NOT needed to implement/test**; tests assert the YAML *references* the secret |
+
 ## Estimated size
 Medium — one pyproject line, two workflow files (one new job + guard steps), a ~150-line bash
 script with focused tests, a RELEASING.md rewrite.
