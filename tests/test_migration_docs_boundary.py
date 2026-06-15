@@ -47,12 +47,18 @@ def _read(path: str) -> str:
 
 
 def _pi_ts_sources() -> list[tuple[str, str]]:
-    """Return [(filename, contents), ...] for all *.ts files in the Pi src dir."""
+    """Return [(filename, contents), ...] for the Pi extension's PRODUCTION *.ts sources.
+
+    The migration-engine boundary applies to the shipped extension code, NOT to test
+    fixtures — `*.test.ts` files legitimately contain strings that SIMULATE the CLI's
+    output (e.g. a `[migrate]`-absent stderr mentioning 'yoyo' for the error-passthrough
+    test). So `*.test.ts` is excluded here; the only production source is `index.ts`.
+    """
     results = []
     if not os.path.isdir(_PI_SRC_DIR):
         return results
     for name in os.listdir(_PI_SRC_DIR):
-        if name.endswith(".ts"):
+        if name.endswith(".ts") and not name.endswith(".test.ts"):
             path = os.path.join(_PI_SRC_DIR, name)
             try:
                 with open(path, encoding="utf-8") as fh:
