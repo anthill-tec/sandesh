@@ -218,6 +218,36 @@ cmd_finish() {
         error "finish requires a version: release.sh finish <X.Y.Z>" "$EXIT_USAGE"
     fi
 
+    # Manifest-version guard: refuse to finish if any present manual manifest
+    # carries a version other than $VERSION.  Placed before the --dry-run
+    # early-return so dry-run is a true preflight.  Absent manifests are skipped.
+    local root
+    root="$(git rev-parse --show-toplevel)"
+
+    local guard_manifests=(
+        "$root/integrations/pi/package.json"
+        "$root/server.json"
+    )
+
+    local mf found
+    for mf in "${guard_manifests[@]}"; do
+        if [ ! -f "$mf" ]; then
+            continue
+        fi
+        found="$(python3 - "$mf" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+print(data.get("version", ""))
+PY
+)"
+        if [ "$found" != "$VERSION" ]; then
+            error "$(basename "$mf") version '$found' does not match finish version '$VERSION' — run: scripts/release.sh set-version $VERSION" "$EXIT_ERROR"
+        fi
+    done
+
     local kind
     kind="$(branch_kind "$branch")"
 
