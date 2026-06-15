@@ -197,9 +197,10 @@ describe("AC1 — probe-gated start: wake loop arms after successful probe only"
     process.env.SANDESH_ADDRESS = "Mainline - TestProj";
     process.env.SANDESH_PROJECT = "TestProj";
 
-    // Sequence: [0] version probe succeeds; [1] notify exits terminal (3 → stop)
+    // Sequence: [0] version probe succeeds; [1] init --check provisioned (0);
+    // [2] notify exits terminal (3 → stop)
     const { fakePi, execMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(3)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(3)],
     });
     registerExtension(fakePi);
 
@@ -231,7 +232,7 @@ describe("AC1 — probe-gated start: wake loop arms after successful probe only"
     process.env.SANDESH_PROJECT = "MyProject";
 
     const { fakePi, execMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(5)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(5)],
     });
     registerExtension(fakePi);
 
@@ -254,9 +255,11 @@ describe("AC1 — probe-gated start: wake loop arms after successful probe only"
     process.env.SANDESH_ADDRESS = "Mainline - TestProj";
     process.env.SANDESH_PROJECT = "TestProj";
 
-    // Probe fails — only the version call should appear, no notify
+    // Probe fails: local sandesh --version exits non-zero → the extension
+    // falls back to a uvx `--version` re-probe (§S1). Both fail → CLI
+    // unreachable, no notify. Sequence: [0] local probe fail, [1] uvx probe fail.
     const { fakePi, execMock } = makeFakePi({
-      execSequence: [exit(127)],
+      execSequence: [exit(127), exit(127)],
     });
     registerExtension(fakePi);
 
@@ -272,6 +275,9 @@ describe("AC1 — probe-gated start: wake loop arms after successful probe only"
     const calls = execMock.mock.calls as Array<[string, string[], unknown?]>;
     const notifyCall = calls.find(([, args]) => args.includes("notify"));
     expect(notifyCall).toBeUndefined();
+    // The uvx fallback re-probe must have been attempted before giving up
+    const uvxProbe = calls.find(([cmd, args]) => cmd === "uvx" && args.includes("--version"));
+    expect(uvxProbe).toBeDefined();
     // The install notice must have been surfaced
     expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
   });
@@ -280,8 +286,10 @@ describe("AC1 — probe-gated start: wake loop arms after successful probe only"
     process.env.SANDESH_ADDRESS = "Mainline - TestProj";
     process.env.SANDESH_PROJECT = "TestProj";
 
+    // Local sandesh --version rejects → uvx `--version` re-probe (§S1) also
+    // rejects → CLI unreachable. Sequence: [0] local reject, [1] uvx reject.
     const { fakePi, execMock } = makeFakePi({
-      execSequence: ["reject"],
+      execSequence: ["reject", "reject"],
     });
     registerExtension(fakePi);
 
@@ -296,6 +304,9 @@ describe("AC1 — probe-gated start: wake loop arms after successful probe only"
     const calls = execMock.mock.calls as Array<[string, string[], unknown?]>;
     const notifyCall = calls.find(([, args]) => Array.isArray(args) && args.includes("notify"));
     expect(notifyCall).toBeUndefined();
+    // The uvx fallback re-probe must have been attempted before giving up
+    const uvxProbe = calls.find(([cmd, args]) => cmd === "uvx" && Array.isArray(args) && args.includes("--version"));
+    expect(uvxProbe).toBeDefined();
     expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -354,9 +365,9 @@ describe("AC2 — notify code:0 → sendUserMessage once + re-arm", () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
 
-    // sequence: probe ok → notify code:0 (mail) → re-arm → notify code:3 (stop)
+    // sequence: probe ok → init --check (0) → notify code:0 (mail) → re-arm → notify code:3 (stop)
     const { fakePi, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(0), exit(3)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(0), exit(3)],
     });
     registerExtension(fakePi);
 
@@ -376,7 +387,7 @@ describe("AC2 — notify code:0 → sendUserMessage once + re-arm", () => {
     process.env.SANDESH_PROJECT = "Demo";
 
     const { fakePi, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(0), exit(3)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(0), exit(3)],
     });
     registerExtension(fakePi);
 
@@ -398,7 +409,7 @@ describe("AC2 — notify code:0 → sendUserMessage once + re-arm", () => {
     process.env.SANDESH_PROJECT = "Demo";
 
     const { fakePi, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(0), exit(3)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(0), exit(3)],
     });
     registerExtension(fakePi);
 
@@ -418,9 +429,9 @@ describe("AC2 — notify code:0 → sendUserMessage once + re-arm", () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
 
-    // probe → notify(0, mail) → re-arm notify(3, stop)
+    // probe → init --check(0) → notify(0, mail) → re-arm notify(3, stop)
     const { fakePi, execMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(0), exit(3)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(0), exit(3)],
     });
     registerExtension(fakePi);
 
@@ -443,9 +454,9 @@ describe("AC2 — notify code:0 → sendUserMessage once + re-arm", () => {
     process.env.SANDESH_ADDRESS = "Track 1 - Demo";
     process.env.SANDESH_PROJECT = "Demo";
 
-    // probe → notify(0) → notify(0) → notify(5, stop)
+    // probe → init --check(0) → notify(0) → notify(0) → notify(5, stop)
     const { fakePi, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(0), exit(0), exit(5)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(0), exit(0), exit(5)],
     });
     registerExtension(fakePi);
 
@@ -469,9 +480,9 @@ describe("AC3 — exit-code branches", () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
 
-    // probe → notify(2, timeout) → re-arm → notify(3, stop)
+    // probe → init --check(0) → notify(2, timeout) → re-arm → notify(3, stop)
     const { fakePi, execMock, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(2), exit(3)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(2), exit(3)],
     });
     registerExtension(fakePi);
 
@@ -496,9 +507,9 @@ describe("AC3 — exit-code branches", () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
 
-    // probe → notify(3, stop)
+    // probe → init --check(0) → notify(3, stop)
     const { fakePi, execMock, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(3)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(3)],
     });
     registerExtension(fakePi);
 
@@ -523,7 +534,7 @@ describe("AC3 — exit-code branches", () => {
     process.env.SANDESH_PROJECT = "Demo";
 
     const { fakePi, execMock, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(4)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(4)],
     });
     registerExtension(fakePi);
 
@@ -547,7 +558,7 @@ describe("AC3 — exit-code branches", () => {
     process.env.SANDESH_PROJECT = "Demo";
 
     const { fakePi, execMock, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(5)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(5)],
     });
     registerExtension(fakePi);
 
@@ -570,10 +581,10 @@ describe("AC3 — exit-code branches", () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
 
-    // probe → notify(1, error) → [backoff] → re-arm → notify(3, stop)
+    // probe → init --check(0) → notify(1, error) → [backoff] → re-arm → notify(3, stop)
     // GREEN must inject/use a no-op sleep via __setWakeSleepFn or equivalent
     const { fakePi, execMock, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(1), exit(3)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(1), exit(3)],
     });
 
     // Inject no-op sleep BEFORE registering — GREEN must export __setWakeSleepFn
@@ -617,7 +628,7 @@ describe("AC3 — exit-code branches", () => {
     process.env.SANDESH_PROJECT = "Demo";
 
     const { fakePi, execMock, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(99), exit(5)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(99), exit(5)],
     });
 
     const indexModule = await import("./index");
@@ -649,9 +660,9 @@ describe("AC3 — exit-code branches", () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
 
-    // probe → notify(2) → notify(0, mail) → notify(2) → notify(3, stop)
+    // probe → init --check(0) → notify(2) → notify(0, mail) → notify(2) → notify(3, stop)
     const { fakePi, execMock, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(2), exit(0), exit(2), exit(3)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(2), exit(0), exit(2), exit(3)],
     });
     registerExtension(fakePi);
 
@@ -676,9 +687,9 @@ describe("AC3 — exit-code branches", () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
 
-    // probe → notify(2) → notify(5, stop)
+    // probe → init --check(0) → notify(2) → notify(5, stop)
     const { fakePi, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(2), exit(5)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(2), exit(5)],
     });
     registerExtension(fakePi);
 
@@ -711,9 +722,9 @@ describe("CR-SAN-031 — followUp delivery hardening", () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
 
-    // probe ok → notify exit-0 (mail) → re-arm → notify exit-3 (stop)
+    // probe ok → init --check(0) → notify exit-0 (mail) → re-arm → notify exit-3 (stop)
     const { fakePi, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(0), exit(3)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(0), exit(3)],
     });
     registerExtension(fakePi);
 
@@ -746,7 +757,7 @@ describe("CR-SAN-031 — followUp delivery hardening", () => {
     process.env.SANDESH_PROJECT = "Alpha";
 
     const { fakePi, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(0), exit(5)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(0), exit(5)],
     });
     registerExtension(fakePi);
 
@@ -768,9 +779,9 @@ describe("CR-SAN-031 — followUp delivery hardening", () => {
     process.env.SANDESH_ADDRESS = "Track 2 - Beta";
     process.env.SANDESH_PROJECT = "Beta";
 
-    // probe → mail → mail → stop
+    // probe → init --check(0) → mail → mail → stop
     const { fakePi, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(0), exit(0), exit(3)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(0), exit(0), exit(3)],
     });
     registerExtension(fakePi);
 
@@ -813,9 +824,9 @@ describe("CR-SAN-031 — followUp delivery hardening", () => {
       throw new Error("sendUserMessage: simulated Pi host error");
     };
 
-    // probe ok → notify exit-0 (triggers sendUserMessage throw) → re-arm → notify exit-3 (stop)
+    // probe ok → init --check(0) → notify exit-0 (triggers sendUserMessage throw) → re-arm → notify exit-3 (stop)
     const { fakePi, execMock, sendUserMessageMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(0), exit(3)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(0), exit(3)],
       sendUserMessageImpl: throwingImpl,
     });
     registerExtension(fakePi);
@@ -846,9 +857,9 @@ describe("CR-SAN-031 — followUp delivery hardening", () => {
       throw new Error("sendUserMessage: simulated Pi host error");
     };
 
-    // probe → exit-0 (throw) → exit-3 (stop)
+    // probe → init --check(0) → exit-0 (throw) → exit-3 (stop)
     const { fakePi, execMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(0), exit(3)],
+      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(0), exit(3)],
       sendUserMessageImpl: throwingImpl,
     });
     registerExtension(fakePi);
@@ -865,9 +876,10 @@ describe("CR-SAN-031 — followUp delivery hardening", () => {
       ([, args]) => Array.isArray(args) && args.includes("notify"),
     );
     // CR-SAN-032 §S4b/AC7: tightened from toBeGreaterThanOrEqual(2) to toBe(2).
-    // The 3-item exec sequence (probe, exit-0, exit-3) makes >2 impossible:
-    // probe is exec[0], first notify is exec[1] (exit-0), re-arm is exec[2] (exit-3 stops).
-    // Exactly 2 notify calls — any value >2 would require a 4th exec entry.
+    // The 4-item exec sequence (probe, init --check, exit-0, exit-3) makes >2 impossible:
+    // probe is exec[0], init --check is exec[1], first notify is exec[2] (exit-0),
+    // re-arm is exec[3] (exit-3 stops). Exactly 2 notify calls — any value >2 would
+    // require a 5th exec entry.
     expect(notifyCalls.length).toBe(2);
   });
 });
