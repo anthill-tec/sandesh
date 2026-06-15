@@ -6,7 +6,7 @@
 **messaging system for cooperating agent/orchestrator sessions**. A SQLite-backed
 maildir + a mailbox watcher, pure Python stdlib (no third-party deps).
 
-**Current version: [v0.2.0](https://github.com/anthill-tec/sandesh/releases/tag/v0.2.0)** —
+**Latest release** ([see all releases](https://github.com/anthill-tec/sandesh/releases)) —
 the global store (one DB for all projects, cross-project messaging behind an admin grant,
 archive→tombstone lifecycle), inbox filters + FTS5 search (CLI/MCP/Pi), 12 MCP tools, and
 the Pi extension at full parity.
@@ -122,24 +122,24 @@ Neither uv nor pipx is guaranteed. Bootstrap one, **or** use `install.sh`:
 ## Use
 
 ```bash
-sandesh setup --project Nai
-sandesh --project Nai register --address "Mainline - Nai" --kind mainline
-sandesh --project Nai register --address "Track 2 - Nai"  --kind track
+sandesh setup --project Atlas
+sandesh --project Atlas register --address "Mainline - Atlas" --kind mainline
+sandesh --project Atlas register --address "Track 2 - Atlas"  --kind track
 
 # send (subject-only ⇢ no file; --body/--body-file ⇢ md body)
-sandesh --project Nai send --from "Track 2 - Nai" --to "Mainline - Nai" \
+sandesh --project Atlas send --from "Track 2 - Atlas" --to "Mainline - Atlas" \
         --subject "CR-308 started — chain unaffected"
 
 # the watcher (run in the background; exits 0 with ids when 'to' mail lands)
-sandesh --project Nai notify --to "Mainline - Nai"
+sandesh --project Atlas notify --to "Mainline - Atlas"
 
 # read (consolidates unread to+cc, marks read)
-sandesh --project Nai fetch --to "Mainline - Nai"
+sandesh --project Atlas fetch --to "Mainline - Atlas"
 
 # reply (threads under the parent; the reply IS the completion signal)
-sandesh --project Nai reply --to-msg 1 --from "Mainline - Nai" --body "ack"
+sandesh --project Atlas reply --to-msg 1 --from "Mainline - Atlas" --body "ack"
 
-sandesh --project Nai addressbook
+sandesh --project Atlas addressbook
 ```
 
 `$SANDESH_PROJECT` and `$SANDESH_ADDRESS` default `--project` and the caller's own
@@ -163,11 +163,11 @@ authorization:
 
 ```bash
 # read-only freeze — reversible, deletes NOTHING (project's own Mainline only)
-sandesh archive   --project Nai --by "Mainline - Nai"
-sandesh unarchive --project Nai --by "Mainline - Nai"
+sandesh archive   --project Atlas --by "Mainline - Atlas"
+sandesh unarchive --project Atlas --by "Mainline - Atlas"
 
 # permanent retirement — ARCHIVED projects only (the install-assigned super-admin only)
-sandesh tombstone --project Nai --by <admin>          # prompts y/N; --yes to skip
+sandesh tombstone --project Atlas --by <admin>          # prompts y/N; --yes to skip
 ```
 
 - **`archive`** evicts the project's live `notify` watchers (cooperatively; `--force`
@@ -189,31 +189,6 @@ sandesh tombstone --project Nai --by <admin>          # prompts y/N; --yes to sk
   `body files`, `cross-project messages` whose bodies would be lost) — and writes
   nothing. Guards still apply: a dry-run on the wrong state or with the wrong `--by`
   errors exactly like the real command.
-
-## Schema migrations
-
-`sandesh migrate` is the schema-migration command — it brings an existing store up to the
-latest schema. It needs the optional **`[migrate]`** extra (which pulls in `yoyo` +
-`jsonschema`):
-
-```bash
-pip install 'sandesh-relay[migrate]'      # or: uv tool install 'sandesh-relay[migrate]'
-```
-
-Updates **auto-migrate**: `install.sh` runs `sandesh migrate --all` on update, so the
-global DB is migrated to the latest schema as part of the install. (If the
-`[migrate]` extra is absent the installer prints a notice and continues — the migration is
-simply skipped, not fatal.) A fresh install with no data is a clean no-op.
-
-The flags (the global DB is the single target — there is no `--project` on `migrate`):
-
-```bash
-sandesh migrate            # apply pending migrations
-sandesh migrate --all      # same single global target (what the installer runs)
-sandesh migrate --status   # show applied / pending migrations
-sandesh migrate --rollback # roll back one migration step
-sandesh migrate --check    # pending ⇒ non-zero (error); schema drift ⇒ warning
-```
 
 ## MCP server
 

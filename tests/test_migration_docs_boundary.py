@@ -62,111 +62,12 @@ def _pi_ts_sources() -> list[tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# AC5 — README.md: Schema migrations section
+# AC5 — README.md migration section: REMOVED (CR-SAN-034)
+# The README no longer documents the migration subsystem — an owner decision to
+# trim release-internal detail out of the README. The authoritative migration
+# docs now live in RELEASING.md and CLAUDE.md (asserted below); the migration
+# *boundary* guards (AC6) remain fully in force.
 # ---------------------------------------------------------------------------
-
-
-class ReadmeSchemaMigrationsSectionTest(unittest.TestCase):
-    """AC5: README.md must have a 'Schema migrations' section covering the subsystem."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.text = _read(_README)
-
-    def test_readme_has_schema_migrations_heading(self):
-        """README.md must contain a heading with 'Schema migrations' or 'migration'.
-
-        RED: the section does not exist yet.
-        """
-        self.assertTrue(
-            os.path.isfile(_README),
-            f"README.md not found at {_README}",
-        )
-        has_heading = bool(
-            re.search(r"^#+.*[Ss]chema\s+[Mm]igration", self.text, re.MULTILINE)
-            or re.search(r"^#+.*[Mm]igration", self.text, re.MULTILINE)
-        )
-        self.assertTrue(
-            has_heading,
-            "README.md must contain a heading mentioning 'Schema migrations' or "
-            "'migration' (e.g. '## Schema migrations'). "
-            "GREEN must add this section.\n"
-            f"Current README headings:\n"
-            + "\n".join(
-                line for line in self.text.splitlines() if line.startswith("#")
-            ),
-        )
-
-    def test_readme_migration_section_mentions_sandesh_migrate_command(self):
-        """README.md migration section must mention the `sandesh migrate` command.
-
-        RED: section does not exist yet.
-        """
-        self.assertIn(
-            "sandesh migrate",
-            self.text,
-            "README.md must contain the token 'sandesh migrate' in the migration "
-            "section to document the CLI command. GREEN must add this.",
-        )
-
-    def test_readme_migration_section_mentions_migrate_extra(self):
-        """README.md migration section must mention the `[migrate]` extra.
-
-        RED: section does not exist yet.
-        """
-        self.assertIn(
-            "[migrate]",
-            self.text,
-            "README.md must contain '[migrate]' to document the optional extra "
-            "required for migration. GREEN must add this.",
-        )
-
-    def test_readme_migration_section_mentions_auto_migrate_on_update(self):
-        """README.md migration section must mention installer auto-migration on update.
-
-        RED: section does not exist yet.
-        The section should state that install.sh / the installer auto-migrates
-        existing stores when the package is updated.
-        Token check: 'migrate --all' OR 'auto-migrat' (auto-migrate / auto-migration).
-        """
-        has_token = (
-            "migrate --all" in self.text
-            or bool(re.search(r"auto.?migrat", self.text, re.IGNORECASE))
-            or "automatically migrates" in self.text
-            or "automatically migrate" in self.text
-            or "migrates existing" in self.text
-            or "migrates on update" in self.text
-        )
-        self.assertTrue(
-            has_token,
-            "README.md must mention that the installer auto-migrates existing stores "
-            "on update (e.g. 'migrate --all', 'auto-migrate', 'migrates existing stores'). "
-            "GREEN must add this to the migration section.",
-        )
-
-    def test_readme_migration_section_mentions_status_flag(self):
-        """README.md migration section must mention the `--status` flag.
-
-        RED: section does not exist yet.
-        """
-        self.assertIn(
-            "--status",
-            self.text,
-            "README.md must contain '--status' to document the migration status command. "
-            "GREEN must add this to the migration section.",
-        )
-
-    def test_readme_migration_section_mentions_rollback_flag(self):
-        """README.md migration section must mention the `--rollback` flag.
-
-        RED: section does not exist yet.
-        """
-        self.assertIn(
-            "--rollback",
-            self.text,
-            "README.md must contain '--rollback' to document the rollback command. "
-            "GREEN must add this to the migration section.",
-        )
 
 
 # ---------------------------------------------------------------------------

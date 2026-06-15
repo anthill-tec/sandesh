@@ -6,7 +6,7 @@ on:
   workflow_dispatch:        # manual TestPyPI dry-run
   pull_request:             # build-check only (no publish)
   push:
-    branches: [develop]
+    branches: [develop, main]
 
 permissions:
   contents: read
@@ -40,6 +40,29 @@ jobs:
           python -c "import json,sys; a=json.load(open('$XDG_DATA_HOME/dumped.json')); b=json.load(open('sandesh/schema/current-schema.json')); sys.exit(0 if a==b else 1)"
           echo "✓ current-schema.json in sync with migrations"
 
+  create-release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # need full tag history to detect the tag at HEAD
+      - name: Create GitHub Release for version tag at HEAD (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}   # PAT so 'release: published' re-fires (default GITHUB_TOKEN would not)
+        run: |
+          TAG=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          if [ -z "$TAG" ]; then
+            echo "::notice::no version tag at HEAD — ordinary main commit, nothing to release"
+            exit 0
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release exists for $TAG — nothing to do"
+            exit 0
+          fi
+          gh release create "$TAG" --generate-notes
+
   publish-pypi:
     needs: build
     if: github.event_name == 'release'
@@ -48,6 +71,20 @@ jobs:
     permissions:
       id-token: write           # OIDC trusted publishing
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # guard needs origin/main history for the ancestry check
+      - name: Guard — tag ref + on-main ancestry
+        run: |
+          if ! [[ "$GITHUB_REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::refusing to publish: $GITHUB_REF is not a clean version tag (^refs/tags/v[0-9]+.[0-9]+.[0-9]+$)"
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::refusing to publish: $GITHUB_SHA is not an ancestor of origin/main"
+            exit 1
+          fi
       - uses: actions/download-artifact@v4
         with:
           name: dist
@@ -63,6 +100,21 @@ jobs:
     permissions:
       id-token: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # hatch-vcs needs tags to derive the version
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Version sanity — reject PEP 440 local segment ('+')
+        run: |
+          python -m pip install --upgrade build
+          VER=$(python -m build --sdist --no-isolation 2>/dev/null >/dev/null; ls dist/*.tar.gz 2>/dev/null | sed -E 's#.*/[a-z_-]+-(.+)\.tar\.gz#\1#' | head -1)
+          echo "derived version: $VER"
+          if echo "$VER" | grep -q '+'; then
+            echo "::error::version '$VER' contains a '+' local segment — TestPyPI rejects PEP 440 local versions"
+            exit 1
+          fi
       - uses: actions/download-artifact@v4
         with:
           name: dist
