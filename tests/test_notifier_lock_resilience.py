@@ -15,7 +15,9 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 
+from sandesh import notify
 from sandesh import sandesh_db as s
 
 
@@ -216,6 +218,91 @@ class NotifierWriteRetryTest(unittest.TestCase):
             "SELECT count(*) FROM notifier WHERE recipient=?", (self.T1,)).fetchone()[0]
         self.assertEqual(cnt, 0, "release must have removed the row through the retry")
         self.assertTrue(flaky._failed)
+
+
+class NotifyBoundaryTest(unittest.TestCase):
+    """AC6/AC7 — notify.run() is resilient at its boundary: a transient 'database is
+    locked' from the startup acquire or any poll-loop op is retried on the poll cadence
+    (bounded by the watch deadline → exit 2), never crashing the watcher (exit 1) and
+    flapping `listening`. A non-lock error still propagates.
+
+    RED: run() calls notifier_acquire / poll ops with no lock handling, so the injected
+    OperationalError escapes run() (the test expecting a clean exit code errors instead).
+    """
+
+    PROJ = "Nai"
+    T1 = "Track 1 - Nai"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="sandesh-notify-")
+        self._prev_xdg = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = self.tmp
+        s.setup(self.PROJ)
+        self.con = s.connect()
+        s.register(self.con, self.T1, kind="track", project=self.PROJ)
+
+    def tearDown(self):
+        self.con.close()
+        if self._prev_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._prev_xdg
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _quiet_side_effects(self):
+        """Patch out wall-clock sleep, atexit cleanup and signal handlers so run() is
+        fast and leaves no process-exit residue in the test runner."""
+        return (
+            mock.patch.object(notify.time, "sleep", lambda *_a, **_k: None),
+            mock.patch.object(notify.atexit, "register", lambda *_a, **_k: None),
+            mock.patch.object(notify.signal, "signal", lambda *_a, **_k: None),
+        )
+
+    def test_run_survives_transient_lock_on_acquire(self):
+        """AC6: acquire raises 'locked' once → run() retries, listens, returns 0 (mail)."""
+        calls = {"acq": 0}
+
+        def fake_acquire(_con, _addr, _pid, _token, _host):
+            calls["acq"] += 1
+            if calls["acq"] == 1:
+                raise sqlite3.OperationalError("database is locked")
+            return (True, "acquired")
+
+        p_sleep, p_atexit, p_signal = self._quiet_side_effects()
+        with p_sleep, p_atexit, p_signal, \
+                mock.patch.object(notify.sdb, "notifier_acquire", fake_acquire), \
+                mock.patch.object(notify.sdb, "notifier_check", lambda *_a: "ok"), \
+                mock.patch.object(notify.sdb, "notifier_heartbeat", lambda *_a: None), \
+                mock.patch.object(notify.sdb, "unread_to", lambda *_a: [1]):
+            rc = notify.run(self.PROJ, self.T1, timeout=60)
+        self.assertEqual(rc, 0, "run() must retry the locked acquire and return 0 (mail), not crash")
+        self.assertEqual(calls["acq"], 2, "the startup acquire should have been retried exactly once")
+
+    def test_run_lock_outlives_window_returns_2(self):
+        """AC7: acquire always locked + deadline already elapsed → run() returns 2, never raises."""
+
+        def always_locked(*_a):
+            raise sqlite3.OperationalError("database is locked")
+
+        p_sleep, p_atexit, p_signal = self._quiet_side_effects()
+        with p_sleep, p_atexit, p_signal, \
+                mock.patch.object(notify.sdb, "notifier_acquire", always_locked):
+            rc = notify.run(self.PROJ, self.T1, timeout=0)
+        self.assertEqual(rc, 2, "a lock spanning the whole watch window must time out (exit 2), not exit 1")
+
+    def test_run_propagates_non_lock_error(self):
+        """AC6 (invariant): a non-lock OperationalError from a poll op is NOT swallowed."""
+
+        def boom(*_a):
+            raise sqlite3.OperationalError("no such table: notifier")
+
+        p_sleep, p_atexit, p_signal = self._quiet_side_effects()
+        with p_sleep, p_atexit, p_signal, \
+                mock.patch.object(notify.sdb, "notifier_acquire", lambda *_a: (True, "acquired")), \
+                mock.patch.object(notify.sdb, "notifier_check", boom):
+            with self.assertRaises(sqlite3.OperationalError):
+                notify.run(self.PROJ, self.T1, timeout=60)
 
 
 if __name__ == "__main__":

@@ -73,6 +73,13 @@ PyPI/Python version is tag-derived (hatch-vcs). This ships as patch **0.3.3**. N
 - **§S5 — docs.** Add a CLAUDE.md *Gotchas* line documenting `busy_timeout` + the `_retry_locked`
   write wrapper + the no-flap watcher boundary (why: SQLite WAL serializes writers; the watcher must
   survive transient co-tenant contention). No README change (develop branch).
+- **§S6 — real-contention integration test** (added by owner decision). Beyond the injected-lock unit
+  tests (which verify the retry/guard *logic*), add ONE threaded integration test that exercises the
+  fix end-to-end against *real* SQLite locking: N threads, each with its own `connect()` (real WAL
+  writer serialization + real `busy_timeout` + real `_retry_locked`), concurrently running
+  `notifier_acquire`/`heartbeat`/`release` on the shared global DB. This closes the blind spot that
+  the injected tests cannot cover — that `busy_timeout`+retry actually *absorb* contention rather than
+  merely that the retry path is wired.
 
 ## Acceptance criteria
 - **AC1 — busy_timeout on every connection.** After `sandesh_db.connect()`,
@@ -107,6 +114,11 @@ PyPI/Python version is tag-derived (hatch-vcs). This ships as patch **0.3.3**. N
   green; the only production files changed are `sandesh/sandesh_db.py` and `sandesh/notify.py` (plus
   the new/extended tests and the CLAUDE.md gotcha line). No schema/migration change; `schema/current-schema.json`
   is untouched and the CI schema-snapshot gate still passes.
+- **AC9 — real contention is absorbed (integration).** A threaded test running ≥8 concurrent writers
+  (each its own `connect()`) × ≥50 `acquire`/`heartbeat`/`release` cycles each against the shared
+  global DB completes with **zero** `sqlite3.OperationalError` escaping any thread. Non-vacuity is
+  demonstrated in the RED step: with the fix neutralized (`BUSY_TIMEOUT_MS=0` + `LOCK_RETRY_ATTEMPTS=1`)
+  the same test surfaces `database is locked`; with the fix in place it is green.
 
 ## Estimated size
 Small — one constant + one PRAGMA line in `connect()`, one predicate + one retry helper, a one-line
@@ -133,4 +145,6 @@ of `notify.run()` monkeypatch tests).
   recurs after 1+2+3.
 - An env-overridable busy_timeout (`$SANDESH_BUSY_TIMEOUT_MS`). A fixed 30 s is sufficient; add tuning
   later if needed.
-- Spawning real multi-process contention in tests, or any schema/MCP/CLI surface change.
+- **Multi-*process* contention tests.** A threaded contention test (§S6/AC9) IS in scope; spawning real
+  OS processes is not — WAL writer contention is per-connection, so threads with separate connections
+  reproduce it faithfully at far lower CI cost/flakiness. Any schema/MCP/CLI surface change is also out.
