@@ -48,6 +48,10 @@ MESSAGES_DIR = "messages"
 HEARTBEAT_STALE_SECS = 60             # a notifier silent longer than this is presumed dead
 POLL_FLOOR_SECS = 3                   # minimum watcher poll interval (seconds)
 DEFAULT_POLL_SECS = 10                # default watcher poll interval (seconds)
+BUSY_TIMEOUT_MS = 30000               # CR-SAN-043: SQLite block-and-retry window under writer
+                                      # contention (WAL serializes writers); generous because a
+                                      # CPU-saturating co-tenant can starve a commit for seconds
+LOCK_RETRY_ATTEMPTS = 6               # CR-SAN-043: max tries for a locked write before re-raising
 BROADCAST = "all-tracks"              # reserved recipient keyword (not a real address)
 
 ADDRESS_RE = re.compile(r"^(?P<orch>Mainline|Track \d+) - (?P<proj>[A-Za-z][A-Za-z0-9_]*)$")
@@ -212,6 +216,7 @@ def connect():
     con.row_factory = sqlite3.Row
     con.executescript(_SCHEMA)
     con.execute("PRAGMA journal_mode=WAL")
+    con.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")   # CR-SAN-043: block-and-retry under contention
     con.commit()
 
     if _store_is_behind(con):
