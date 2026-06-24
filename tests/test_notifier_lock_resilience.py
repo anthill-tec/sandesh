@@ -55,5 +55,78 @@ class BusyTimeoutTest(unittest.TestCase):
             con.close()
 
 
+class RetryHelperTest(unittest.TestCase):
+    """AC2/AC3/AC4 — is_locked_error predicate + _retry_locked retry/backoff.
+
+    Pure functions — no store needed. `sleep` is injected as a no-op so backoff adds
+    no wall-clock time and the test is deterministic.
+
+    RED: sandesh_db has no is_locked_error / _retry_locked attribute (AttributeError).
+    """
+
+    @staticmethod
+    def _noop_sleep(_delay):
+        return None
+
+    def test_is_locked_error_true_for_locked(self):
+        self.assertTrue(s.is_locked_error(sqlite3.OperationalError("database is locked")))
+
+    def test_is_locked_error_false_for_other_operationalerror(self):
+        self.assertFalse(s.is_locked_error(sqlite3.OperationalError("no such table: x")))
+
+    def test_is_locked_error_false_for_non_operationalerror(self):
+        self.assertFalse(s.is_locked_error(ValueError("database is locked")))
+
+    def test_retry_locked_retries_then_succeeds(self):
+        """AC3: locked twice, then succeeds → returns sentinel, fn called 3 times."""
+        calls = {"n": 0}
+
+        def fn():
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise sqlite3.OperationalError("database is locked")
+            return "ok-sentinel"
+
+        result = s._retry_locked(fn, sleep=self._noop_sleep)
+        self.assertEqual(result, "ok-sentinel")
+        self.assertEqual(calls["n"], 3)
+
+    def test_retry_locked_exhausts_and_reraises(self):
+        """AC4: always locked → raises OperationalError after exactly `attempts` tries."""
+        calls = {"n": 0}
+
+        def fn():
+            calls["n"] += 1
+            raise sqlite3.OperationalError("database is locked")
+
+        with self.assertRaises(sqlite3.OperationalError):
+            s._retry_locked(fn, attempts=4, sleep=self._noop_sleep)
+        self.assertEqual(calls["n"], 4)
+
+    def test_retry_locked_fastfails_non_lock_operationalerror(self):
+        """AC4: a non-lock OperationalError propagates on the FIRST call (no retry)."""
+        calls = {"n": 0}
+
+        def fn():
+            calls["n"] += 1
+            raise sqlite3.OperationalError("no such table: notifier")
+
+        with self.assertRaises(sqlite3.OperationalError):
+            s._retry_locked(fn, attempts=5, sleep=self._noop_sleep)
+        self.assertEqual(calls["n"], 1)
+
+    def test_retry_locked_fastfails_non_operationalerror(self):
+        """AC4: a non-OperationalError propagates immediately (no retry)."""
+        calls = {"n": 0}
+
+        def fn():
+            calls["n"] += 1
+            raise ValueError("boom")
+
+        with self.assertRaises(ValueError):
+            s._retry_locked(fn, attempts=5, sleep=self._noop_sleep)
+        self.assertEqual(calls["n"], 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

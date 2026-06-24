@@ -39,6 +39,7 @@ Semantics:
 import os
 import re
 import shutil
+import random
 import sqlite3
 import sys
 import time
@@ -793,6 +794,35 @@ def search(con, recipient, query, *, limit=20, offset=0, sender_project=None):
     if reindexed:
         result["reindexed"] = True
     return result
+
+
+# --------------------------------------------------------------------------- #
+# lock-contention resilience (CR-SAN-043)
+
+def is_locked_error(exc):
+    """True iff `exc` is a transient SQLITE_BUSY 'database is locked' error — the
+    retryable contention signal, NOT a genuine OperationalError (e.g. 'no such table').
+    CR-SAN-043."""
+    return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
+
+
+def _retry_locked(fn, *, attempts=LOCK_RETRY_ATTEMPTS, sleep=time.sleep):
+    """Call ``fn()`` and return its value; on a transient 'database is locked' error,
+    retry up to ``attempts`` total tries with jittered exponential backoff. A non-lock
+    OperationalError ('no such table' …) or any non-OperationalError propagates
+    immediately (no retry); the last locked error is re-raised once ``attempts`` are
+    exhausted. ``sleep`` is injectable for tests. CR-SAN-043 — backstops PRAGMA
+    busy_timeout for the rare lock that outlives it. The wrapped notifier writes are
+    idempotent (upsert / heartbeat-stamp / delete-by-token), so retrying the whole
+    execute+commit is safe."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except sqlite3.OperationalError as exc:
+            if not is_locked_error(exc) or attempt >= attempts:
+                raise
+            backoff = 0.05 * (2 ** (attempt - 1))            # 50ms, 100ms, 200ms, …
+            sleep(backoff + random.uniform(0.0, backoff))    # full jitter
 
 
 # --------------------------------------------------------------------------- #
