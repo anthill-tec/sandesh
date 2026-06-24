@@ -220,6 +220,29 @@ class NotifierWriteRetryTest(unittest.TestCase):
         self.assertEqual(cnt, 0, "release must have removed the row through the retry")
         self.assertTrue(flaky._failed)
 
+    def test_tombstone_survives_transient_lock(self):
+        s.notifier_acquire(self.con, self.T1, os.getpid(), "tok", "h")
+        flaky = _FlakyWriteCon(self.con)
+        s.notifier_tombstone(flaky, self.T1)
+        row = self.con.execute(
+            "SELECT tombstone FROM notifier WHERE recipient=?", (self.T1,)).fetchone()
+        self.assertTrue(row[0], "tombstone flag must be set through the retry")
+        self.assertTrue(flaky._failed)
+
+    def test_reap_if_stale_survives_transient_lock(self):
+        # a dead-pid row is reapable; reap must survive a transient lock on its DELETE
+        self.con.execute(
+            "INSERT INTO notifier (recipient,pid,token,host) VALUES (?,?,?,?)",
+            (self.T1, 2_000_000_000, "dead", "h"))
+        self.con.commit()
+        flaky = _FlakyWriteCon(self.con)
+        reaped = s.notifier_reap_if_stale(flaky, self.T1)
+        self.assertTrue(reaped, "a dead-pid row must be reaped")
+        cnt = self.con.execute(
+            "SELECT count(*) FROM notifier WHERE recipient=?", (self.T1,)).fetchone()[0]
+        self.assertEqual(cnt, 0, "reap must have removed the row through the retry")
+        self.assertTrue(flaky._failed)
+
 
 class NotifyBoundaryTest(unittest.TestCase):
     """AC6/AC7 — notify.run() is resilient at its boundary: a transient 'database is
