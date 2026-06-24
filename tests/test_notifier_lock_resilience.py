@@ -14,6 +14,7 @@ Discovery is broken in this repo — run targeted:
 import os
 import sqlite3
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -303,6 +304,88 @@ class NotifyBoundaryTest(unittest.TestCase):
                 mock.patch.object(notify.sdb, "notifier_check", boom):
             with self.assertRaises(sqlite3.OperationalError):
                 notify.run(self.PROJ, self.T1, timeout=60)
+
+
+class RealContentionTest(unittest.TestCase):
+    """AC9 — the fix absorbs REAL concurrent-writer contention (not an injected lock).
+
+    N threads, each with its OWN connect() (real WAL writer serialization + real
+    PRAGMA busy_timeout + real _retry_locked), burst-start via a barrier and hammer the
+    notifier table with acquire/heartbeat/release cycles. With the fix in place this
+    completes with ZERO sqlite3.OperationalError.
+
+    Non-vacuity is proven in the C5 RED step: with the fix neutralized
+    (BUSY_TIMEOUT_MS=0 + LOCK_RETRY_ATTEMPTS=1) this same test surfaces
+    'database is locked'.
+    """
+
+    PROJ = "Nai"
+    N_THREADS = 8
+    ITERS = 50
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="sandesh-contend-")
+        self._prev_xdg = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = self.tmp
+        s.setup(self.PROJ)
+        s.connect().close()      # settle schema + migrations once before threads connect
+
+    def tearDown(self):
+        if self._prev_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._prev_xdg
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_concurrent_writers_no_lock_errors(self):
+        errors = []
+        completed = []
+        barrier = threading.Barrier(self.N_THREADS)
+
+        def worker(idx):
+            rec = f"Track {idx + 1} - {self.PROJ}"
+            try:
+                con = s.connect()
+            except Exception as exc:                       # connect itself locked
+                errors.append((rec, "connect", type(exc).__name__, str(exc)))
+                try:
+                    barrier.abort()                        # don't hang the other threads
+                except Exception:
+                    pass
+                return
+            try:
+                barrier.wait(timeout=30)                   # burst-start: maximise overlap
+            except threading.BrokenBarrierError:
+                pass
+            try:
+                pid, host = os.getpid(), "h"
+                for n in range(self.ITERS):
+                    tok = f"{idx}-{n}"
+                    s.notifier_acquire(con, rec, pid, tok, host)
+                    s.notifier_heartbeat(con, rec, tok)
+                    s.notifier_release(con, rec, tok)
+                completed.append(self.ITERS)
+            except Exception as exc:                       # noqa: BLE001 — record, don't swallow
+                errors.append((rec, "workload", type(exc).__name__, str(exc)))
+            finally:
+                try:
+                    con.close()
+                except Exception:
+                    pass
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(self.N_THREADS)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=120)
+
+        self.assertEqual(
+            errors, [],
+            f"concurrent notifier writers must not surface lock errors; got {len(errors)}: {errors[:5]}")
+        self.assertEqual(
+            sum(completed), self.N_THREADS * self.ITERS,
+            f"every writer should complete all {self.ITERS} cycles; completed={completed}")
 
 
 if __name__ == "__main__":
