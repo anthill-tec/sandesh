@@ -1,6 +1,7 @@
 # CR-SAN-043 — Notifier lock-contention resilience (busy_timeout + write-retry + no-flap watcher)
 
-**Status:** IN_PROGRESS
+**Status:** COMPLETED (implemented on release/0.3.3; VERIFY APPROVE-WITH-NITS, both nits closed —
+AC5 coverage extended to all five writes, the PRD-in-branch nit is intentional develop content)
 **Priority:** High (the out-of-band wake mechanism goes DOWN under heavy co-tenant CPU load —
 exactly when long builds run and cross-session coordination matters most; reported recurring by
 agents using Sandesh)
