@@ -859,21 +859,26 @@ def notifier_acquire(con, recipient, pid, token, host):
     live = notifier_live(con, recipient)
     if live is not None:
         return (False, f"another notifier already live for {recipient!r} (pid {live['pid']})")
-    con.execute(
-        "INSERT INTO notifier (recipient,pid,token,host,started_at,heartbeat_at,tombstone) "
-        "VALUES (?,?,?,?,datetime('now'),datetime('now'),FALSE) "
-        "ON CONFLICT(recipient) DO UPDATE SET pid=excluded.pid, token=excluded.token, "
-        "host=excluded.host, started_at=datetime('now'), heartbeat_at=datetime('now'), "
-        "tombstone=FALSE",
-        (recipient, pid, token, host))
-    con.commit()
+
+    def _write():
+        con.execute(
+            "INSERT INTO notifier (recipient,pid,token,host,started_at,heartbeat_at,tombstone) "
+            "VALUES (?,?,?,?,datetime('now'),datetime('now'),FALSE) "
+            "ON CONFLICT(recipient) DO UPDATE SET pid=excluded.pid, token=excluded.token, "
+            "host=excluded.host, started_at=datetime('now'), heartbeat_at=datetime('now'), "
+            "tombstone=FALSE",
+            (recipient, pid, token, host))
+        con.commit()
+    _retry_locked(_write)                          # CR-SAN-043: survive transient locks
     return (True, "acquired")
 
 
 def notifier_heartbeat(con, recipient, token):
-    con.execute("UPDATE notifier SET heartbeat_at=datetime('now') WHERE recipient=? AND token=?",
-                (recipient, token))
-    con.commit()
+    def _write():
+        con.execute("UPDATE notifier SET heartbeat_at=datetime('now') WHERE recipient=? AND token=?",
+                    (recipient, token))
+        con.commit()
+    _retry_locked(_write)                          # CR-SAN-043: survive transient locks
 
 
 def notifier_check(con, recipient, token):
@@ -888,21 +893,27 @@ def notifier_check(con, recipient, token):
 
 def notifier_release(con, recipient, token):
     """Remove my row on clean exit — only if it is still mine (never clobber a successor)."""
-    con.execute("DELETE FROM notifier WHERE recipient=? AND token=?", (recipient, token))
-    con.commit()
+    def _write():
+        con.execute("DELETE FROM notifier WHERE recipient=? AND token=?", (recipient, token))
+        con.commit()
+    _retry_locked(_write)                          # CR-SAN-043: survive transient locks
 
 
 def notifier_tombstone(con, recipient):
     """Request a cooperative shutdown of `recipient`'s live notifier."""
-    con.execute("UPDATE notifier SET tombstone=TRUE WHERE recipient=?", (recipient,))
-    con.commit()
+    def _write():
+        con.execute("UPDATE notifier SET tombstone=TRUE WHERE recipient=?", (recipient,))
+        con.commit()
+    _retry_locked(_write)                          # CR-SAN-043: survive transient locks
 
 
 def notifier_reap_if_stale(con, recipient):
     """Force-remove a dead/stale notifier row (fallback when a tombstone is ignored)."""
     if notifier_live(con, recipient) is None:
-        con.execute("DELETE FROM notifier WHERE recipient=?", (recipient,))
-        con.commit()
+        def _write():
+            con.execute("DELETE FROM notifier WHERE recipient=?", (recipient,))
+            con.commit()
+        _retry_locked(_write)                      # CR-SAN-043: survive transient locks
         return True
     return False
 

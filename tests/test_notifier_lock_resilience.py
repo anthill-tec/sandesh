@@ -128,5 +128,95 @@ class RetryHelperTest(unittest.TestCase):
         self.assertEqual(calls["n"], 1)
 
 
+class _FlakyWriteCon:
+    """Wraps a real sqlite3 connection and raises 'database is locked' on the FIRST
+    write statement (INSERT/UPDATE/DELETE) it sees, then delegates everything to the
+    real connection. Simulates a single transient SQLITE_BUSY without real contention.
+    `_failed` records that the injected lock fired."""
+
+    def __init__(self, real):
+        self._real = real
+        self._failed = False
+
+    def execute(self, sql, *params):
+        if not self._failed and sql.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")):
+            self._failed = True
+            raise sqlite3.OperationalError("database is locked")
+        return self._real.execute(sql, *params)
+
+    def commit(self):
+        return self._real.commit()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+class NotifierWriteRetryTest(unittest.TestCase):
+    """AC5 — notifier_acquire / heartbeat / release survive a single transient lock
+    (their execute+commit is wrapped in _retry_locked). A short real backoff sleep is
+    tolerated (one retry ≈ 50–100 ms).
+
+    RED: the notifier writes call con.execute directly with no retry, so the injected
+    OperationalError escapes the function and the test errors.
+    """
+
+    PROJ = "Nai"
+    MAIN = "Mainline - Nai"
+    T1 = "Track 1 - Nai"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="sandesh-lockw-")
+        self._prev_xdg = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = self.tmp
+        s.setup(self.PROJ)
+        self.con = s.connect()
+        s.register(self.con, self.MAIN, kind="mainline", project=self.PROJ)
+        s.register(self.con, self.T1, kind="track", project=self.PROJ)
+
+    def tearDown(self):
+        self.con.close()
+        if self._prev_xdg is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = self._prev_xdg
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_acquire_survives_transient_lock(self):
+        flaky = _FlakyWriteCon(self.con)
+        ok, reason = s.notifier_acquire(flaky, self.T1, os.getpid(), "tok", "h")
+        self.assertTrue(ok)
+        self.assertEqual(reason, "acquired")
+        row = self.con.execute(
+            "SELECT token FROM notifier WHERE recipient=?", (self.T1,)).fetchone()
+        self.assertIsNotNone(row, "acquire must have inserted the row through the retry")
+        self.assertEqual(row[0], "tok")
+        self.assertTrue(flaky._failed, "the proxy should have injected one transient lock")
+
+    def test_heartbeat_survives_transient_lock(self):
+        s.notifier_acquire(self.con, self.T1, os.getpid(), "tok", "h")
+        self.con.execute(
+            "UPDATE notifier SET heartbeat_at='2000-01-01 00:00:00' WHERE recipient=?",
+            (self.T1,))
+        self.con.commit()
+        flaky = _FlakyWriteCon(self.con)
+        s.notifier_heartbeat(flaky, self.T1, "tok")
+        hb = self.con.execute(
+            "SELECT heartbeat_at FROM notifier WHERE recipient=?", (self.T1,)).fetchone()[0]
+        self.assertNotEqual(
+            hb, "2000-01-01 00:00:00",
+            "heartbeat write must have executed (advanced heartbeat_at) through the retry")
+        self.assertTrue(flaky._failed)
+
+    def test_release_survives_transient_lock(self):
+        s.notifier_acquire(self.con, self.T1, os.getpid(), "tok", "h")
+        flaky = _FlakyWriteCon(self.con)
+        s.notifier_release(flaky, self.T1, "tok")
+        cnt = self.con.execute(
+            "SELECT count(*) FROM notifier WHERE recipient=?", (self.T1,)).fetchone()[0]
+        self.assertEqual(cnt, 0, "release must have removed the row through the retry")
+        self.assertTrue(flaky._failed)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
