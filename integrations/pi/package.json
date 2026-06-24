@@ -1,6 +1,6 @@
 {
   "name": "@anthill-tec/sandesh-pi",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "type": "module",
   "description": "Sandesh verbs as Pi extension tools",
   "keywords": ["pi-package", "sandesh", "mcp", "messaging", "pi"],
