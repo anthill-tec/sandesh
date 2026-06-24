@@ -233,5 +233,106 @@ class ReleasingDocTest(unittest.TestCase):
         )
 
 
+    # ------------------------------------------------------------------ #
+    # Tests 7–9 — CR-SAN-042 §S3 / AC7: set-version + finish guard docs  #
+    # ------------------------------------------------------------------ #
+
+    def test_set_version_step_documented(self):
+        """AC7: RELEASING.md must document the 'set-version' subcommand.
+
+        §S3 requires that RELEASING.md instructs maintainers to run
+        ``scripts/release.sh set-version <X.Y.Z>`` on the release/hotfix branch
+        before calling ``finish``.  The literal subcommand name ``set-version``
+        must appear in the file.
+
+        FAILS at RED — 'set-version' is not currently present in RELEASING.md.
+        """
+        self.assertIn(
+            "set-version",
+            self.text,
+            "RELEASING.md must document the 'set-version' subcommand "
+            "(scripts/release.sh set-version <X.Y.Z>) as the step that bumps the "
+            "manual manifests (package.json, server.json) before calling finish. "
+            "'set-version' is not currently present.",
+        )
+
+    def test_set_version_tied_to_manifest_files(self):
+        """AC7: RELEASING.md must tie 'set-version' to the manual manifest files.
+
+        The doc must mention 'set-version' in a context that references at least
+        one of the manual manifests it operates on: 'package.json' (the Pi
+        extension) or 'server.json' (the MCP registry manifest).  Both tokens
+        must appear anywhere in the document AND 'set-version' must also appear
+        (the combination documents that set-version is the bump command for those
+        manifests).
+
+        FAILS at RED — 'set-version' is not currently present in RELEASING.md.
+        """
+        has_set_version = "set-version" in self.text
+        has_manifest_ref = "package.json" in self.text or "server.json" in self.text
+        self.assertTrue(
+            has_set_version and has_manifest_ref,
+            "RELEASING.md must mention 'set-version' AND at least one of the "
+            "manual manifests it targets ('package.json' or 'server.json'). "
+            f"set-version present={has_set_version}, "
+            f"manifest token present={has_manifest_ref}.",
+        )
+
+    def test_finish_guard_documented(self):
+        """AC7: RELEASING.md must document that 'finish' guards on a manifest version mismatch.
+
+        §S3 requires the doc to explain that ``scripts/release.sh finish`` refuses
+        (exits 1) when the manual manifests have not been bumped to match the
+        release version.  The lowercased text must contain BOTH 'set-version'
+        (the remediation step) AND at least one guard-intent word: 'guard',
+        'mismatch', 'refuse', or 'must match'.
+
+        FAILS at RED — 'set-version' is not currently present in RELEASING.md,
+        so the combined condition cannot be satisfied.
+        """
+        text_lower = self.text.lower()
+        has_set_version = "set-version" in text_lower
+        has_guard_intent = any(
+            token in text_lower
+            for token in ("guard", "mismatch", "refuse", "must match")
+        )
+        self.assertTrue(
+            has_set_version and has_guard_intent,
+            "RELEASING.md must document that 'finish' guards on a manifest "
+            "version mismatch and instruct the maintainer to run 'set-version'. "
+            f"set-version present={has_set_version}, "
+            f"guard-intent word (guard/mismatch/refuse/must match) present={has_guard_intent}.",
+        )
+
+    def test_pypi_version_stays_tag_derived(self):
+        """AC7: RELEASING.md must state that 'set-version' does NOT touch pyproject.toml / Python version.
+
+        The PyPI/Python package version is owned by hatch-vcs (tag-derived); only
+        the manual manifests (package.json, server.json) are touched by set-version.
+        The doc must clarify this by mentioning 'set-version' in close proximity to
+        'hatch-vcs' or 'tag-derived' or 'pyproject' so a maintainer understands
+        the boundary.  Both 'set-version' AND one of ('hatch-vcs', 'tag-derived',
+        'pyproject') must appear in the document.
+
+        FAILS at RED — 'set-version' is not currently present in RELEASING.md,
+        so the combined condition cannot be satisfied even though 'hatch-vcs' and
+        'pyproject' are already present.
+        """
+        has_set_version = "set-version" in self.text
+        has_tag_derivation_token = any(
+            token in self.text
+            for token in ("hatch-vcs", "tag-derived", "pyproject")
+        )
+        self.assertTrue(
+            has_set_version and has_tag_derivation_token,
+            "RELEASING.md must document that 'set-version' bumps only the manual "
+            "manifests and that the PyPI/Python version remains tag-derived "
+            "(hatch-vcs). Both 'set-version' and a tag-derivation token "
+            "('hatch-vcs', 'tag-derived', or 'pyproject') must appear. "
+            f"set-version present={has_set_version}, "
+            f"tag-derivation token present={has_tag_derivation_token}.",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

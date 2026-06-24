@@ -288,6 +288,17 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
   different-name re-assign is refused (`refusing to silently re-assign`).
 - **`register` requires enrollment.** Registering into a project with no tracker row
   fails with `unknown project '<id>'` — run `setup` first (it enrolls the project).
+- **Notifier writes are lock-contention-hardened (CR-SAN-043).** WAL serializes *writers*,
+  so under heavy co-tenant CPU load (e.g. a full Rust build saturating all cores) a
+  notifier write could lose the lock and surface `sqlite3.OperationalError: database is
+  locked`, killing the watcher (exit 1) and flapping `listening`. Three layers now absorb
+  it: `connect()` sets `PRAGMA busy_timeout=BUSY_TIMEOUT_MS` (30 s) on every connection so
+  SQLite blocks-and-retries internally; the five `notifier_*` writes wrap their
+  execute+commit in `_retry_locked` (bounded jittered backoff — safe because the writes are
+  idempotent); and `notify.run()` catches `is_locked_error` from the startup acquire and the
+  poll loop, retrying on the poll cadence (bounded by the deadline → exit 2) instead of
+  crashing. Non-lock `OperationalError`s still propagate. `busy_timeout` is a per-connection
+  pragma (NOT schema) — no migration.
 
 ---
 

@@ -39,6 +39,7 @@ Semantics:
 import os
 import re
 import shutil
+import random
 import sqlite3
 import sys
 import time
@@ -48,6 +49,10 @@ MESSAGES_DIR = "messages"
 HEARTBEAT_STALE_SECS = 60             # a notifier silent longer than this is presumed dead
 POLL_FLOOR_SECS = 3                   # minimum watcher poll interval (seconds)
 DEFAULT_POLL_SECS = 10                # default watcher poll interval (seconds)
+BUSY_TIMEOUT_MS = 30000               # CR-SAN-043: SQLite block-and-retry window under writer
+                                      # contention (WAL serializes writers); generous because a
+                                      # CPU-saturating co-tenant can starve a commit for seconds
+LOCK_RETRY_ATTEMPTS = 6               # CR-SAN-043: max tries for a locked write before re-raising
 BROADCAST = "all-tracks"              # reserved recipient keyword (not a real address)
 
 ADDRESS_RE = re.compile(r"^(?P<orch>Mainline|Track \d+) - (?P<proj>[A-Za-z][A-Za-z0-9_]*)$")
@@ -212,6 +217,7 @@ def connect():
     con.row_factory = sqlite3.Row
     con.executescript(_SCHEMA)
     con.execute("PRAGMA journal_mode=WAL")
+    con.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")   # CR-SAN-043: block-and-retry under contention
     con.commit()
 
     if _store_is_behind(con):
@@ -791,6 +797,35 @@ def search(con, recipient, query, *, limit=20, offset=0, sender_project=None):
 
 
 # --------------------------------------------------------------------------- #
+# lock-contention resilience (CR-SAN-043)
+
+def is_locked_error(exc):
+    """True iff `exc` is a transient SQLITE_BUSY 'database is locked' error — the
+    retryable contention signal, NOT a genuine OperationalError (e.g. 'no such table').
+    CR-SAN-043."""
+    return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
+
+
+def _retry_locked(fn, *, attempts=LOCK_RETRY_ATTEMPTS, sleep=time.sleep):
+    """Call ``fn()`` and return its value; on a transient 'database is locked' error,
+    retry up to ``attempts`` total tries with jittered exponential backoff. A non-lock
+    OperationalError ('no such table' …) or any non-OperationalError propagates
+    immediately (no retry); the last locked error is re-raised once ``attempts`` are
+    exhausted. ``sleep`` is injectable for tests. CR-SAN-043 — backstops PRAGMA
+    busy_timeout for the rare lock that outlives it. The wrapped notifier writes are
+    idempotent (upsert / heartbeat-stamp / delete-by-token), so retrying the whole
+    execute+commit is safe."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except sqlite3.OperationalError as exc:
+            if not is_locked_error(exc) or attempt >= attempts:
+                raise
+            backoff = 0.05 * (2 ** (attempt - 1))            # 50ms, 100ms, 200ms, …
+            sleep(backoff + random.uniform(0.0, backoff))    # full jitter
+
+
+# --------------------------------------------------------------------------- #
 # notifier liveness (per-session poller registry)
 
 def _pid_alive(pid):
@@ -824,21 +859,26 @@ def notifier_acquire(con, recipient, pid, token, host):
     live = notifier_live(con, recipient)
     if live is not None:
         return (False, f"another notifier already live for {recipient!r} (pid {live['pid']})")
-    con.execute(
-        "INSERT INTO notifier (recipient,pid,token,host,started_at,heartbeat_at,tombstone) "
-        "VALUES (?,?,?,?,datetime('now'),datetime('now'),FALSE) "
-        "ON CONFLICT(recipient) DO UPDATE SET pid=excluded.pid, token=excluded.token, "
-        "host=excluded.host, started_at=datetime('now'), heartbeat_at=datetime('now'), "
-        "tombstone=FALSE",
-        (recipient, pid, token, host))
-    con.commit()
+
+    def _write():
+        con.execute(
+            "INSERT INTO notifier (recipient,pid,token,host,started_at,heartbeat_at,tombstone) "
+            "VALUES (?,?,?,?,datetime('now'),datetime('now'),FALSE) "
+            "ON CONFLICT(recipient) DO UPDATE SET pid=excluded.pid, token=excluded.token, "
+            "host=excluded.host, started_at=datetime('now'), heartbeat_at=datetime('now'), "
+            "tombstone=FALSE",
+            (recipient, pid, token, host))
+        con.commit()
+    _retry_locked(_write)                          # CR-SAN-043: survive transient locks
     return (True, "acquired")
 
 
 def notifier_heartbeat(con, recipient, token):
-    con.execute("UPDATE notifier SET heartbeat_at=datetime('now') WHERE recipient=? AND token=?",
-                (recipient, token))
-    con.commit()
+    def _write():
+        con.execute("UPDATE notifier SET heartbeat_at=datetime('now') WHERE recipient=? AND token=?",
+                    (recipient, token))
+        con.commit()
+    _retry_locked(_write)                          # CR-SAN-043: survive transient locks
 
 
 def notifier_check(con, recipient, token):
@@ -853,21 +893,27 @@ def notifier_check(con, recipient, token):
 
 def notifier_release(con, recipient, token):
     """Remove my row on clean exit — only if it is still mine (never clobber a successor)."""
-    con.execute("DELETE FROM notifier WHERE recipient=? AND token=?", (recipient, token))
-    con.commit()
+    def _write():
+        con.execute("DELETE FROM notifier WHERE recipient=? AND token=?", (recipient, token))
+        con.commit()
+    _retry_locked(_write)                          # CR-SAN-043: survive transient locks
 
 
 def notifier_tombstone(con, recipient):
     """Request a cooperative shutdown of `recipient`'s live notifier."""
-    con.execute("UPDATE notifier SET tombstone=TRUE WHERE recipient=?", (recipient,))
-    con.commit()
+    def _write():
+        con.execute("UPDATE notifier SET tombstone=TRUE WHERE recipient=?", (recipient,))
+        con.commit()
+    _retry_locked(_write)                          # CR-SAN-043: survive transient locks
 
 
 def notifier_reap_if_stale(con, recipient):
     """Force-remove a dead/stale notifier row (fallback when a tombstone is ignored)."""
     if notifier_live(con, recipient) is None:
-        con.execute("DELETE FROM notifier WHERE recipient=?", (recipient,))
-        con.commit()
+        def _write():
+            con.execute("DELETE FROM notifier WHERE recipient=?", (recipient,))
+            con.commit()
+        _retry_locked(_write)                      # CR-SAN-043: survive transient locks
         return True
     return False
 
