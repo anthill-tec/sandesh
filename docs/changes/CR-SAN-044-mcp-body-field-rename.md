@@ -1,6 +1,9 @@
 # CR-SAN-044 — Rename the MCP `body_text` field to `body` (send & reply)
 
-**Status:** READY (gap-analysis clean after 2 spec self-fixes: §S3 full 4-file consumer enumeration; §S4 drop the erroneous PRD edit) → implementing on release/0.3.4
+**Status:** COMPLETED (implemented on release/0.3.4; RED→GREEN clean, full suite 54/54 files green —
+independently re-verified incl. the two slow/async tests flagged by the tally: `test_cleanup_sweep`
+20 OK, `test_notifier_lock_resilience` 17 OK. AC3 pinned empirically: FastMCP `call_tool` silently
+ignores the removed `body_text` key → subject-only message, guarded by a new negative test.)
 **Priority:** Low (developer-experience / naming consistency — no behavioural change)
 **Depends on:** — (renames two MCP tool params; underlying `sandesh_db.send`/`reply` unchanged)
 **Labels:** dx, mcp, naming, breaking-param
@@ -70,10 +73,12 @@ No schema change (no DB touched); PyPI/Python version is tag-derived (hatch-vcs)
 - **AC2 — `sandesh_reply` five-param lock updated to `body`.** The `sandesh_reply` tool's parameter set
   is exactly `{parent_id, from_addr, project_id, subject, body}` — `"body_text"` absent, `"resolves"`
   absent, `"reply_all"` absent (CR-SAN-005 invariant preserved with `body_text`→`body`).
-- **AC3 — send with `body` stores + is retrievable; old name is rejected.** `mcp.call_tool("sandesh_send",
-  {…, "body": "This is the report body.\n"})` returns an int id and `fetch` reads that body back
-  verbatim. Calling `mcp.call_tool("sandesh_send", {…, "body_text": "x"})` **raises** (the removed param
-  is not accepted — confirms the straight, non-aliased rename).
+- **AC3 — send with `body` stores + is retrievable; old name no longer carries a body.**
+  `mcp.call_tool("sandesh_send", {…, "body": "This is the report body.\n"})` returns an int id and `fetch`
+  reads that body back verbatim. Calling `mcp.call_tool("sandesh_send", {…, "body_text": "x"})` still
+  returns an id — FastMCP's in-process `call_tool` **silently ignores** the now-unknown key rather than
+  raising (verified empirically) — but the resulting message is **subject-only**: its `body` is empty and
+  no body file is written. This proves `body_text` no longer sets a body (the rename is not aliased).
 - **AC4 — reply with `body` stores a body file.** `mcp.call_tool("sandesh_reply", {…, "body":
   "ACK — done.\n"})` returns an int id and writes a body file whose content round-trips via `fetch`.
 - **AC5 — subject-only unaffected.** `mcp.call_tool("sandesh_send", {…})` with **no** `body` still
@@ -91,8 +96,10 @@ the existing behavioural tests, now keyed on `body`).
 ## Risks / open questions
 - **Breaking MCP param.** Accepted (owner-locked): straight rename, no `body_text` alias. Justification —
   MCP tool schemas are discovered at connect-time, so a client of the 0.3.4 server sees `body`; there is no
-  serialized/cached client that would keep sending `body_text`. AC3's "old name rejected" assertion pins
-  the decision.
+  serialized/cached client that would keep sending `body_text`. Note the failure mode of the old name is
+  **soft**, not an error: FastMCP's `call_tool` silently drops the unknown `body_text` key, so a stale
+  caller would send a *subject-only* message rather than get an exception — AC3 pins exactly this
+  (body_text no longer sets a body).
 - **PRD row ambiguity.** `PRD-mcp-server.md` documents BOTH the MCP field and the underlying library
   signature. Only the MCP-field references change; the library-signature rows (which still say `body_text`,
   correctly) are left as-is — checked during §S4.
