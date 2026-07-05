@@ -177,7 +177,7 @@ class McpProjectDerivationTest(unittest.IsolatedAsyncioTestCase):
                          f"Exactly 1 unread message expected; got {len(msg_ids)}")
 
     async def test_send_no_project_body_file_under_sender_project_folder(self):
-        """AC5/S2: when body_text is given, the body file lands under
+        """AC5/S2: when body is given, the body file lands under
         projects/<sender-project>/messages/ — i.e. sender's own store folder.
         RED: currently raises 'project_id is required' ToolError."""
         result = await mcp_server.mcp.call_tool(
@@ -186,7 +186,7 @@ class McpProjectDerivationTest(unittest.IsolatedAsyncioTestCase):
                 "from_addr": MAINLINE_P1,
                 "to": [TRACK1_P1],
                 "subject": "body via derivation",
-                "body_text": "body content for derivation test\n",
+                "body": "body content for derivation test\n",
             },
         )
         mid = _scalar(result)
@@ -201,7 +201,7 @@ class McpProjectDerivationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(row, f"Message row for id={mid} must exist")
         body_path = row["body_path"]
-        self.assertIsNotNone(body_path, "body_path must not be NULL when body_text given")
+        self.assertIsNotNone(body_path, "body_path must not be NULL when body given")
         # Body file must be under the SENDER's project store folder (P1)
         self.assertTrue(
             body_path.startswith(self.store1),
@@ -282,7 +282,7 @@ class McpProjectDerivationTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_reply_no_project_body_file_under_sender_project_folder(self):
-        """AC5/S2: reply with body_text stores the body under the sender's
+        """AC5/S2: reply with body stores the body under the sender's
         project folder (sender is 'Mainline - P1' → P1 store).
         RED: currently raises 'project_id is required' ToolError."""
         con = self._fresh_con()
@@ -297,7 +297,7 @@ class McpProjectDerivationTest(unittest.IsolatedAsyncioTestCase):
             {
                 "parent_id": parent_id,
                 "from_addr": MAINLINE_P1,
-                "body_text": "reply body via derivation\n",
+                "body": "reply body via derivation\n",
             },
         )
         reply_id = _scalar(result)
@@ -312,7 +312,7 @@ class McpProjectDerivationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(row, f"Reply message row for id={reply_id} must exist")
         body_path = row["body_path"]
-        self.assertIsNotNone(body_path, "body_path must not be NULL when body_text given")
+        self.assertIsNotNone(body_path, "body_path must not be NULL when body given")
         self.assertTrue(
             body_path.startswith(self.store1),
             f"body_path must be under P1 store ({self.store1!r}); got {body_path!r}",

@@ -77,10 +77,10 @@ class McpSurfaceTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_ac1_sandesh_reply_signature_has_exact_five_params(self):
         """AC1: sandesh_reply signature is exactly {parent_id, from_addr, project_id,
-        subject, body_text} — no resolves, no reply_all (CR-SAN-005 lock invariant)."""
+        subject, body} — no resolves, no reply_all (CR-SAN-005 lock invariant)."""
         sig = inspect.signature(mcp_server.sandesh_reply)
         actual_params = set(sig.parameters.keys())
-        expected_params = {"parent_id", "from_addr", "project_id", "subject", "body_text"}
+        expected_params = {"parent_id", "from_addr", "project_id", "subject", "body"}
         self.assertEqual(
             actual_params, expected_params,
             f"sandesh_reply params mismatch. got={sorted(actual_params)}, "

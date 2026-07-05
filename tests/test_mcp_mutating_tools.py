@@ -258,8 +258,9 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(mid, int)
         self.assertGreater(mid, 0)
 
-    async def test_send_with_body_text_body_is_retrievable(self):
-        """AC4 behavioural: sandesh_send with body_text stores the body; fetch reads it back."""
+    async def test_send_with_body_is_retrievable(self):
+        """AC3 behavioural (CR-SAN-044): sandesh_send with the `body` field stores the body;
+        fetch reads it back."""
         con = self._fresh_con()
         sdb.register(con, MAINLINE, kind="mainline", project=PROJ)
         sdb.register(con, TRACK1, kind="track", project=PROJ)
@@ -272,7 +273,7 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
                 "from_addr": TRACK1,
                 "to": [MAINLINE],
                 "subject": "report",
-                "body_text": "This is the report body.\n",
+                "body": "This is the report body.\n",
             },
         )
         mid = _scalar(result)
@@ -283,6 +284,42 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
             matching = [m for m in fetched if m["id"] == mid]
             self.assertEqual(len(matching), 1)
             self.assertEqual(matching[0]["body"], "This is the report body.\n")
+        finally:
+            con.close()
+
+    async def test_send_with_old_body_text_key_stores_no_body(self):
+        """AC3 (CR-SAN-044): the renamed-away `body_text` key no longer carries a body.
+        FastMCP's in-process call_tool silently ignores the now-unknown key (no exception),
+        so a stale caller sends a SUBJECT-ONLY message — body absent, body_path NULL."""
+        con = self._fresh_con()
+        sdb.register(con, MAINLINE, kind="mainline", project=PROJ)
+        sdb.register(con, TRACK1, kind="track", project=PROJ)
+        con.close()
+
+        result = await mcp_server.mcp.call_tool(
+            "sandesh_send",
+            {
+                "project_id": PROJ,
+                "from_addr": TRACK1,
+                "to": [MAINLINE],
+                "subject": "stale-caller uses body_text",
+                "body_text": "THIS MUST NOT BE STORED AS THE BODY",
+            },
+        )
+        mid = _scalar(result)  # still returns an id — the unknown key is dropped, not rejected
+
+        con = self._fresh_con()
+        try:
+            row = con.execute(
+                "SELECT subject, body_path FROM message WHERE id = ?", (mid,)
+            ).fetchone()
+            self.assertEqual(row["subject"], "stale-caller uses body_text")
+            self.assertIsNone(row["body_path"], "body_text must not produce a body file")
+            fetched = sdb.fetch(con, self.store, MAINLINE, mark=False)
+            matching = [m for m in fetched if m["id"] == mid]
+            self.assertEqual(len(matching), 1)
+            self.assertIn(matching[0]["body"], (None, ""),
+                          "body_text must not be stored as the message body")
         finally:
             con.close()
 
@@ -336,7 +373,7 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
                 "from_addr": TRACK1,
                 "to": [MAINLINE],
                 "subject": "store check",
-                "body_text": "body content\n",
+                "body": "body content\n",
             },
         )
         mid = _scalar(result)
@@ -411,8 +448,8 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(reply_id, int)
         self.assertGreater(reply_id, parent_id)
 
-    async def test_reply_with_body_text_stores_body(self):
-        """AC5 behavioural: sandesh_reply with body_text stores a body file in the store."""
+    async def test_reply_with_body_stores_body(self):
+        """AC4 behavioural (CR-SAN-044): sandesh_reply with the `body` field stores a body file."""
         con = self._fresh_con()
         sdb.register(con, MAINLINE, kind="mainline", project=PROJ)
         sdb.register(con, TRACK1, kind="track", project=PROJ)
@@ -427,7 +464,7 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
                 "project_id": PROJ,
                 "parent_id": parent_id,
                 "from_addr": MAINLINE,
-                "body_text": "ACK — done.\n",
+                "body": "ACK — done.\n",
             },
         )
         reply_id = _scalar(result)
@@ -487,7 +524,7 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
                 "project_id": PROJ,
                 "parent_id": parent_id,
                 "from_addr": MAINLINE,
-                "body_text": "body\n",
+                "body": "body\n",
             },
         )
         reply_id = _scalar(result)

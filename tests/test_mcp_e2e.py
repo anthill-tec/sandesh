@@ -171,7 +171,7 @@ class T2InMemoryClientServerTest(unittest.IsolatedAsyncioTestCase):
                 "from_addr": self.TRACK1,
                 "to": [self.MAINLINE],
                 "subject": "E2E in-memory subject",
-                "body_text": "E2E in-memory body",
+                "body": "E2E in-memory body",
             })
             self.assertFalse(send_result.isError, f"send returned error: {send_result.content}")
             self.assertIsNotNone(send_result.structuredContent)
@@ -360,7 +360,7 @@ class T3SubprocessStdioTest(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(reg_recipient.isError, f"register recipient error: {reg_recipient.content}")
                 self.assertEqual(_sc(reg_recipient), recipient)
 
-                # Send a message with body_text
+                # Send a message with body
                 SUBJECT = "stdio E2E subject"
                 BODY = "stdio E2E body text"
 
@@ -369,7 +369,7 @@ class T3SubprocessStdioTest(unittest.IsolatedAsyncioTestCase):
                     "from_addr": sender,
                     "to": [recipient],
                     "subject": SUBJECT,
-                    "body_text": BODY,
+                    "body": BODY,
                 })
                 self.assertFalse(send_result.isError, f"send error: {send_result.content}")
                 msg_id = _sc(send_result)
@@ -563,7 +563,7 @@ class T4SubprocessStdioArchiveTest(unittest.IsolatedAsyncioTestCase):
                     "from_addr": self.MAINLINE_P2,
                     "to": [self.MAINLINE_P1],
                     "subject": "cross-project AC7 ping",
-                    "body_text": "body from P2 to P1",
+                    "body": "body from P2 to P1",
                 })
                 self.assertFalse(
                     result.isError,
