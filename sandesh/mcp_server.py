@@ -524,7 +524,7 @@ was lazily rebuilt first (harmless)."""
             Field(description="Advisory message kind for the reader: 'request' (Track→Mainline), "
                   "'directive' (Mainline→Track), or 'fyi' (awareness)."),
         ] = None,
-        body_text: Annotated[
+        body: Annotated[
             str | None,
             Field(description="Optional message body. Omit it for a subject-only message "
                   "(no body file is written)."),
@@ -552,7 +552,7 @@ was lazily rebuilt first (harmless)."""
                 cc = [cc]
             return sandesh_db.send(
                 con, store, from_addr, to, cc, subject, kind,
-                body_text=body_text, project=project)
+                body_text=body, project=project)
         except (ValueError, PermissionError) as e:
             raise ToolError(str(e)) from e
         finally:
@@ -582,7 +582,7 @@ was lazily rebuilt first (harmless)."""
             Field(description="Optional reply subject; defaults to 'Re: <parent subject>'. "
                   "Often the whole message (subject-only) when signalling completion."),
         ] = None,
-        body_text: Annotated[
+        body: Annotated[
             str | None,
             Field(description="Optional reply body; omit for a subject-only reply."),
         ] = None,
@@ -601,7 +601,7 @@ was lazily rebuilt first (harmless)."""
         try:
             project, store, con = _ctx(_derive_or_resolve(project_id, from_addr))
             return sandesh_db.reply(
-                con, store, parent_id, from_addr, subject, body_text, project=project)
+                con, store, parent_id, from_addr, subject, body, project=project)
         except (ValueError, PermissionError) as e:
             raise ToolError(str(e)) from e
         finally:
