@@ -336,6 +336,10 @@ def cmd_tombstone(args):
                 return 1
         sdb.tombstone_project(con, args.project, args.by, force=args.force)
     except (ValueError, PermissionError, RuntimeError) as exc:
+        if isinstance(exc, ValueError) and "already tombstoned" in str(exc):
+            print(f"[sandesh] project {args.project!r} already tombstoned — "
+                  f"nothing to do", file=sys.stderr)
+            return 0
         print(f"[sandesh] {exc}", file=sys.stderr)
         sys.exit(1)
     finally:
