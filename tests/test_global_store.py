@@ -546,7 +546,7 @@ class ListProjectsTrackerTest(_GlobalTempDataHome):
         """Insert a project row directly into the global DB (bypassing setup)."""
         from sandesh import sandesh_db
         # Ensure the DB and schema exist first
-        sandesh_db.setup("_Seed")
+        sandesh_db.setup("Seed0")
         db_file = sandesh_db.db_path()
         con = sqlite3.connect(db_file)
         try:
@@ -583,7 +583,7 @@ class ListProjectsTrackerTest(_GlobalTempDataHome):
         sandesh_db.setup("Alpha")
         sandesh_db.setup("Mu")
         result = sandesh_db.list_projects()
-        # Extract only the ones we set up (exclude the seeded _Seed row if present)
+        # Extract only the ones we set up (exclude the seeded Seed0 row if present)
         relevant = [p for p in result if p in ("Zeta", "Alpha", "Mu")]
         self.assertEqual(
             relevant,
@@ -717,7 +717,7 @@ class ProjectStateTest(_GlobalTempDataHome):
         self._set_xdg(self._dh)
         # Provision global DB
         from sandesh import sandesh_db
-        sandesh_db.setup("_Seed")
+        sandesh_db.setup("Seed0")
 
     def _seed_row(self, project_id, state):
         from sandesh import sandesh_db
