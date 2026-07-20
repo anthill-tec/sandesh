@@ -55,7 +55,9 @@ BUSY_TIMEOUT_MS = 30000               # CR-SAN-043: SQLite block-and-retry windo
 LOCK_RETRY_ATTEMPTS = 6               # CR-SAN-043: max tries for a locked write before re-raising
 BROADCAST = "all-tracks"              # reserved recipient keyword (not a real address)
 
-ADDRESS_RE = re.compile(r"^(?P<orch>Mainline|Track \d+) - (?P<proj>[A-Za-z][A-Za-z0-9_]*)$")
+_PROJECT = r"[A-Za-z][A-Za-z0-9_]*"   # CR-SAN-045: the ONE <Project> grammar source
+PROJECT_RE = re.compile(rf"^{_PROJECT}$")
+ADDRESS_RE = re.compile(rf"^(?P<orch>Mainline|Track \d+) - (?P<proj>{_PROJECT})$")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS address (
@@ -237,11 +239,23 @@ def connect():
     return con
 
 
+def validate_project_id(project_id):
+    """CR-SAN-045: reject a project id the address grammar cannot express.
+    Raises ValueError for an empty or non-matching id — an id that fails this
+    could never register a valid 'Mainline - <Project>' address (a zombie)."""
+    if not project_id or not PROJECT_RE.match(project_id):
+        raise ValueError(
+            f"invalid project id {project_id!r} — must match [A-Za-z][A-Za-z0-9_]* "
+            "(letters, digits, underscore; starts with a letter — "
+            "e.g. 'ModelB' not 'Model B')")
+
+
 def setup(project_id):
     """Provision a project: enroll it in the tracker (INSERT 'active' if absent;
     no-op if already active/archived; refuse a tombstoned id) and create its
     messages/ body dir. Idempotent — safe to re-run. Returns the store dir."""
-    store = store_dir(project_id)                 # validates project_id non-empty
+    validate_project_id(project_id)               # CR-SAN-045: refuse un-addressable ids
+    store = store_dir(project_id)
     con = connect()
     try:
         state = project_state(con, project_id)
