@@ -1,7 +1,7 @@
 # CR-SAN-045 — Reject un-addressable `project_id`s at creation + super-admin archive of zero-address projects (unwedge the zombies)
 
-**Status:** PROPOSED (gap-analysis complete; S2 mechanism = **Option B**, owner-decided 2026-07-20 —
-keep the two-step interlock, relax the *archive* authz; carries a folded PRD-global-store **D8** amendment)
+**Status:** COMPLETED (2026-07-20 — all 15 ACs verified, VERIFY PASS, regression 1610/1610 green,
+coverage 88.3% lines / 94.0% functions; S2 = **Option B**, owner-decided; PRD-global-store **D8** amended)
 **Priority:** High (a whole *class* of projects — any id the address grammar cannot express — becomes a
 permanently unmanageable zombie: it cannot be archived and therefore cannot be tombstoned. Operability /
 data-lifecycle bug.)
