@@ -134,6 +134,20 @@ agent-reachable surface can create or change it); stored-form details in O3 (§7
 purge, bodies to delete, and **cross-project messages whose bodies would be lost / threads that would hole**)
 and writes nothing. Honor-system, as ever — local cooperative orchestrators.
 
+> **D8 amendment (CR-SAN-045, 2026-07-20) — zero-address projects: the super-admin may archive.** A
+> project with **zero `address` rows** (never populated — e.g. a `project_id` the address grammar cannot
+> express, created before CR-SAN-045's creation-time guard, or a freshly-`setup` project with no
+> `register`) has **no `Mainline - <id>`** that could ever satisfy the archive `by`-check — it is
+> unarchivable and therefore, under D4/D6, un-tombstonable: a permanent zombie. Carve-out: for a
+> project with **zero address rows only**, the **super-admin** (`by == admin`) may `archive` it, so it
+> can enter the mandatory two-step and be retired (admin `archive` → admin `tombstone`). A grammar-valid
+> `Mainline - <id>` is still accepted too (**additive** — no change for empty valid-id projects); the
+> moment the project has ≥1 address row (active *or* soft-deleted) the normal **Mainline-only** rule
+> applies unchanged. This carves the **archive/unarchive authz tier (D8) only** — **D4/D6 (two-step
+> mandatory; `tombstoned` reachable only from `archived`) and the tombstone super-admin rule are
+> UNCHANGED.** `unarchive` remains Mainline-only (an admin-archived empty project is retired via
+> `tombstone`, not reactivated).
+
 **D9 — Surface: 3 lifecycle verbs on the CLI; only the reversible pair on MCP.** CLI subcommands
 `sandesh archive|unarchive|tombstone --project <id> --by <addr>` (+ `--yes`/`--dry-run`/`--force` where
 applicable). **MCP exposes `sandesh_archive` + `sandesh_unarchive` only** (an orchestrator may soft-close /
