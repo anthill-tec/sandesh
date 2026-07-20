@@ -55,7 +55,9 @@ BUSY_TIMEOUT_MS = 30000               # CR-SAN-043: SQLite block-and-retry windo
 LOCK_RETRY_ATTEMPTS = 6               # CR-SAN-043: max tries for a locked write before re-raising
 BROADCAST = "all-tracks"              # reserved recipient keyword (not a real address)
 
-ADDRESS_RE = re.compile(r"^(?P<orch>Mainline|Track \d+) - (?P<proj>[A-Za-z][A-Za-z0-9_]*)$")
+_PROJECT = r"[A-Za-z][A-Za-z0-9_]*"   # CR-SAN-045: the ONE <Project> grammar source
+PROJECT_RE = re.compile(rf"^{_PROJECT}$")
+ADDRESS_RE = re.compile(rf"^(?P<orch>Mainline|Track \d+) - (?P<proj>{_PROJECT})$")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS address (
@@ -237,11 +239,23 @@ def connect():
     return con
 
 
+def validate_project_id(project_id):
+    """CR-SAN-045: reject a project id the address grammar cannot express.
+    Raises ValueError for an empty or non-matching id — an id that fails this
+    could never register a valid 'Mainline - <Project>' address (a zombie)."""
+    if not project_id or not PROJECT_RE.match(project_id):
+        raise ValueError(
+            f"invalid project id {project_id!r} — must match [A-Za-z][A-Za-z0-9_]* "
+            "(letters, digits, underscore; starts with a letter — "
+            "e.g. 'ModelB' not 'Model B')")
+
+
 def setup(project_id):
     """Provision a project: enroll it in the tracker (INSERT 'active' if absent;
     no-op if already active/archived; refuse a tombstoned id) and create its
     messages/ body dir. Idempotent — safe to re-run. Returns the store dir."""
-    store = store_dir(project_id)                 # validates project_id non-empty
+    validate_project_id(project_id)               # CR-SAN-045: refuse un-addressable ids
+    store = store_dir(project_id)
     con = connect()
     try:
         state = project_state(con, project_id)
@@ -1003,6 +1017,18 @@ def _evict_project_notifiers(con, project_id, *, force, wait_secs, op):
         con.commit()
 
 
+def _has_any_address(con, project_id):
+    """True when the project has ANY `address` row — active OR soft-deleted
+    (no `active` filter; deliberately NOT `active_addresses()`, which filters
+    `active=TRUE`). CR-SAN-045: a project whose only addresses were
+    unregistered (soft-deleted) still HAS a reconstructable Mainline and must
+    stay on the normal archive-authz path."""
+    count = con.execute(
+        "SELECT COUNT(*) FROM address WHERE project=?", (project_id,)
+    ).fetchone()[0]
+    return count > 0
+
+
 def _archive_guards(con, project_id, by):
     """State + authz guards shared by archive() and archive_preview() — the
     dry-run raises exactly the same errors as the real operation."""
@@ -1011,6 +1037,14 @@ def _archive_guards(con, project_id, by):
         raise ValueError(f"unknown project '{project_id}'")
     if state != "active":
         raise ValueError(f"project '{project_id}' is not active")
+    # Escape hatch (CR-SAN-045): a zero-address project has no Mainline that
+    # could ever satisfy the check; the super-admin may archive it so it can
+    # enter the mandatory two-step. A grammar-valid 'Mainline - <id>' still
+    # works too.
+    stored_admin = admin_name(con)
+    if not _has_any_address(con, project_id) and stored_admin is not None \
+            and by == stored_admin:
+        return
     _require_project_mainline(project_id, by)
 
 
