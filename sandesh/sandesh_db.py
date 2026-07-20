@@ -1017,6 +1017,18 @@ def _evict_project_notifiers(con, project_id, *, force, wait_secs, op):
         con.commit()
 
 
+def _has_any_address(con, project_id):
+    """True when the project has ANY `address` row — active OR soft-deleted
+    (no `active` filter; deliberately NOT `active_addresses()`, which filters
+    `active=TRUE`). CR-SAN-045: a project whose only addresses were
+    unregistered (soft-deleted) still HAS a reconstructable Mainline and must
+    stay on the normal archive-authz path."""
+    count = con.execute(
+        "SELECT COUNT(*) FROM address WHERE project=?", (project_id,)
+    ).fetchone()[0]
+    return count > 0
+
+
 def _archive_guards(con, project_id, by):
     """State + authz guards shared by archive() and archive_preview() — the
     dry-run raises exactly the same errors as the real operation."""
@@ -1025,6 +1037,14 @@ def _archive_guards(con, project_id, by):
         raise ValueError(f"unknown project '{project_id}'")
     if state != "active":
         raise ValueError(f"project '{project_id}' is not active")
+    # Escape hatch (CR-SAN-045): a zero-address project has no Mainline that
+    # could ever satisfy the check; the super-admin may archive it so it can
+    # enter the mandatory two-step. A grammar-valid 'Mainline - <id>' still
+    # works too.
+    stored_admin = admin_name(con)
+    if not _has_any_address(con, project_id) and stored_admin is not None \
+            and by == stored_admin:
+        return
     _require_project_mainline(project_id, by)
 
 
