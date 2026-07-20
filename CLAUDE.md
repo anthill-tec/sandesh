@@ -35,8 +35,10 @@ but nothing is Claude-specific anymore — it's a general agent-messaging primit
 ## Project Classification: Standalone Python CLI tool (+ planned MCP server)
 
 - Pure stdlib (`sqlite3`, `argparse`, `os`, `signal`, `uuid`, `socket`). No venv needed.
-- **Source of truth = this repo.** It is *installed* (copied) to the XDG data dir; edits
-  here require a re-`./install.sh` to take effect on the installed binary.
+- **Source of truth = this repo.** The local install is a **`uv tool` install of the
+  published PyPI release** (`sandesh-relay`) — update it with `uv tool upgrade sandesh-relay`
+  after a release, NOT `./install.sh` (legacy from-source path). Repo edits reach the
+  installed binary only through a PyPI release.
 - Provenance note: an earlier, pre-standalone copy lived in the user's Claude dotfiles
   at `~/.claude/scripts/sandesh/` (it imported a Claude-specific `schedule_db`). That
   copy is **superseded** by this repo and should be removed from the dotfiles to avoid
@@ -84,15 +86,16 @@ sandesh/                         (this repo — source of truth)
 ├── README.md / RELEASING.md / pyproject.toml
 └── CLAUDE.md           (this file)
 
-Installed (by install.sh) + runtime data:
-~/.local/share/sandesh/          ($XDG_DATA_HOME/sandesh)
-├── .venv/                       the installed package + entry points
+Installed (uv tool, from the PyPI release) + runtime data:
+~/.local/share/uv/tools/sandesh-relay/   the installed package (uv-managed venv;
+                                 entry points `sandesh`, `sandesh-mcp`)
+~/.local/share/sandesh/          ($XDG_DATA_HOME/sandesh — runtime data, install-method-independent)
 ├── sandesh.db                   the ONE global DB (WAL) — all projects; address, message,
 │                                message_recipient, notifier, project, admin (+ message_fts index)
 └── projects/<project_id>/
     ├── messages/msg-<id>.md     message bodies (full absolute paths stored in the DB)
     └── sandesh.db.pre-global    legacy per-project DB, kept as backup after consolidation
-~/.local/bin/sandesh             symlink → ~/.local/share/sandesh/.venv/bin/sandesh (PATH entry)
+~/.local/bin/sandesh             uv-managed shim (PATH entry; likewise sandesh-mcp)
 ```
 
 ---
@@ -217,8 +220,11 @@ liveness table is crash-safe rather than relying on a shutdown hook.
 # tests (no install needed — run against a temp store; per-file, discovery is broken)
 PYTHONPATH=. .venv/bin/python tests/<test_file>.py    # dev venv has [mcp,migrate]
 
-# install / re-install (venv at ~/.local/share/sandesh/.venv + migrate/consolidate/reindex)
-SANDESH_ADMIN=<name> ./install.sh
+# install / update the local tool from the published PyPI release (uv tool)
+uv tool install 'sandesh-relay[mcp,migrate]'   # first install
+uv tool upgrade sandesh-relay                  # update after each release
+# LEGACY from-source path (venv + migrate/consolidate/reindex + admin assign):
+# SANDESH_ADMIN=<name> ./install.sh
 
 # use (installed launcher; ~/.local/bin must be on PATH, else call by full path)
 sandesh setup --project Demo
