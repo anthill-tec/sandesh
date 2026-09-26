@@ -1222,7 +1222,19 @@ def build_parser(axi_format="human", axi_context=None):
     # subparser) turns usage errors into an AXI envelope when the pre-scanned
     # format is toon/json; the format/context are stamped on at the end.
     ap = _Parser(prog="sandesh", parents=[common],
-                 description="Sandesh messaging CLI (standalone).")
+                 description="Sandesh messaging CLI (standalone).",
+                 formatter_class=argparse.RawDescriptionHelpFormatter,
+                 epilog=(
+                     "machine output (for agents):\n"
+                     "  --format {human,toon,json}   before or after the verb, or $SANDESH_FORMAT;\n"
+                     "                               default human. toon/json print one AXI envelope\n"
+                     "                               on stdout (human text -> stderr; exit codes\n"
+                     "                               unchanged). Envelope shape, --fields/--limit/\n"
+                     "                               --full, the home view and the notify exit table:\n"
+                     "                               docs/USER_GUIDE.md, section \"Machine output for\n"
+                     "                               agents\" (https://axi.md, https://toonformat.dev)\n"
+                     "  sandesh <verb> --help        the per-verb reference"
+                 ))
     ap.add_argument("--version", action="version", version=f"sandesh {__version__}")
     # required=False (§S4b): a bare `sandesh` is the machine-mode home view;
     # main() re-creates argparse's "required" error for human mode.

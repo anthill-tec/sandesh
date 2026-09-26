@@ -147,3 +147,86 @@ that grant — there is no MCP/Pi tool for it, and you should not retry on your 
 - **Retire** (tombstone) permanently retires a project — a destructive, admin-only
   CLI action. A retired project's traffic is hidden from all reads, and (as above) a
   listener that stops because its project was retired must **not** be relaunched.
+
+---
+
+## Machine output for agents (`--format toon|json`)
+
+When an agent (not a human) drives the CLI, ask for a **machine envelope** instead of
+the tables: every invocation then writes exactly **one [AXI](https://axi.md) envelope
+to stdout** — as [TOON](https://toonformat.dev) or JSON (same dict, two encodings) —
+while the human text goes to **stderr**. Exit codes are unchanged, so scripts that
+branch on `$?` keep working; parse stdout, ignore stderr.
+
+- **Select it:** `--format {human,toon,json}` before *or* after the verb
+  (`sandesh --format toon inbox …` ≡ `sandesh inbox … --format toon`), or set
+  `$SANDESH_FORMAT`. Default `human`; an invalid env value exits 2 naming the three.
+- **Envelope shape:** `axi:` → `verb`, `ok`, the verb's flat result fields, `context`
+  (`project`, plus `address` on the verbs that act for one), optional `help[N]`
+  (1–3 next-step command templates with `<addr>`/`<id>` placeholders), and `warnings`
+  (always present, `[]` when clean). A failure is `ok: false` + `error: "<the same
+  message human mode prints>"`, on **stdout**, with the same exit code (1; usage
+  errors — unknown flag/verb, bad `--fields` — exit 2 with a `help[]` naming `--help`).
+- **Keep it small:** lists show a 2–4-column default; `--fields <csv>` widens
+  `addressbook` (`address,kind,status,listening,registered`), `inbox`
+  (`id,from,to,cc,kind,subject,created,re,unread`) and `thread`
+  (`id,from,subject,created,re`) — an unknown name exits 2 listing the valid set.
+  `inbox --limit N` caps rows (default 50; the `unread: n of total` aggregate is never
+  sliced). `fetch` bodies are cut at **500 chars** with a
+  `(truncated, N chars total)` suffix and a `help[]` pointing at `fetch … --full`;
+  `--full` (also accepted by `thread`) returns complete bodies.
+- **Idempotent no-ops are `ok: true`:** `register` of an existing address →
+  `result: already`; `unregister` of an absent one → `result: absent`; `archive` of an
+  archived project → `result: already` (human mode still exits as before).
+- **Home view:** a bare `sandesh` (machine mode only) or `sandesh status` answers
+  "who am I, am I listening, how much is unread" in one call — it needs
+  `$SANDESH_PROJECT` (or `--project`) **and** `$SANDESH_ADDRESS`, else `ok: false`
+  naming both, exit 2.
+
+`sandesh --project Demo --format toon addressbook`:
+
+```text
+axi:
+  verb: addressbook
+  ok: true
+  participants[2]{address,listening}:
+    Mainline - Demo,false
+    Track 1 - Demo,false
+  listening: 0/2
+  context:
+    project: Demo
+  help[2]: "sandesh --project Demo send --from <addr> --to <addr> --subject \"<subject>\"",sandesh --project Demo notify --to <addr>
+  warnings: []
+```
+
+`sandesh --project Demo inbox --to "Track 1 - Demo" --format toon`:
+
+```text
+axi:
+  verb: inbox
+  ok: true
+  messages[2]{id,from,subject,unread}:
+    1,Mainline - Demo,CR-308 started,true
+    2,Mainline - Demo,"heads-up: freeze Friday",true
+  unread: 2 of 2
+  context:
+    project: Demo
+    address: Track 1 - Demo
+  help[2]: sandesh --project Demo fetch --to <addr>,sandesh --project Demo thread --id <id>
+  warnings: []
+```
+
+**The listener in machine mode.** `sandesh notify … --format toon` sends its progress
+lines to stderr and, on **every** way it stops, writes one final envelope
+(`verb: notify`, `exit`, `address`, `project`, `unread`) — so the agent that launched
+it in the background can read *why* without scraping the banner:
+
+| It stopped because… | exit | `ok` | what else is in the envelope |
+|---|---|---|---|
+| mail arrived | 0 | `true` | `unread[N]: <ids>` — the triggering message ids, ascending (the only case where it is non-empty) |
+| timeout, nothing arrived | 2 | `true` | `unread: []` |
+| a duplicate listener already held the address | 5 | `true` | `unread: []` |
+| the project was retired — do not relaunch | 3 | `false` | `error` |
+| taken over by another listener — do not relaunch | 4 | `false` | `error` |
+| startup/runtime error | 1 | `false` | `error` |
+| killed by a signal (SIGTERM/SIGINT) | 128+N | `false` | `unread: []` + `error: terminated by SIGTERM (143)` |

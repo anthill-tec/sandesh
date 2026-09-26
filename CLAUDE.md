@@ -72,8 +72,12 @@ but nothing is Claude-specific anymore — it's a general agent-messaging primit
 sandesh/                         (this repo — source of truth)
 ├── sandesh/            the Python package (dist name: sandesh-relay; version from git tags via hatch-vcs)
 │   ├── sandesh_db.py   the library: schema + all operations (no CLI, no I/O loop)
-│   ├── cli.py          argparse CLI over the library (one binary, all subcommands)
-│   ├── notify.py       the blocking mailbox watcher (run() + a thin main)
+│   ├── cli.py          argparse CLI over the library (one binary, all subcommands; machine-mode
+│   │                   `--format toon|json` shaping — --fields/--limit/--full, help[], home view)
+│   ├── axi.py          the AXI envelope builder + toon/json serialisers + emit() (presentation only)
+│   ├── _toon.py        VENDORED TOON codec (verbatim copy of the fleet's toon.py; never edit — re-vendor)
+│   ├── _toon_provenance.py   TOON_SOURCE_SHA256 pin of the vendored codec (checked by tests/test_toon_vendor.py)
+│   ├── notify.py       the blocking mailbox watcher (run() + a thin main; final AXI envelope in machine mode)
 │   ├── mcp_server.py   the MCP adapter (12 tools; optional [mcp] extra)
 │   ├── migrate.py      the yoyo-backed migration engine (optional [migrate] extra)
 │   ├── migrations/     0001-baseline … 0005-message-fts (+ rollbacks)
@@ -82,7 +86,8 @@ sandesh/                         (this repo — source of truth)
 ├── integrations/pi/    the Pi extension (bun/TS; npm @anthill-tec/sandesh-pi; 12 tools + native wake)
 ├── install.sh          builds a venv at $XDG_DATA_HOME/sandesh/.venv, pip-installs [mcp,migrate],
 │                       symlinks launchers, then migrate --all → consolidate → reindex → admin assign
-├── tests/              41 test files (run against a temp store; no install needed)
+├── tests/              63 test files (run against a temp store; no install needed)
+│   └── golden/         pre-CR-SAN-047 human-mode stdout goldens (byte-identical human mode gate)
 ├── README.md / RELEASING.md / pyproject.toml
 └── CLAUDE.md           (this file)
 
@@ -305,6 +310,20 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
   poll loop, retrying on the poll cadence (bounded by the deadline → exit 2) instead of
   crashing. Non-lock `OperationalError`s still propagate. `busy_timeout` is a per-connection
   pragma (NOT schema) — no migration.
+- **`--format` is presentation-only and shares the `--project` idiom (CR-SAN-047).**
+  `--format {human,toon,json}` sits on the same `common` parent with `default=argparse.SUPPRESS`
+  so it works before *or* after the verb (resolved `args.format` → `$SANDESH_FORMAT` → `human`);
+  removing SUPPRESS breaks one position, exactly as for `--project`. Machine-mode **usage
+  errors** (unknown flag/verb, bad `--fields`, missing subcommand) are handled by a
+  **pre-scan** of argv + `$SANDESH_FORMAT` *before* argparse runs, and `_Parser.error` is
+  overridden so argparse errors become `ok:false error help[]` envelopes on stdout (exit 2) —
+  human mode keeps argparse's usage on stderr. **`sandesh_db` stays pure**: ALL AXI shaping
+  (envelope, `--fields`/`--limit` slicing, 500-char body truncation + `--full`, `help[]`
+  templates, the home view, idempotent `result: already|absent`) lives in `cli.py`/`axi.py`;
+  `notify.py` only emits its final envelope. The TOON codec is **VENDORED** (`_toon.py`, a
+  verbatim copy of the fleet's `toon.py`, provenance-pinned by `_toon_provenance.py` +
+  `tests/test_toon_vendor.py` hashing the file minus its header) — **never edit it**; to
+  pick up an upstream change, re-vendor the whole file and re-pin `TOON_SOURCE_SHA256`.
 
 ---
 
