@@ -21,6 +21,7 @@ import { test, expect, describe, beforeAll } from "bun:test";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { spawnSync } from "child_process";
+import { packedFilePaths } from "./npm_pack";
 
 // ---------------------------------------------------------------------------
 // Load package.json once for all tests
@@ -142,20 +143,6 @@ describe("package.json — Pi manifest integrity (AC2)", () => {
 // AC3 — npm pack --dry-run contents
 // ---------------------------------------------------------------------------
 
-interface NpmPackFile {
-  path: string;
-  size: number;
-  mode: number;
-}
-
-interface NpmPackResult {
-  id: string;
-  name: string;
-  version: string;
-  files: NpmPackFile[];
-  [key: string]: unknown;
-}
-
 describe("npm pack --dry-run contents (AC3)", () => {
   let packedFiles: string[];
 
@@ -174,8 +161,7 @@ describe("npm pack --dry-run contents (AC3)", () => {
       throw new Error(`npm pack failed (exit ${result.status ?? "null"}): ${result.stderr}`);
     }
 
-    const parsed = JSON.parse(result.stdout) as NpmPackResult[];
-    packedFiles = parsed[0].files.map((f) => f.path);
+    packedFiles = packedFilePaths(result.stdout);
   });
 
   test("packed tarball includes src/index.ts", () => {
