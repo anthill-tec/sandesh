@@ -68,7 +68,8 @@ describe("AC2a — sandesh_archive argv", () => {
     expect(execMock.mock.calls.length).toBe(1);
     const [cmd, args] = execMock.mock.calls[0] as [string, string[]];
     expect(cmd).toBe("sandesh");
-    expect(args).toEqual(["archive", "--project", "Demo", "--by", "Mainline - Demo"]);
+    // CR-SAN-048 \u00a7S2: every invocation leads with the `--format toon` global option.
+    expect(args).toEqual(["--format", "toon", "archive", "--project", "Demo", "--by", "Mainline - Demo"]);
   });
 
   test("dry_run:true → emits --dry-run flag", async () => {
@@ -144,8 +145,8 @@ describe("AC2a — sandesh_archive argv", () => {
     const tool = getTool("sandesh_archive");
     await callExecute(tool, { project_id: "Demo", by: "Mainline - Demo" });
     const [, args] = execMock.mock.calls[0] as [string, string[]];
-    // First element must be the verb "archive", not "--project"
-    expect(args[0]).toBe("archive");
+    // First element after the `--format toon` pair (CR-SAN-048 \u00a7S2) must be the verb "archive", not "--project"
+    expect(args[2]).toBe("archive");
     // "--project" appears exactly once (as a verb-level flag, not global prefix)
     const projectCount = args.filter((a) => a === "--project").length;
     expect(projectCount).toBe(1);
@@ -183,7 +184,8 @@ describe("AC2b — sandesh_unarchive argv", () => {
     expect(execMock.mock.calls.length).toBe(1);
     const [cmd, args] = execMock.mock.calls[0] as [string, string[]];
     expect(cmd).toBe("sandesh");
-    expect(args).toEqual(["unarchive", "--project", "Demo", "--by", "Mainline - Demo"]);
+    // CR-SAN-048 \u00a7S2: every invocation leads with the `--format toon` global option.
+    expect(args).toEqual(["--format", "toon", "unarchive", "--project", "Demo", "--by", "Mainline - Demo"]);
   });
 
   test("dry_run:true → emits --dry-run flag", async () => {
@@ -235,7 +237,8 @@ describe("AC2b — sandesh_unarchive argv", () => {
     const tool = getTool("sandesh_unarchive");
     await callExecute(tool, { project_id: "Demo", by: "Mainline - Demo" });
     const [, args] = execMock.mock.calls[0] as [string, string[]];
-    expect(args[0]).toBe("unarchive");
+    // Verb follows the `--format toon` pair (CR-SAN-048 \u00a7S2), not a global --project prefix
+    expect(args[2]).toBe("unarchive");
     const projectCount = args.filter((a) => a === "--project").length;
     expect(projectCount).toBe(1);
   });
@@ -261,7 +264,8 @@ describe("AC2c — sandesh_search argv", () => {
     expect(execMock.mock.calls.length).toBe(1);
     const [cmd, args] = execMock.mock.calls[0] as [string, string[]];
     expect(cmd).toBe("sandesh");
-    expect(args).toEqual(["search", "status update", "--to", "Mainline - Demo"]);
+    // CR-SAN-048 \u00a7S2: every invocation leads with the `--format toon` global option.
+    expect(args).toEqual(["--format", "toon", "search", "status update", "--to", "Mainline - Demo"]);
   });
 
   test("minimal search omits --limit", async () => {
@@ -293,7 +297,8 @@ describe("AC2c — sandesh_search argv", () => {
     const tool = getTool("sandesh_search");
     await callExecute(tool, { recipient: "Mainline - Demo", query: "ping" });
     const [, args] = execMock.mock.calls[0] as [string, string[]];
-    expect(args[0]).toBe("search");
+    // Verb follows the `--format toon` pair (CR-SAN-048 \u00a7S2), not a global --project prefix
+    expect(args[2]).toBe("search");
     expect(args).not.toContain("--project");
   });
 

@@ -96,7 +96,9 @@ describe("AC4 — sandesh_send argv", () => {
     expect(execMock.mock.calls.length).toBe(1);
     const [cmd, args] = execMock.mock.calls[0] as [string, string[]];
     expect(cmd).toBe("sandesh");
+    // CR-SAN-048 §S2: every invocation leads with the `--format toon` global option.
     expect(args).toEqual([
+      "--format", "toon",
       "--project", "X",
       "send",
       "--from", "Track 1 - X",
@@ -189,7 +191,9 @@ describe("AC4 — sandesh_reply argv", () => {
 
     const [cmd, args] = execMock.mock.calls[0] as [string, string[]];
     expect(cmd).toBe("sandesh");
+    // CR-SAN-048 §S2: every invocation leads with the `--format toon` global option.
     expect(args).toEqual([
+      "--format", "toon",
       "--project", "X",
       "reply",
       "--to-msg", "42",
@@ -367,7 +371,9 @@ describe("AC4 — sandesh_thread argv", () => {
 
     const [cmd, args] = execMock.mock.calls[0] as [string, string[]];
     expect(cmd).toBe("sandesh");
+    // CR-SAN-048 §S2: every invocation leads with the `--format toon` global option.
     expect(args).toEqual([
+      "--format", "toon",
       "--project", "X",
       "thread",
       "--id", "7",
@@ -402,7 +408,9 @@ describe("AC4 — sandesh_register argv", () => {
 
     const [cmd, args] = execMock.mock.calls[0] as [string, string[]];
     expect(cmd).toBe("sandesh");
+    // CR-SAN-048 §S2: every invocation leads with the `--format toon` global option.
     expect(args).toEqual([
+      "--format", "toon",
       "--project", "X",
       "register",
       "--address", "Track 4 - X",
@@ -483,7 +491,8 @@ describe("AC4 — sandesh_addressbook argv", () => {
 
     const [cmd, args] = execMock.mock.calls[0] as [string, string[]];
     expect(cmd).toBe("sandesh");
-    expect(args).toEqual(["--project", "X", "addressbook"]);
+    // CR-SAN-048 §S2: every invocation leads with the `--format toon` global option.
+    expect(args).toEqual(["--format", "toon", "--project", "X", "addressbook"]);
   });
 });
 
@@ -498,7 +507,8 @@ describe("AC4 — sandesh_setup argv", () => {
 
     const [cmd, args] = execMock.mock.calls[0] as [string, string[]];
     expect(cmd).toBe("sandesh");
-    expect(args).toEqual(["--project", "MyProj", "setup"]);
+    // CR-SAN-048 §S2: every invocation leads with the `--format toon` global option.
+    expect(args).toEqual(["--format", "toon", "--project", "MyProj", "setup"]);
   });
 });
 

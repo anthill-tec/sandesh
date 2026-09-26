@@ -22,6 +22,7 @@ import type {
   SessionShutdownEvent,
   SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
+import { decodeEnvelope } from "./toon";
 
 // ---------------------------------------------------------------------------
 // Native wake loop (CR-SAN-014 C0) — backoff seam
@@ -221,6 +222,22 @@ const projectIdParam = Type.Optional(
 );
 
 /**
+ * AXI knob fragments (CR-SAN-048 §S2): `fields` → `--fields a,b,c` (comma-joined),
+ * `full` → `--full` (only when true). Omitted → no flag.
+ */
+const fieldsParam = Type.Optional(
+  Type.Array(Type.String(), {
+    description: "Select the columns returned (maps to --fields, comma-joined).",
+  }),
+);
+
+const fullParam = Type.Optional(
+  Type.Boolean({
+    description: "When true, include complete message bodies (maps to --full).",
+  }),
+);
+
+/**
  * Shared inbox/fetch filter fragment (CR-SAN-032 §S2). Six optional filters
  * mapping to the CLI's `--from --from-project --kind --since --until --subject`
  * flags; each is emitted only when its param is provided (omit-at-default).
@@ -288,11 +305,32 @@ function pushMessageFilters(args: string[], params: MessageFilterParams): void {
   if (params.subject_like !== undefined) args.push("--subject", params.subject_like);
 }
 
+/** Append `--fields a,b,c` when the AXI `fields` knob is provided (CR-SAN-048 §S2). */
+function pushFields(args: string[], fields?: string[]): void {
+  if (fields !== undefined) args.push("--fields", fields.join(","));
+}
+
+/** True when `stdout` decodes to an AXI envelope (CR-SAN-048 §S2 errors-as-results). */
+function isEnvelope(stdout: string): boolean {
+  try {
+    decodeEnvelope(stdout);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Shell out to the `sandesh` CLI and map the result to an AgentToolResult:
- *   - exit 0   → success result carrying stdout,
- *   - non-zero → throw Error(verb + exit code + stderr); Pi catches it and
- *     sets isError on the tool result.
+ * Shell out to the `sandesh` CLI (always with the `--format toon` global
+ * option ahead of the verb — CR-SAN-048 §S2) and map the result to an
+ * AgentToolResult:
+ *   - exit 0   → the AXI envelope on stdout, passed through untouched,
+ *   - non-zero whose stdout decodes to an envelope → RETURNED as the result
+ *     (errors are results: `ok:false` + `error` + `help[]`, usage errors, the
+ *     unregister `tombstoned` disposition on exit 3 — CR-SAN-019 §S1 — are all
+ *     envelopes the agent reads, not failures),
+ *   - non-zero with undecodable/empty stdout (CLI missing, crash) → throw
+ *     Error(verb + exit code + stderr); Pi catches it and sets isError.
  */
 async function runSandesh(
   pi: ExtensionAPI,
@@ -300,16 +338,9 @@ async function runSandesh(
   args: string[],
   signal?: AbortSignal,
 ): Promise<AgentToolResult<undefined>> {
-  const [cmd, resolvedArgs] = resolveSandesh(args);
+  const [cmd, resolvedArgs] = resolveSandesh(["--format", "toon", ...args]);
   const r = await pi.exec(cmd, resolvedArgs, { signal });
-  // Tombstone-aware unregister (CR-SAN-019 §S1): unregister exit 3 means the
-  // address's watcher was tombstoned (cooperative eviction) — a successful
-  // disposition, not a failure. Scoped to unregister; every other verb's
-  // exit 3 still throws via the generic guard below.
-  if (verb === "unregister" && r.code === 3) {
-    return { content: [{ type: "text", text: r.stdout || r.stderr }], details: undefined };
-  }
-  if (r.code !== 0) {
+  if (r.code !== 0 && !isEnvelope(r.stdout)) {
     throw new Error(`sandesh ${verb} failed (exit ${r.code}): ${r.stderr}`);
   }
   return { content: [{ type: "text", text: r.stdout }], details: undefined };
@@ -337,6 +368,7 @@ interface UnregisterParams {
 }
 
 interface AddressbookParams {
+  fields?: string[];
   project_id?: string;
 }
 
@@ -371,17 +403,22 @@ interface MessageFilterParams {
 interface InboxParams extends MessageFilterParams {
   recipient: string;
   unread_only?: boolean;
+  fields?: string[];
+  limit?: number;
   project_id?: string;
 }
 
 interface FetchParams extends MessageFilterParams {
   recipient: string;
   mark?: boolean;
+  full?: boolean;
   project_id?: string;
 }
 
 interface ThreadParams {
   msg_id: number;
+  fields?: string[];
+  full?: boolean;
   project_id?: string;
 }
 
@@ -492,14 +529,18 @@ export default function registerExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "sandesh_addressbook",
     label: "Sandesh: Addressbook",
-    description: "List the active addresses registered in the project's addressbook.",
+    description:
+      "List the active addresses registered in the project's addressbook, with who is listening. " +
+      "Use fields to select the columns returned.",
     promptSnippet:
       "List all participants and who is currently listening (live notifier).",
     parameters: Type.Object({
+      fields: fieldsParam,
       project_id: projectIdParam,
     }),
     execute: async (_callId, params: AddressbookParams, signal) => {
       const args = [...projectPrefix(params.project_id), "addressbook"];
+      pushFields(args, params.fields);
       return runSandesh(pi, "addressbook", args, signal);
     },
   });
@@ -590,9 +631,9 @@ export default function registerExtension(pi: ExtensionAPI): void {
     name: "sandesh_inbox",
     label: "Sandesh: Inbox",
     description:
-      "List messages addressed to a recipient. By default shows unread only; set unread_only=false to include everything. " +
-      "Optional filters narrow the list by sender, kind, time window, or subject; sender_project is the cross-project " +
-      "proxy-stream filter (only messages whose sender belongs to that project).",
+      "List messages addressed to a recipient (unread only by default; unread_only=false shows all). " +
+      "Filters: sender, kind, since/until, subject, or sender_project (cross-project proxy stream). " +
+      "fields selects the columns returned; limit caps the number of messages.",
     promptSnippet:
       "List an address's messages without consuming them (triage; does not mark read). " +
       "Filter by sender, kind, time, subject, or sender_project (the cross-project proxy stream).",
@@ -604,12 +645,21 @@ export default function registerExtension(pi: ExtensionAPI): void {
         }),
       ),
       ...messageFilterParams,
+      fields: fieldsParam,
+      limit: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          description: "Max number of messages to list (maps to --limit).",
+        }),
+      ),
       project_id: projectIdParam,
     }),
     execute: async (_callId, params: InboxParams, signal) => {
       const args = [...projectPrefix(params.project_id), "inbox", "--to", params.recipient];
       if (params.unread_only === false) args.push("--all");
       pushMessageFilters(args, params);
+      pushFields(args, params.fields);
+      if (params.limit !== undefined) args.push("--limit", String(params.limit));
       return runSandesh(pi, "inbox", args, signal);
     },
   });
@@ -619,9 +669,9 @@ export default function registerExtension(pi: ExtensionAPI): void {
     name: "sandesh_fetch",
     label: "Sandesh: Fetch",
     description:
-      "Fetch the messages addressed to a recipient, marking them read. Set mark=false to peek without marking. " +
-      "Optional filters narrow the fetch by sender, kind, time window, or subject; sender_project is the " +
-      "cross-project proxy-stream filter (only messages whose sender belongs to that project).",
+      "Fetch the messages addressed to a recipient, marking them read (mark=false peeks without marking). " +
+      "Filters: sender, kind, since/until, subject, or sender_project (cross-project proxy stream). " +
+      "full=true includes complete message bodies.",
     promptSnippet:
       "Read an address's unread messages (consolidates to+cc, marks read) — call after notify wakes you. " +
       "Filter by sender, kind, time, subject, or sender_project (the cross-project proxy stream).",
@@ -637,12 +687,14 @@ export default function registerExtension(pi: ExtensionAPI): void {
         }),
       ),
       ...messageFilterParams,
+      full: fullParam,
       project_id: projectIdParam,
     }),
     execute: async (_callId, params: FetchParams, signal) => {
       const args = [...projectPrefix(params.project_id), "fetch", "--to", params.recipient];
       if (params.mark === false) args.push("--peek");
       pushMessageFilters(args, params);
+      if (params.full === true) args.push("--full");
       return runSandesh(pi, "fetch", args, signal);
     },
   });
@@ -651,15 +703,21 @@ export default function registerExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "sandesh_thread",
     label: "Sandesh: Thread",
-    description: "Walk the reply chain of a message, showing the full conversation thread.",
+    description:
+      "Walk the reply chain of a message, showing the full conversation thread. " +
+      "fields selects the columns returned; full=true includes complete message bodies.",
     promptSnippet:
       "Print a message's full reply chain (root → leaf) to reconstruct a conversation.",
     parameters: Type.Object({
       msg_id: Type.Number({ description: "Id of a message in the thread to walk." }),
+      fields: fieldsParam,
+      full: fullParam,
       project_id: projectIdParam,
     }),
     execute: async (_callId, params: ThreadParams, signal) => {
       const args = [...projectPrefix(params.project_id), "thread", "--id", String(params.msg_id)];
+      pushFields(args, params.fields);
+      if (params.full === true) args.push("--full");
       return runSandesh(pi, "thread", args, signal);
     },
   });

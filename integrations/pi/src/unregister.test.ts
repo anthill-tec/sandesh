@@ -1,28 +1,31 @@
 /**
- * CR-SAN-019 C1 — RED: tombstone-aware unregister (§S1, AC1–AC4)
+ * CR-SAN-019 C1 — tombstone-aware unregister (§S1, AC1–AC4), re-based on
+ * CR-SAN-048 §S2 (errors-as-results over the `--format toon` envelope).
  *
- * AC1 — unregister with r.code === 3 returns a SUCCESS result (not thrown)
- *        whose content[0].text contains the tombstone message.
- * AC2 — unregister with r.code === 1 (any non-0/3) still throws an Error
- *        whose message carries verb + exit code + stderr.
- * AC3 — the exit-3 special-case is scoped to unregister: another verb (send)
- *        returning r.code === 3 still throws.
+ * AC1 — unregister with r.code === 3 whose stdout is an `ok:true` envelope
+ *        carrying `result: tombstoned` RESOLVES with that envelope text
+ *        byte-for-byte (a ≥0.4.0 CLI always emits an envelope). An EMPTY
+ *        stdout at exit 3 is undecodable and therefore THROWS
+ *        `sandesh unregister failed (exit 3)` (CR-SAN-048 AC3).
+ * AC2 — unregister with r.code === 1 (any non-0/3) and no envelope on stdout
+ *        still throws an Error whose message carries verb + exit code + stderr.
+ * AC3 — a non-envelope exit 3 on another verb (send/register) still throws:
+ *        the resolve path is keyed on a decodable envelope, never on the verb.
  * AC4 — unregister with r.code === 0 returns the normal success result.
  *
- * These tests FAIL at RED because runSandesh currently throws on ALL non-zero
- * exits (index.ts:140-141), so AC1 fails (it throws instead of returning a
- * success result for code 3), and AC3 requires the code-3 throw to remain
- * scoped — no change yet means AC3 would also fail on the wrong reason once
- * the AC1 path is present.  The RED state is: AC1 rejects.toThrow (not
- * resolves), and the AC3 verify-throw still holds today only because the
- * scoping hasn't been written yet.
+ * History: at CR-SAN-019 RED, runSandesh threw on ALL non-zero exits and the
+ * fixtures were plain text; CR-SAN-048 replaced the unregister/exit-3
+ * special case with the generic "non-zero + decodable envelope → result"
+ * rule, so the AC1 fixtures are now real TOON envelopes.
  *
  * NOTE: AC5 (real-binary smoke test) is §S2 — a separate Cycle 2 dispatch.
  */
 
 import { test, expect, describe, mock } from "bun:test";
 import type { ExtensionAPI, ToolDefinition, ExecResult } from "@earendil-works/pi-coding-agent";
+import { encode } from "@toon-format/toon";
 import registerExtension from "./index";
+import { decodeEnvelope } from "./toon";
 
 // ---------------------------------------------------------------------------
 // Helpers (mirrors execute.test.ts pattern exactly)
@@ -69,12 +72,24 @@ function setup(execResult?: ExecResult) {
 }
 
 // ---------------------------------------------------------------------------
-// AC1 — unregister exit 3 → success result carrying tombstone message
+// AC1 — unregister exit 3 → success result carrying the tombstoned envelope
 // ---------------------------------------------------------------------------
 
 describe("AC1 — sandesh_unregister: exit 3 returns success result (tombstone)", () => {
-  const tombstoneMsg =
-    "tombstone set on Track 1 - Demo (notifier pid 12345). It stops within one poll; re-run once `addressbook` shows it offline.";
+  // CR-SAN-048 §S2: the CLI's `--format toon` envelope for the tombstoned
+  // disposition (PRD-axi-toon.md §4.1) — a real, decodable TOON fixture.
+  const tombstoneMsg = encode({
+    axi: {
+      verb: "unregister",
+      ok: true,
+      address: "Track 1 - Demo",
+      project: "Demo",
+      result: "tombstoned",
+      context: { project: "Demo", address: "Track 1 - Demo" },
+      help: ["sandesh addressbook"],
+      warnings: [],
+    },
+  });
 
   test("execute resolves (does not reject) when pi.exec returns code 3", async () => {
     const { getTool } = setup({
@@ -85,8 +100,7 @@ describe("AC1 — sandesh_unregister: exit 3 returns success result (tombstone)"
     });
     const tool = getTool("sandesh_unregister");
 
-    // Must resolve, not reject — if the current throw-on-any-nonzero is in
-    // place this expectation fails, which is the valid RED.
+    // Must resolve, not reject — the envelope on stdout is the result.
     const result = await callExecute(tool, {
       address: "Track 1 - Demo",
       project_id: "Demo",
@@ -95,7 +109,7 @@ describe("AC1 — sandesh_unregister: exit 3 returns success result (tombstone)"
     expect(result).toBeDefined();
   });
 
-  test("result content[0].text contains the tombstone message when code is 3", async () => {
+  test("result content[0].text is the tombstoned envelope when code is 3", async () => {
     const { getTool } = setup({
       stdout: tombstoneMsg,
       stderr: "",
@@ -110,10 +124,13 @@ describe("AC1 — sandesh_unregister: exit 3 returns success result (tombstone)"
     });
 
     expect(result.content[0].type).toBe("text");
-    expect((result.content[0] as { type: "text"; text: string }).text).toContain("tombstone set");
+    const env = decodeEnvelope((result.content[0] as { type: "text"; text: string }).text);
+    expect(env.verb).toBe("unregister");
+    expect(env.ok).toBe(true);
+    expect(env.fields.result).toBe("tombstoned");
   });
 
-  test("result content[0].text carries the full tombstone message from stdout", async () => {
+  test("result content[0].text carries the full envelope from stdout byte-for-byte", async () => {
     const { getTool } = setup({
       stdout: tombstoneMsg,
       stderr: "",
@@ -127,11 +144,10 @@ describe("AC1 — sandesh_unregister: exit 3 returns success result (tombstone)"
       project_id: "Demo",
     });
 
-    expect((result.content[0] as { type: "text"; text: string }).text).toContain("re-run once");
-    expect((result.content[0] as { type: "text"; text: string }).text).toContain("addressbook");
+    expect((result.content[0] as { type: "text"; text: string }).text).toBe(tombstoneMsg);
   });
 
-  test("falls back to stderr when stdout is empty on code 3", async () => {
+  test("empty stdout at exit 3 throws sandesh unregister failed (exit 3) — no stderr fallback (CR-SAN-048 AC3)", async () => {
     const { getTool } = setup({
       stdout: "",
       stderr: "tombstone set on Track 1 - Demo (notifier pid 12345). It stops within one poll; re-run once `addressbook` shows it offline.",
@@ -140,13 +156,14 @@ describe("AC1 — sandesh_unregister: exit 3 returns success result (tombstone)"
     });
     const tool = getTool("sandesh_unregister");
 
-    const result = await callExecute(tool, {
-      address: "Track 1 - Demo",
-      project_id: "Demo",
-    });
-
-    // Result must still be a success containing some tombstone text (from stderr fallback)
-    expect((result.content[0] as { type: "text"; text: string }).text).toContain("tombstone set");
+    // An undecodable (empty) stdout is the only thing that throws now; a
+    // ≥0.4.0 CLI always emits an envelope, so there is no stderr fallback.
+    await expect(
+      callExecute(tool, {
+        address: "Track 1 - Demo",
+        project_id: "Demo",
+      }),
+    ).rejects.toThrow(/sandesh unregister failed \(exit 3\)/);
   });
 });
 
