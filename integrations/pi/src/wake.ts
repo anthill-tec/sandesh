@@ -110,6 +110,15 @@ export class WakeSupervisor {
     return { already: false, status: snapshot(entry) };
   }
 
+  /**
+   * Stop one watcher (or all when `address` is omitted): mark the entry
+   * stopped and abort its AbortSignal. The SIGTERM → SIGKILL escalation is
+   * delegated to `pi.exec`'s AbortSignal handling (Pi's `execCommand` sends
+   * SIGTERM on abort and force-kills if the child is still alive after its
+   * grace period); the supervisor only aborts the signal — there is no timer
+   * here. The `stopped`/generation guards make the child's eventual exit a
+   * no-op in `onExit`, so a stopped watcher is never relaunched.
+   */
   stop(address?: string): { stopped: number } {
     let stopped = 0;
     for (const entry of this.entries.values()) {

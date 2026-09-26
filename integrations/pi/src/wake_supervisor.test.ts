@@ -405,6 +405,32 @@ describe("AC6 — terminal exits stop the loop", () => {
     expect(execCalls.length).toBe(1); // no relaunch
     expect(sup.status()[0].running).toBe(false);
   });
+
+  test("a rejected exec promise (spawn failure) is handled as an undecodable exit 1 — one error notify, no relaunch, no message (AC7b)", async () => {
+    // wake.ts maps the rejection to {code:1, stdout:"", stderr:String(err)};
+    // the empty stdout then decodes as "no envelope", so the notify carries
+    // both the code and that reason (the rejection text is not surfaced).
+    let execCalls = 0;
+    const { deps, notifyMock, sendUserMessageMock } = makeDeps({
+      exec: (_cmd: string, _args: string[], _opts: { signal: AbortSignal }) => {
+        execCalls += 1;
+        return Promise.reject(new Error("spawn failed"));
+      },
+    });
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+    await flush();
+
+    expect(notifyMock.mock.calls.length).toBe(1);
+    const [text, level] = notifyMock.mock.calls[0] as [string, string];
+    expect(level).toBe("error");
+    expect(text).toContain("exit 1");
+    expect(text).toContain("no envelope");
+    expect(sendUserMessageMock.mock.calls.length).toBe(0);
+    expect(execCalls).toBe(1); // no relaunch
+    expect(sup.status()[0].running).toBe(false);
+    expect(sup.status()[0].lastExit).toBe(1);
+  });
 });
 
 // ─── AC7 — one loop per address, concurrency, stop/status ──────────────────

@@ -1,45 +1,53 @@
 /**
- * CR-SAN-048 §S2b — RED: ambient context injection at session_start
- * (PRD-axi-toon.md §4.6 "Ambient context" P7, AC3b).
+ * CR-SAN-048 §S2b — ambient context injection at session_start
+ * (PRD-axi-toon.md §4.0 P7 (amended), AC3b (amended)).
  *
  * On session_start, when BOTH `$SANDESH_ADDRESS` and `$SANDESH_PROJECT` are
  * set, the extension runs the home view once (`sandesh --format toon
- * status`) and injects it via `pi.sendMessage({customType: "sandesh-status",
- * content: <envelope text>, display: true}, {triggerTurn: false})` — a
- * context message, not a user turn (≤6 lines). Nothing is injected when
- * either var is unset, and a probe failure never breaks session start
- * (existing guard).
+ * status`), strips the `bin:` and `description:` lines, and injects the rest
+ * via `pi.sendMessage({customType: "sandesh-status", content: <envelope
+ * text>, display: true}, {triggerTurn: false})` — a context message, not a
+ * user turn (≤ 12 lines incl. `help[2]`). Nothing is injected when either
+ * var is unset, and a probe failure never breaks session start (existing
+ * guard).
  *
- * RED reason: today's session_start handler never reads or calls
- * `pi.sendMessage` at all — it only probes `--version`/`init --check` and
- * (conditionally) starts the old `wakeLoop`. Every test here fails because
- * `sendMessageMock.mock.calls.length` stays 0 in the "both vars set" case,
- * where the spec requires exactly 1.
+ * Fixture: the mocked `status` stdout is ENCODED from the real CLI envelope
+ * shape (`cli._status_fields` + the axi wrapper: bin, description, project,
+ * address, listening, unread, context.project, help[2], warnings) via
+ * `@toon-format/toon` — not a hand-written text — so the "no bin/description
+ * line", "still decodes" and "≤ 12 lines" assertions run against the real
+ * shape the extension must strip (VERIFY C7 finding 2).
  *
- * Coincidental passes (documented per the axi_passthrough.test.ts precedent
- * — "a coincidental pass, not a real signal"): the three negative-outcome
- * tests ("SANDESH_ADDRESS unset", "SANDESH_PROJECT unset", "status probe
- * failure") already pass against TODAY's code, because today's code never
- * calls `pi.sendMessage` under ANY circumstance — the ambient feature does
- * not exist yet, so "sendMessage was not called" trivially holds regardless
- * of env state. These are legitimate regression guards once GREEN ships (a
- * correct GREEN that stops gating on the vars, or lets a probe failure
- * throw, would break them), but they carry no RED signal today; the file's
- * one real RED is the "both vars set" positive test.
+ * The three negative-outcome tests ("SANDESH_ADDRESS unset", "SANDESH_PROJECT
+ * unset", "status probe failure") are regression guards for the identity
+ * gating and the never-throws guard.
  */
 
 import { test, expect, describe, mock } from "bun:test";
+import { encode } from "@toon-format/toon";
 import type { ExecResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import registerExtension from "./index";
 import { decodeEnvelope } from "./toon";
 
-// ─── A minimal, hand-written ≤6-line TOON status envelope. The real CLI's
-// encoder produces compact output for the home view; this fixture stands in
-// for the mocked `pi.exec` call so the "≤6 lines" assertion is a pass-through
-// fidelity check (GREEN must not mangle/lengthen it), not an encoder test. ──
+// ─── The REAL `sandesh --format toon status` envelope shape, encoded with the
+// same TOON encoder the CLI's output is decoded by. `bin`/`description` are
+// the two lines the extension must strip before injecting. ───────────────────
 
-const STATUS_ENVELOPE_TEXT =
-  "axi:\n  verb: status\n  ok: true\n  address: Mainline - Demo\n  listening: true\n  unread: 0";
+const STATUS_ENVELOPE_TEXT = encode({
+  axi: {
+    verb: "status",
+    ok: true,
+    bin: "~/x/sandesh",
+    description: "Sandesh — SQLite-backed relay mailbox for cooperating agent sessions",
+    project: "Demo",
+    address: "Mainline - Demo",
+    listening: false,
+    unread: 1,
+    context: { project: "Demo" },
+    help: ["a", "b"],
+    warnings: [],
+  },
+});
 
 function makeFakeExec(statusResult: ExecResult) {
   const calls: Array<{ cmd: string; args: string[] }> = [];
@@ -113,7 +121,16 @@ function restoreEnv(): void {
 const fakeSessionStartEvent = { type: "session_start", reason: "startup" } as const;
 
 describe("Ambient context injection at session_start (§S2b, AC3b)", () => {
-  test("both identity vars set → exactly one sendMessage(customType:sandesh-status, display:true, {triggerTurn:false}) whose content decodes to verb:status and is ≤6 lines", async () => {
+  test("fixture sanity: the real status shape carries bin:/description: lines before stripping", () => {
+    // Guards the fixture itself — if the encoder ever inlined these keys the
+    // positive test's "no bin:/description: line" assertion would be vacuous.
+    const lines = STATUS_ENVELOPE_TEXT.split("\n");
+    expect(lines.some((l) => /^  bin: /.test(l))).toBe(true);
+    expect(lines.some((l) => /^  description: /.test(l))).toBe(true);
+    expect(decodeEnvelope(STATUS_ENVELOPE_TEXT).fields.bin).toBe("~/x/sandesh");
+  });
+
+  test("both identity vars set → exactly one sendMessage(customType:sandesh-status, display:true, {triggerTurn:false}) whose content is the status envelope minus bin:/description:, still decodes, and is ≤12 lines", async () => {
     saveEnv();
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
@@ -139,9 +156,23 @@ describe("Ambient context injection at session_start (§S2b, AC3b)", () => {
       expect(msg.display).toBe(true);
       expect(opts).toEqual({ triggerTurn: false });
 
+      // AC3b (amended): no bin:/description: line survives the strip …
+      const lines = msg.content.split("\n");
+      expect(lines.some((l) => /^\s*bin:/.test(l))).toBe(false);
+      expect(lines.some((l) => /^\s*description:/.test(l))).toBe(false);
+      // … it is still a valid TOON envelope carrying the home fields …
       const env = decodeEnvelope(msg.content);
       expect(env.verb).toBe("status");
-      expect(msg.content.split("\n").length).toBeLessThanOrEqual(6);
+      expect(env.ok).toBe(true);
+      expect(env.fields.address).toBe("Mainline - Demo");
+      expect(env.fields.listening).toBe(false);
+      expect(env.fields.unread).toBe(1);
+      expect(env.fields.bin).toBeUndefined();
+      expect(env.fields.description).toBeUndefined();
+      expect(env.help).toEqual(["a", "b"]);
+      expect(env.context.project).toBe("Demo");
+      // … and fits the ≤ 12-line budget (incl. help[2]).
+      expect(lines.length).toBeLessThanOrEqual(12);
     } finally {
       restoreEnv();
     }

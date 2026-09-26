@@ -49,7 +49,7 @@ de-duplication, no timeout cap, and no start/status/stop surface (`integrations/
   <A>: <ids>. Call sandesh_fetch for it.", {deliverAs:"followUp"})`, remember ids, relaunch now;
   **2** → relaunch silently, push timestamp; third within 60 s ⇒ `ctx.ui.notify(warning)` once per
   burst; **5** ⇒ stop silently ("already running"); **1/3/4/signal** ⇒ stop + `ctx.ui.notify` with
-  code + `error`. `stop(address?)` aborts (SIGTERM; SIGKILL after 2 s) and clears; no address = all.
+  code + `error`. `stop(address?)` aborts the child's AbortSignal (Pi's `exec` sends SIGTERM, then SIGKILL after its 5 s grace) and clears; no address = all.
   `status()` returns the table. Clock and sleep injectable (`__setWakeClock`, `__setWakeSleepFn`).
 - **§S4 — tools + command.** `sandesh_notify_start(address?, project?)` (defaults from
   `$SANDESH_ADDRESS`/`$SANDESH_PROJECT`; error naming both if unresolved), `sandesh_notify_status()`,

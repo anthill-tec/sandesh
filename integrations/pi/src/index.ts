@@ -390,6 +390,18 @@ function envelopeText(verb: string, fields: Record<string, unknown>, context: En
   return encode({ axi: { verb, ok: true, ...fields, context: ctx, warnings: [] } });
 }
 
+/**
+ * The `context.project` for the notify_status/notify_stop envelopes (PRD §4.1:
+ * always present when known): the watcher's project — the one addressed when
+ * given, else the first known watcher — falling back to `$SANDESH_PROJECT`.
+ * Returns undefined only when neither exists (the key is then omitted).
+ */
+function notifyContextProject(sup: WakeSupervisor, address?: string): string | undefined {
+  const watchers = sup.status();
+  const watcher = address !== undefined ? watchers.find((w) => w.address === address) : watchers[0];
+  return watcher?.project ?? process.env.SANDESH_PROJECT;
+}
+
 /** The default `watchers[]` row: `{address, running, lastExit}`. */
 function watcherRow(w: WatcherStatus): { address: string; running: boolean; lastExit: number | null } {
   return { address: w.address, running: w.running, lastExit: w.lastExit };
@@ -427,6 +439,20 @@ function withWatcherLine(text: string, state: "running" | "stopped"): string {
   }
   lines.splice(at, 0, `  watcher: ${state}`);
   return lines.join("\n");
+}
+
+/**
+ * The ambient block (S2b / PRD 4.0 P7): the status envelope minus its
+ * `  bin:` and `  description:` lines. Both are top-level scalars of the
+ * `axi:` block (one line each), so dropping them leaves a valid TOON document
+ * (at most 12 lines incl. `help[2]`). Only the exactly-2-space-indented keys
+ * are removed so nested keys are never touched.
+ */
+function ambientBlock(text: string): string {
+  return text
+    .split("\n")
+    .filter((l) => !/^  (bin|description): /.test(l))
+    .join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -970,7 +996,13 @@ export default function registerExtension(pi: ExtensionAPI): void {
     parameters: Type.Object({}),
     execute: async (_callId, _params: Record<string, never>, _signal, _onUpdate, ctx) => {
       latestUi = ctx.ui;
-      return textResult(envelopeText("notify_status", { watchers: sup.status().map(watcherRow) }));
+      return textResult(
+        envelopeText(
+          "notify_status",
+          { watchers: sup.status().map(watcherRow) },
+          { project: notifyContextProject(sup) },
+        ),
+      );
     },
   });
 
@@ -985,8 +1017,11 @@ export default function registerExtension(pi: ExtensionAPI): void {
     }),
     execute: async (_callId, params: NotifyStopParams, _signal, _onUpdate, ctx) => {
       latestUi = ctx.ui;
+      // Resolve the project before stop() so the entry's project is read while
+      // it is still the addressed watcher (stop keeps entries; this is just order).
+      const project = notifyContextProject(sup, params.address);
       const { stopped } = sup.stop(params.address);
-      return textResult(envelopeText("notify_stop", { stopped }, { address: params.address }));
+      return textResult(envelopeText("notify_stop", { stopped }, { project, address: params.address }));
     },
   });
 
@@ -1055,14 +1090,15 @@ export default function registerExtension(pi: ExtensionAPI): void {
     const identified = Boolean(self && project);
 
     // Ambient context (§S2b): with a known identity, inject the home view once
-    // as a context message (not a user turn). A failed/undecodable probe or an
-    // ok:false envelope injects nothing and never breaks session start.
+    // as a context message (not a user turn), minus the bin/description lines.
+    // A failed/undecodable probe or an ok:false envelope injects nothing and
+    // never breaks session start.
     if (identified) {
       try {
         const home = await runSandeshText(pi, "status", ["status"]);
         if (decodeEnvelope(home).ok) {
           pi.sendMessage(
-            { customType: "sandesh-status", content: home, display: true, details: undefined },
+            { customType: "sandesh-status", content: ambientBlock(home), display: true, details: undefined },
             { triggerTurn: false },
           );
         }

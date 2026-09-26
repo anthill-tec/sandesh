@@ -337,6 +337,7 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
     const env = decodeEnvelope(text(result));
 
     expect(env.verb).toBe("notify_status");
+    expect(env.context.project).toBe("Demo"); // AC7b: context.project always (watcher's project)
     const watchers = env.fields.watchers as Array<{ address: string; running: boolean; lastExit: number | null }>;
     expect(Array.isArray(watchers)).toBe(true);
     expect(watchers.length).toBe(1);
@@ -357,6 +358,7 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
     const result = await callExecute(stopTool, { address: "Mainline - Demo" }, fakeCtx);
     const env = decodeEnvelope(text(result));
     expect(env.verb).toBe("notify_stop");
+    expect(env.context.project).toBe("Demo"); // AC7b: context.project always (watcher's project)
     expect(env.fields.stopped).toBe(1);
     expect(notifyDeferreds[0].signal?.aborted).toBe(true);
   });
@@ -371,6 +373,23 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
     const env = decodeEnvelope(text(result));
     expect(env.ok).toBe(true);
     expect(env.fields.stopped).toBe(0);
+  });
+
+  test("notify_status / notify_stop with no watcher fall back to $SANDESH_PROJECT for context.project (AC7b)", async () => {
+    saveEnv();
+    process.env.SANDESH_PROJECT = "Demo";
+    try {
+      const { fakePi, capturedTools } = makeFakePi();
+      registerExtension(fakePi);
+      const { fakeCtx } = makeFakeCtx();
+
+      const status = decodeEnvelope(text(await callExecute(getTool(capturedTools, "sandesh_notify_status"), {}, fakeCtx)));
+      expect(status.context.project).toBe("Demo");
+      const stop = decodeEnvelope(text(await callExecute(getTool(capturedTools, "sandesh_notify_stop"), {}, fakeCtx)));
+      expect(stop.context.project).toBe("Demo");
+    } finally {
+      restoreEnv();
+    }
   });
 
   test("registers a /sandesh-watcher command whose status/stop subcommands both call ctx.ui.notify", async () => {
