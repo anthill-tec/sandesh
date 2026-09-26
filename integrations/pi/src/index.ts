@@ -49,10 +49,11 @@ let latestUi: ExtensionContext["ui"] | undefined;
 let supervisor: WakeSupervisor | undefined;
 
 /**
- * Test seam: stop every watcher of the current supervisor and reset the
- * resolved binary choice so a fresh `session_start` re-probes.
+ * Test seam (also called at the top of {@link registerExtension}): stop every
+ * watcher of the current supervisor and reset the resolved binary choice so a
+ * fresh `session_start` re-probes.
  */
-export function __resetWakeState(): void {
+export function resetExtensionState(): void {
   supervisor?.stop();
   resetBinaryResolution();
 }
@@ -134,7 +135,7 @@ const UVX_PREFIX: readonly string[] = ["--from", "sandesh-relay[migrate]", "sand
 let useUvx = false;
 
 /**
- * Test seam companion to {@link __resetWakeState}: reset the resolved binary
+ * Test seam companion to {@link resetExtensionState}: reset the resolved binary
  * choice so a fresh session_start re-probes from the local-binary default.
  */
 function resetBinaryResolution(): void {
@@ -402,9 +403,56 @@ function notifyContextProject(sup: WakeSupervisor, address?: string): string | u
   return watcher?.project ?? process.env.SANDESH_PROJECT;
 }
 
-/** The default `watchers[]` row: `{address, running, lastExit}`. */
-function watcherRow(w: WatcherStatus): { address: string; running: boolean; lastExit: number | null } {
-  return { address: w.address, running: w.running, lastExit: w.lastExit };
+/**
+ * The `WatcherStatus` columns selectable via the notify tools' `fields` knob
+ * (CR-SAN-050 §S5), in the canonical order; the default row keeps the
+ * three-column shape.
+ */
+const WATCHER_FIELDS = [
+  "address",
+  "project",
+  "running",
+  "pid",
+  "startedAt",
+  "lastExit",
+  "lastIds",
+  "timeoutExits",
+] as const;
+type WatcherField = (typeof WATCHER_FIELDS)[number];
+const DEFAULT_WATCHER_FIELDS: readonly WatcherField[] = ["address", "running", "lastExit"];
+
+const watcherFieldsParam = Type.Optional(
+  Type.Array(Type.String(), {
+    description:
+      `Select the watcher columns returned, in the given order (valid: ${WATCHER_FIELDS.join(", ")}; ` +
+      `default: ${DEFAULT_WATCHER_FIELDS.join(", ")}).`,
+  }),
+);
+
+function isWatcherField(name: string): name is WatcherField {
+  return (WATCHER_FIELDS as readonly string[]).includes(name);
+}
+
+/**
+ * Resolve the `fields` knob to the column list (caller's order; the default
+ * when omitted), or the error text naming the unknown name(s) and the valid set.
+ */
+function resolveWatcherFields(
+  fields: string[] | undefined,
+): { ok: true; fields: readonly WatcherField[] } | { ok: false; error: string } {
+  if (fields === undefined) return { ok: true, fields: DEFAULT_WATCHER_FIELDS };
+  const unknown = fields.filter((f) => !isWatcherField(f));
+  if (unknown.length > 0) {
+    return { ok: false, error: `unknown field(s) ${unknown.join(", ")} — valid: ${WATCHER_FIELDS.join(", ")}` };
+  }
+  return { ok: true, fields: fields.filter(isWatcherField) };
+}
+
+/** One `watchers[]` row with the chosen columns; an absent `pid` renders `null`. */
+function watcherRow(w: WatcherStatus, fields: readonly WatcherField[]): Record<string, unknown> {
+  const row: Record<string, unknown> = {};
+  for (const f of fields) row[f] = w[f] ?? null;
+  return row;
 }
 
 /** One human line per watcher (the `/sandesh-watcher status` view). */
@@ -555,6 +603,11 @@ interface SearchParams {
 interface NotifyStartParams {
   address?: string;
   project?: string;
+  fields?: string[];
+}
+
+interface NotifyStatusParams {
+  fields?: string[];
 }
 
 interface NotifyStopParams {
@@ -567,7 +620,7 @@ interface NotifyStopParams {
 
 export default function registerExtension(pi: ExtensionAPI): void {
   // Each registration owns a fresh supervisor and re-probes the binary.
-  __resetWakeState();
+  resetExtensionState();
   const sup = makeSupervisor(pi);
   supervisor = sup;
 
@@ -968,9 +1021,14 @@ export default function registerExtension(pi: ExtensionAPI): void {
       project: Type.Optional(
         Type.String({ description: "Project id. Falls back to $SANDESH_PROJECT when omitted." }),
       ),
+      fields: watcherFieldsParam,
     }),
     execute: async (_callId, params: NotifyStartParams, _signal, _onUpdate, ctx) => {
       latestUi = ctx.ui;
+      const fields = resolveWatcherFields(params.fields);
+      if (!fields.ok) {
+        return textResult(envelopeText("notify_start", { ok: false, error: fields.error }));
+      }
       const address = params.address ?? process.env.SANDESH_ADDRESS;
       const project = params.project ?? process.env.SANDESH_PROJECT;
       if (!address || !project) {
@@ -980,7 +1038,7 @@ export default function registerExtension(pi: ExtensionAPI): void {
       return textResult(
         envelopeText(
           "notify_start",
-          { already: r.already, watchers: [watcherRow(r.status)] },
+          { already: r.already, watchers: sup.status().map((w) => watcherRow(w, fields.fields)) },
           { project, address },
         ),
       );
@@ -991,15 +1049,21 @@ export default function registerExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "sandesh_notify_status",
     label: "Sandesh: Notify Status",
-    description: "List the in-session wake watchers: address, running, lastExit.",
+    description:
+      "List the in-session wake watchers: address, running, lastExit by default; " +
+      "`fields` selects any of address, project, running, pid, startedAt, lastExit, lastIds, timeoutExits.",
     promptSnippet: "List your wake watchers and whether each is running.",
-    parameters: Type.Object({}),
-    execute: async (_callId, _params: Record<string, never>, _signal, _onUpdate, ctx) => {
+    parameters: Type.Object({ fields: watcherFieldsParam }),
+    execute: async (_callId, params: NotifyStatusParams, _signal, _onUpdate, ctx) => {
       latestUi = ctx.ui;
+      const fields = resolveWatcherFields(params.fields);
+      if (!fields.ok) {
+        return textResult(envelopeText("notify_status", { ok: false, error: fields.error }));
+      }
       return textResult(
         envelopeText(
           "notify_status",
-          { watchers: sup.status().map(watcherRow) },
+          { watchers: sup.status().map((w) => watcherRow(w, fields.fields)) },
           { project: notifyContextProject(sup) },
         ),
       );

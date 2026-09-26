@@ -3,7 +3,7 @@
  * (PRD-axi-toon.md §4.7 "Arming (D4)"; AC8, AC9).
  *
  * REWRITE (§S5/AC9): this file previously tested the OLD module-level
- * `wakeLoop` lifecycle (`__resetWakeState`, AbortController threading,
+ * `wakeLoop` lifecycle (`resetExtensionState`, AbortController threading,
  * `MISSING_ENV_NOTICE` on any missing env var, single-loop guard). Cycle 216
  * replaces all of that: `session_start` no longer auto-arms by default —
  * arming now requires `SANDESH_AUTOSTART=1` (with both identity vars) and
