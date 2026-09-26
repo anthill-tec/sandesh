@@ -27,19 +27,14 @@ never leak in by accident), never in-process, and this test module itself
 never writes to the real store (test 8's real-store check opens it
 STRICTLY read-only via a `file:...?mode=ro` URI).
 
-DESIGN NOTE (deliberate, non-silent deviation from the dispatch prompt's
-parenthetical for item 6): the prompt says "import tests._store_guard at the
-top of this test file too". Doing that literally — as an unconditional
-top-level `import tests._store_guard` — would make the ENTIRE module fail to
-import while `tests/_store_guard.py` doesn't exist yet (RED today), which
-would prevent unittest from even COLLECTING the other 7 tests (a single
-module-load error, not 8 independent results) and would contradict the
-dispatch prompt's own expectation that "test 8 may pass — that's a pin".
-Instead, `tests._store_guard` is imported lazily, INSIDE each test that
-needs it (module-level for the subprocess snippets — which is fine, each
-snippet is its own throwaway interpreter; method-level for the one in-process
-test, #6) so the ModuleNotFoundError is scoped to exactly the tests that
-depend on the guard, and #8 (which needs no guard at all) is unaffected.
+DESIGN NOTE: during RED the guard was imported lazily (inside test #6) so
+the then-missing `tests/_store_guard.py` only broke the tests that depend on
+it, not module collection. GREEN (cycle 210, orchestrator-approved) moved it
+to the module top — the AC3 form every test module will use — so #6 captures
+"previous XDG_DATA_HOME" from the already-guarded env (the value `TempStore`
+must restore), never from the real-store value the guard overrides. The
+subprocess snippets still import the guard themselves — each is its own
+throwaway interpreter.
 
 Expected RED (against current code — `tests/_store_guard.py` does not exist):
   tests 1-5, 7  -> FAIL: the subprocess's `import tests._store_guard` raises
@@ -72,6 +67,8 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
+
+import tests._store_guard as guard  # noqa: E402,F401 — AC3: first import, re-points XDG_DATA_HOME to tmpfs
 
 _VENV_PYTHON = os.path.join(_REPO_ROOT, ".venv", "bin", "python")
 _SUBPROCESS_PYTHON = _VENV_PYTHON if os.path.exists(_VENV_PYTHON) else sys.executable
@@ -381,17 +378,17 @@ class TempStoreMixinLifecycleTest(unittest.TestCase):
 
     Exercised HERE, in-process, via a throwaway TestCase run through a
     private TestSuite/TestResult (never registered with THIS module's own
-    test runner) — safe because (a) the mixin never points at the real store
-    and (b) while it doesn't exist yet, the ModuleNotFoundError below fires
-    before any sandesh_db call is ever made.
+    test runner) — safe because the mixin never points at the real store, and
+    the module-level guard import above has already re-pointed XDG_DATA_HOME
+    to tmpfs, so "previous value" here means the guarded temp value.
     """
 
     def test_mixin_isolates_store_and_tears_down_completely_even_after_use(self):
+        # Captured from the already-guarded env (the module-level import ran
+        # first) — this is the value TempStore.tearDown must restore.
         prev_xdg = os.environ.get("XDG_DATA_HOME")
         captured = {}
 
-        # RED trigger: tests._store_guard does not exist yet.
-        import tests._store_guard as guard  # noqa: F401
         import sandesh.sandesh_db as sdb
 
         class _Probe(guard.TempStore, unittest.TestCase):
@@ -452,9 +449,14 @@ class Ac4bLifecycleTest(unittest.TestCase):
         self.assertEqual(data["failures"], 1)
 
         root = _local_temp_root()
+        # THIS process's own guard dir is live for the whole run by design (the
+        # module-level import created it; atexit removes it "'" asserted for the
+        # subprocess case by Ac2UnsetXdgTest); it is not a leftover of the child.
+        own_guard = os.path.realpath(guard.GUARD_TMP)
         leftover_temp = [
             p for p in glob.glob(os.path.join(root, "sandesh-*"))
             if os.path.isdir(p) and os.path.getmtime(p) >= start
+            and os.path.realpath(p) != own_guard
         ]
         self.assertEqual(
             leftover_temp, [],
