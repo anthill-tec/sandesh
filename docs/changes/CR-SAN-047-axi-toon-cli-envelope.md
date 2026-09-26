@@ -106,7 +106,7 @@ existing function); the rest is presentation (`cli.py`, `notify.py`, two new mod
   + `error: <the same message the human mode prints>` on stdout, nothing on stdout besides the
   envelope, and exits with the same code as human mode.
 - **AC8** — `notify` exit matrix (subprocess tests, `--format toon`): exit 0 → `unread[N]` lists the
-  triggering ids and `ok: true`; exit 2 (short `--timeout`) → `unread[0]:`, `ok: true`; exit 5 (dedup) →
+  triggering ids and `ok: true`; exit 2 (short `--timeout`) → `unread: []`, `ok: true`; exit 5 (dedup) →
   `ok: true`; exit 3 (tombstoned) and 4 (evicted) → `ok: false` + `error`; SIGTERM → exactly one
   envelope with `exit: 143`. All progress text is on stderr; stdout decodes as one envelope.
 - **AC9** — In `human` mode `notify` output is byte-identical to the pre-CR tree (golden, as AC3).

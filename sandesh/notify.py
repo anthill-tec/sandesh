@@ -20,6 +20,14 @@ EXIT CODES
   4  evicted (another notifier took the address over)
   5  dedup — another notifier already live for this address (did not start)
   1  usage / config error
+  128+N  terminated by signal N (SIGTERM → 143, SIGINT → 130)
+
+MACHINE MODE (CR-SAN-047 §S5): `run(..., fmt="toon"|"json")` sends every progress
+line to stderr and writes exactly ONE final AXI envelope
+`{verb:"notify", ok, exit, address, project, unread[N]}` to stdout on every exit
+path above — including the signal handlers — guarded so atexit/signal paths cannot
+double-emit. `ok` is true for 0/2/5, false for 1/3/4/signal (with `error`).
+`fmt="human"` (the default; what `main()` uses) is byte-identical to before.
 """
 
 import argparse
@@ -32,23 +40,71 @@ import sys
 import time
 import uuid
 
+from sandesh import axi
 from sandesh import sandesh_db as sdb
 
 DEFAULT_TIMEOUT_SECS = 14400  # 4h
 
+_OK_EXITS = (0, 2, 5)  # mail / timeout / dedup are normal outcomes → ok:true
 
-def run(project_id, address, timeout=DEFAULT_TIMEOUT_SECS):
-    """Block until `address` has unread 'to' mail in `project_id`. Returns an exit code."""
+
+def _say(msg, machine):
+    """One progress/outcome line: stdout in human mode, stderr in machine mode
+    (machine stdout is reserved for the single final envelope)."""
+    print(msg, file=sys.stderr if machine else sys.stdout)
+
+
+def _finish(fmt, out, project_id, address, code, unread=None, error=None, warnings=None):
+    """Write the final notify envelope for `code` to `out` (the stdout current
+    when `run()` was entered) and flush it. Human mode writes nothing. The
+    caller's `done` closure holds the once-only guard."""
+    if fmt == "human":
+        return
+    fields = {"exit": code, "address": address, "project": project_id,
+              "unread": sorted(unread or [])}
+    if error is not None:
+        fields["error"] = error
+    env = axi.Envelope("notify", code in _OK_EXITS, fields,
+                       context={"project": project_id, "address": address},
+                       warnings=warnings)
+    axi.emit(env, fmt, out)
+    out.flush()
+
+
+def run(project_id, address, timeout=DEFAULT_TIMEOUT_SECS, fmt="human"):
+    """Block until `address` has unread 'to' mail in `project_id`. Returns an exit code.
+
+    `fmt` is `human` (default) or `toon`/`json` — see MACHINE MODE above.
+    """
+    machine = fmt != "human"
+    out = sys.stdout  # captured at entry: the envelope's destination even if stdout is redirected later
+    emitted = [False]  # once-only guard shared by the return paths and the signal handlers
+
+    def say(msg):
+        _say(msg, machine)
+
+    def done(code, **kw):
+        if not emitted[0]:
+            emitted[0] = True
+            _finish(fmt, out, project_id, address, code, **kw)
+        return code
+
+    def on_signal(signum, _frame):
+        code = 128 + signum
+        done(code, error=f"terminated by {signal.Signals(signum).name} ({code})")
+        sys.exit(code)  # atexit (notifier_release) still runs after the envelope
+
     con = sdb.connect()
     try:
         sdb.validate_address(address, project_id)
     except ValueError as exc:
         sys.stderr.write(f"[notify] ERROR: {exc}\n")
-        return 1
+        return done(1, error=str(exc))
     if not sdb.is_active(con, address):
-        sys.stderr.write(f"[notify] ERROR: {address!r} is not registered in {project_id!r} — "
-                         f"`sandesh register --project {project_id} --address {address!r}` first.\n")
-        return 1
+        error = (f"{address!r} is not registered in {project_id!r} — "
+                 f"`sandesh register --project {project_id} --address {address!r}` first.")
+        sys.stderr.write(f"[notify] ERROR: {error}\n")
+        return done(1, error=error)
 
     token, pid, host = uuid.uuid4().hex, os.getpid(), socket.gethostname()
     interval = sdb.poll_interval()
@@ -66,51 +122,53 @@ def run(project_id, address, timeout=DEFAULT_TIMEOUT_SECS):
             if not sdb.is_locked_error(exc):
                 raise
             if time.monotonic() >= deadline:
-                print("[notify] timed out waiting for the DB write lock to acquire.")
-                return 2
-            print(f"[notify] DB busy ({exc}); staying up, retrying acquire in {interval}s")
+                say("[notify] timed out waiting for the DB write lock to acquire.")
+                return done(2)
+            say(f"[notify] DB busy ({exc}); staying up, retrying acquire in {interval}s")
             time.sleep(interval)
     if not ok:
-        print(f"[notify] {reason} — not starting (dedup).")
-        return 5
+        say(f"[notify] {reason} — not starting (dedup).")
+        return done(5, warnings=[reason])
 
     atexit.register(lambda: sdb.notifier_release(con, address, token))  # token-guarded
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(128 + signal.SIGTERM))
-    signal.signal(signal.SIGINT, lambda *_: sys.exit(128 + signal.SIGINT))
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
 
-    print(f"[notify] watching {address} in {project_id}  (pid {pid}, interval {interval}s, timeout {timeout}s)")
+    say(f"[notify] watching {address} in {project_id}  (pid {pid}, interval {interval}s, timeout {timeout}s)")
     polls = 0
     while True:
         try:
             state = sdb.notifier_check(con, address, token)
             if state == "tombstoned":
-                print("[notify] tombstoned — shutting down (evicted).")
-                return 3
+                error = "tombstoned — shutting down (evicted)."
+                say(f"[notify] {error}")
+                return done(3, error=error)
             if state == "evicted":
-                print(f"[notify] evicted — another notifier took over {address!r}.")
-                return 4
+                error = f"evicted — another notifier took over {address!r}."
+                say(f"[notify] {error}")
+                return done(4, error=error)
             sdb.notifier_heartbeat(con, address, token)
             ids = sdb.unread_to(con, address)
         except sqlite3.OperationalError as exc:
             if not sdb.is_locked_error(exc):
                 raise
             if time.monotonic() >= deadline:
-                print(f"[notify] {time.strftime('%H:%M:%S')} timed out (DB busy, {polls} polls).")
-                return 2
-            print(f"[notify] DB busy ({exc}); staying up, recheck in {interval}s")
+                say(f"[notify] {time.strftime('%H:%M:%S')} timed out (DB busy, {polls} polls).")
+                return done(2)
+            say(f"[notify] DB busy ({exc}); staying up, recheck in {interval}s")
             time.sleep(interval)
             continue
 
         polls += 1
         stamp = time.strftime("%H:%M:%S")
         if ids:
-            print(f"[notify] {stamp} ✉ {len(ids)} unread 'to' message(s): {ids}")
-            print(f"[notify] WAKE — fetch with: sandesh fetch --project {project_id} --to {address!r}")
-            return 0
+            say(f"[notify] {stamp} ✉ {len(ids)} unread 'to' message(s): {ids}")
+            say(f"[notify] WAKE — fetch with: sandesh fetch --project {project_id} --to {address!r}")
+            return done(0, unread=ids)
         if time.monotonic() >= deadline:
-            print(f"[notify] {stamp} timed out ({polls} polls).")
-            return 2
-        print(f"[notify] {stamp} no 'to' mail — next check in {interval}s")
+            say(f"[notify] {stamp} timed out ({polls} polls).")
+            return done(2)
+        say(f"[notify] {stamp} no 'to' mail — next check in {interval}s")
         time.sleep(interval)
 
 

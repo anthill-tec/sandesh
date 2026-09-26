@@ -73,7 +73,7 @@ Model B's own words fix the target (#1394 Q2/Q3, #1396 3a/3b) and are the wire c
 | 2 | Minimal default schemas | Lists default to 3–4 columns: `inbox` → `id,from,subject,unread`; `addressbook` → `address,listening`; `search` → `id,from,subject`; `thread` → `id,from,subject`. `--fields a,b,c` (CLI) / `fields` (tools) widens to the full column set of §4.4. Default limits cover the common case in one call (`inbox` 50, `search` 20). |
 | 3 | Content truncation | `fetch`/`thread` bodies: first 500 chars + `(truncated, N chars total)`; `--full` / `full:true` returns everything. Never omit a body; always state its size. |
 | 4 | Pre-computed aggregates | `inbox` → `unread: <n> of <total>`; `addressbook` → `listening: <n>/<m>`; `send`/`reply` → `delivered: <n>`; `fetch` → `marked_read`; `search` → `total`. The home view (§4.6) answers listening + unread in one call. |
-| 5 | Definitive empty states | An empty result is a sentence field, never a bare `key[0]:` alone: `messages: 0 unread for <addr>`, `participants: 0 registered in <project>`, `hits: 0 for "<q>"`. `ok: true` — absence is the answer. |
+| 5 | Definitive empty states | An empty result is a sentence field, never a bare `key: []` alone: `messages: 0 unread for <addr>`, `participants: 0 registered in <project>`, `hits: 0 for "<q>"`. `ok: true` — absence is the answer. |
 | 6 | Structured errors, idempotent no-ops, exit codes | `register` of an active address → `ok:true result:already`; `unregister` of an absent one → `ok:true result:absent`; `archive` of an archived project → `ok:true result:already`; `notify_start` on a running loop → `ok:true already:true`. Errors go on **stdout** as `ok:false error help[]` (exit 1 unchanged; usage errors exit 2 and name the valid flags). Unknown flags fail loud. No prompts in machine mode (`tombstone` requires `--yes`). Progress only on stderr. |
 | 7 | Ambient context | The Pi extension injects a ≤6-line dashboard at `session_start` (address, listening, unread count, `help[]`) — opt-in by the identity env being set; nothing when unset. |
 | 8 | Content first | `sandesh` with no arguments (machine mode) and the `sandesh_status` tool print the same dashboard: `bin`, one-line description, address/listening/unread, `help[]`. |
@@ -91,14 +91,14 @@ axi:
     project: <id>          # always
     address: <addr>        # where the verb acts for one
   help[N]: <next-step hints>          # optional
-  warnings[N]: <strings>              # ALWAYS present; `warnings[0]:` when clean
+  warnings[N]: <strings>              # ALWAYS present; `warnings: []` when clean
 ```
 
 - One envelope per invocation on **stdout**; human text on **stderr**; exit code unchanged.
 - Failure: `ok: false` plus flat `error: "<message>"` (the same text the human mode prints).
 - Wire rules = the official TOON spec (toonformat.dev): nested objects `key:` + 2-space
   children; primitive arrays inline `key[N]: a,b,c`; uniform-object arrays tabular
-  `key[N]{col,…}:` + one comma-joined row each; empty array `key[0]:`; bare strings only
+  `key[N]{col,…}:` + one comma-joined row each; empty array `key: []` (spec v4.1 §9.1 — the legacy `key[0]:` header MUST NOT be emitted; decoders accept both, which is why Model B's #1396 wording `warnings[0]:` still parses); bare strings only
   when safe (non-empty, not `true/false/null`, not numeric-looking, no leading/trailing
   space, none of `: " \ [ ] { } ,`, no control chars, not starting with `-` or `#`),
   otherwise JSON-quoted.
@@ -139,7 +139,7 @@ the quoting rules are where the subset would drift).
 | `fetch` | `messages[N]{id,from,to,cc,kind,subject,created,re}` + `bodies` (object keyed by id → body text, truncated per P3 unless `--full`; absent key = subject-only) + `marked_read: <n>` |
 | `send`, `reply` | `id`, `to`, `cc`, `kind`, `subject`, `delivered: <n>`; `reply` adds `re`; `help[]`: `thread --id <id>` |
 | `register`, `unregister` | `address`, `project`, `kind`, `result: registered\|already\|unregistered\|absent\|tombstoned` (P6 no-ops are `ok:true`) |
-| `notify` (final envelope) | `exit: <code>`, `address`, `project`, `unread[N]: <ids>` (`unread[0]:` unless exit 0) |
+| `notify` (final envelope) | `exit: <code>`, `address`, `project`, `unread[N]: <ids>` (`unread: []` unless exit 0) |
 | every other verb (`setup`, `thread`, `search`, `projects`, `archive`, `unarchive`, `init`, `migrate`, …) | the generic envelope (`verb`, `ok`, `context`, `warnings`) plus that verb's natural result as flat fields; exact fields are fixed in the implementing CR's spec, never invented at emit time |
 
 `context.project` on all; `context.address` on the recipient/sender-keyed verbs (`register`,
