@@ -225,12 +225,14 @@ class TruncationTest(_BaseFixture):
         self.assertNotIn("help", axi, "--full leaves nothing truncated -> no help[]")
 
     def test_short_body_is_never_truncated_and_carries_no_help(self):
+        # peel off the long message from setUp so it doesn't interfere: this
+        # fetch MARKS it read (no --peek: peek never marks; locked semantics),
+        # so it must run BEFORE the short message is sent.
+        self.run_cli(["--format", "toon", "fetch", "--project", "Demo",
+                      "--to", "Mainline - Demo"])
         body_100 = "y" * 100
         sdb.send(self.con, self.store, "Track 1 - Demo", to=["Mainline - Demo"],
                  subject="short", body_text=body_100, project="Demo")
-        # peek off the long message from setUp so it doesn't interfere
-        self.run_cli(["--format", "toon", "fetch", "--project", "Demo",
-                      "--to", "Mainline - Demo", "--peek"])
         rc, out, err = self.run_cli(
             ["--format", "toon", "fetch", "--project", "Demo", "--to", "Mainline - Demo"])
         self.assertEqual(rc, 0, f"err={err!r}")
@@ -412,11 +414,13 @@ class RemainingVerbsEnvelopeTest(_BaseFixture):
         self.assertEqual(axi.get("hits"), '0 for "zzzznomatchxyz"')
 
     def test_thread_default_columns_two_message_chain_incomplete_false(self):
+        # `thread` walks root-ward from the queried id (CLAUDE.md #6), so the
+        # two-node chain is reached by querying the REPLY (mid_b), not the root.
         mid_a = sdb.send(self.con, self.store, "Track 1 - Demo",
                          to=["Mainline - Demo"], subject="root", project="Demo")
         mid_b = sdb.reply(self.con, self.store, mid_a, "Track 2 - Demo", project="Demo")
         rc, out, err = self.run_cli(
-            ["--format", "toon", "thread", "--project", "Demo", "--id", str(mid_a)])
+            ["--format", "toon", "thread", "--project", "Demo", "--id", str(mid_b)])
         self.assertEqual(rc, 0, f"err={err!r}")
         axi = _toon.decode(out)["axi"]
         self.assertIn("chain", axi)

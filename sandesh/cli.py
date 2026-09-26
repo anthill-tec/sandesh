@@ -17,7 +17,9 @@ stderr and one AXI envelope (sandesh.axi) is written to stdout (CR-SAN-047 §S3)
 
 import argparse
 import contextlib
+import io
 import os
+import re
 import sys
 
 from sandesh import __version__
@@ -34,11 +36,23 @@ def _project(args):
     return p
 
 
+_CONNECTIONS = []      # every _ctx() connection; main() closes them on the way out
+
+
 def _ctx(args):
-    """(project_id, store_dir, connection)."""
+    """(project_id, store_dir, connection). The connection is closed by main()
+    when the verb finishes (an unclosed sqlite3 connection is cyclic garbage —
+    it would otherwise surface as a ResourceWarning at an arbitrary GC point)."""
     project = _project(args)
     store = sdb.store_dir(project)
-    return project, store, sdb.connect()
+    con = sdb.connect()
+    _CONNECTIONS.append(con)
+    return project, store, con
+
+
+def _close_connections():
+    while _CONNECTIONS:
+        _CONNECTIONS.pop().close()
 
 
 def _self_addr(args, flag):
@@ -122,6 +136,34 @@ _OWN_ADDRESS_FLAG = {
 }
 
 
+class _UsageError(Exception):
+    """A machine-mode usage error raised by an `axi_<verb>` handler (e.g.
+    `tombstone` without --yes, the home view without its env) — _run_machine
+    emits the same `ok:false error help[]` envelope argparse errors get (exit 2)."""
+
+
+class _Failed(Exception):
+    """A handler's non-zero outcome that still has fields worth reporting (the
+    steps `init` completed before stopping): _run_machine emits `ok:false` +
+    those fields + `error` (the human stderr text) and exits `rc`."""
+
+    def __init__(self, rc, message, fields):
+        super().__init__(message)
+        self.rc = rc
+        self.fields = dict(fields)
+
+
+def _usage_envelope(verb, prog, message, context):
+    """The exit-2 usage-error envelope (§S4b): `ok:false error` + `help[]`
+    naming the verb's --help (and, at the top level, the valid global flags)."""
+    help_ = [f"{prog} --help"]
+    if verb == "sandesh":
+        help_.append("sandesh [--project <id>] [--format {human,toon,json}] <verb> ...")
+    env = axi.error_envelope(verb, ValueError(message), context or {})
+    env.help = help_
+    return env
+
+
 class _Parser(argparse.ArgumentParser):
     """ArgumentParser whose usage errors become an `ok:false` AXI envelope on
     stdout (exit 2) when the pre-scanned format is a machine mode; in human
@@ -137,20 +179,16 @@ class _Parser(argparse.ArgumentParser):
             return super().error(message)
         parts = self.prog.split()
         verb = parts[1] if len(parts) > 1 else "sandesh"
-        help_ = [f"{self.prog} --help"]
-        if verb == "sandesh":
-            help_.append("sandesh [--project <id>] [--format {human,toon,json}] <verb> ...")
-        env = axi.error_envelope(verb, ValueError(message), self.axi_context or {})
-        env.help = help_
-        axi.emit(env, self.axi_format)
+        axi.emit(_usage_envelope(verb, self.prog, message, self.axi_context), self.axi_format)
         return self.exit(2)
 
 
 def _run_machine(args, fmt):
     """Machine-mode dispatch: the handler's prints land on stderr; one envelope
     on stdout. Verbs in AXI_FN run their `axi_<verb>` handler → `(rc, fields)`
-    (a RETURNED non-zero rc is still `ok:true`; failures RAISE — ValueError/
-    PermissionError/FileNotFoundError/RuntimeError → error_envelope + exit 1).
+    or `(rc, fields, help)` (a RETURNED non-zero rc is still `ok:true`;
+    failures RAISE — ValueError/PermissionError/FileNotFoundError/RuntimeError →
+    error_envelope + exit 1; _UsageError → the usage envelope + exit 2).
     Other verbs fall back to the human handler with empty fields. Either way
     `sys.exit('[sandesh] …')` → error_envelope + exit 1 (the code a real process
     reports for that idiom); a non-zero exit int (or, on the fallback path, a
@@ -158,13 +196,19 @@ def _run_machine(args, fmt):
     verb = args.cmd
     context = _axi_context(args)
     fn = AXI_FN.get(verb)
-    rc, error, fields, exited = 0, None, {}, False
+    rc, error, fields, help_, exited = 0, None, {}, [], False
     try:
         with contextlib.redirect_stdout(sys.stderr):
             if fn is not None:
-                rc, fields = fn(args)
+                rc, fields, *rest = fn(args)
+                help_ = rest[0] if rest else []
             else:
                 rc = args.fn(args) or 0
+    except _UsageError as exc:
+        axi.emit(_usage_envelope(verb, f"sandesh {verb}", str(exc), context), fmt)
+        return 2
+    except _Failed as exc:
+        rc, error, fields = exc.rc, str(exc), exc.fields
     except sdb.MigrationRequired as exc:
         rc, error = 1, str(exc)
     except (ValueError, PermissionError, FileNotFoundError, RuntimeError) as exc:
@@ -179,40 +223,52 @@ def _run_machine(args, fmt):
     if rc and error is None and (exited or fn is None):
         error = f"{verb} failed (exit {rc})"
     if error is None:
-        env = axi.Envelope(verb, True, fields, context)
+        env = axi.Envelope(verb, True, fields, context, help_)
     else:
         env = axi.error_envelope(verb, ValueError(error), context)
+        if fields:                      # _Failed: the partial result + error
+            env.fields = {**fields, **env.fields}
     axi.emit(env, fmt)
     return rc
 
 
 # --------------------------------------------------------------------------- #
 
+def _print_setup(project, store):
+    print(f"project {project!r} ready → {store}")
+
+
 def cmd_setup(args):
     project = _project(args)
     store = sdb.setup(project)
-    print(f"project {project!r} ready → {store}")
+    _print_setup(project, store)
     return 0
+
+
+def _project_rows(con, include_all):
+    if include_all:
+        return con.execute(
+            "SELECT project_id, state, xproj_granted_at FROM project "
+            "ORDER BY project_id").fetchall()
+    return con.execute(
+        "SELECT project_id, state, xproj_granted_at FROM project "
+        "WHERE state != 'tombstoned' ORDER BY project_id").fetchall()
+
+
+def _print_projects(rows):
+    if not rows:
+        print("(no projects set up)")
+        return
+    print(f"{'PROJECT':20} {'STATE':10} CROSS-PROJECT")
+    for r in rows:
+        print(f"{r['project_id']:20} {r['state']:10} "
+              f"{'✓' if r['xproj_granted_at'] else '-'}")
 
 
 def cmd_projects(args):
     con = sdb.connect()
     try:
-        if getattr(args, "all", False):
-            rows = con.execute(
-                "SELECT project_id, state, xproj_granted_at FROM project "
-                "ORDER BY project_id").fetchall()
-        else:
-            rows = con.execute(
-                "SELECT project_id, state, xproj_granted_at FROM project "
-                "WHERE state != 'tombstoned' ORDER BY project_id").fetchall()
-        if not rows:
-            print("(no projects set up)")
-            return 0
-        print(f"{'PROJECT':20} {'STATE':10} CROSS-PROJECT")
-        for r in rows:
-            print(f"{r['project_id']:20} {r['state']:10} "
-                  f"{'✓' if r['xproj_granted_at'] else '-'}")
+        _print_projects(_project_rows(con, getattr(args, "all", False)))
     finally:
         con.close()
     return 0
@@ -376,18 +432,27 @@ def cmd_fetch(args):
     return 0
 
 
-def cmd_thread(args):
-    _, _, con = _ctx(args)
-    chain = sdb.thread(con, args.id)
-    if not chain:
-        sys.exit(f"[sandesh] no such message #{args.id}")
+def _is_hole(m):
+    """A tombstoned-hole marker in a thread chain (sandesh_db.thread, CR-SAN-024)."""
+    return isinstance(m, dict) and "warning" in m
+
+
+def _print_thread(chain):
     for m in chain:
-        if isinstance(m, dict) and "warning" in m:   # tombstoned hole (§S2)
+        if _is_hole(m):
             print(m["warning"])
             continue
         ind = "  " if m["in_reply_to"] else ""
         print(f"{ind}#{m['id']} {m['from_addr']} · {m['created_at']}")
         print(f"{ind}   {m['subject']}")
+
+
+def cmd_thread(args):
+    _, _, con = _ctx(args)
+    chain = sdb.thread(con, args.id)
+    if not chain:
+        sys.exit(f"[sandesh] no such message #{args.id}")
+    _print_thread(chain)
     return 0
 
 
@@ -402,6 +467,10 @@ def cmd_migrate(args):
     return _migrate.cmd_migrate(args)
 
 
+def _print_granted(args):
+    print(f"cross-project sending granted to project {args.project!r} (by {args.by})")
+
+
 def cmd_grant(args):
     con = sdb.connect()
     try:
@@ -413,8 +482,12 @@ def cmd_grant(args):
         sys.exit(1)
     finally:
         con.close()
-    print(f"cross-project sending granted to project {args.project!r} (by {args.by})")
+    _print_granted(args)
     return 0
+
+
+def _print_revoked(args):
+    print(f"cross-project sending revoked for project {args.project!r} (by {args.by})")
 
 
 def cmd_revoke(args):
@@ -426,7 +499,7 @@ def cmd_revoke(args):
         sys.exit(1)
     finally:
         con.close()
-    print(f"cross-project sending revoked for project {args.project!r} (by {args.by})")
+    _print_revoked(args)
     return 0
 
 
@@ -538,6 +611,18 @@ def cmd_consolidate(args):
 
 # --------------------------------------------------------------------------- #
 
+def _print_search(args, result):
+    if result.get("reindexed"):
+        print("(index was empty — reindexed before searching)")
+    if not result["hits"]:
+        print(f"(no matches for {args.query!r})")
+    for h in result["hits"]:
+        print(f"[#{h['id']}] {h['from']} · {h['created_at']}")
+        print(f"   {h['subject']}")
+        print(f"   {h['snippet']}")
+    print(f"total: {result['total']}")
+
+
 def cmd_search(args):
     con = sdb.connect()
     try:
@@ -550,15 +635,7 @@ def cmd_search(args):
             sys.exit(1)
     finally:
         con.close()
-    if result.get("reindexed"):
-        print("(index was empty — reindexed before searching)")
-    if not result["hits"]:
-        print(f"(no matches for {args.query!r})")
-    for h in result["hits"]:
-        print(f"[#{h['id']}] {h['from']} · {h['created_at']}")
-        print(f"   {h['subject']}")
-        print(f"   {h['snippet']}")
-    print(f"total: {result['total']}")
+    _print_search(args, result)
     return 0
 
 
@@ -708,6 +785,53 @@ def _cmd_init_check():
     return 0
 
 
+DESCRIPTION = ("Sandesh — a SQLite-backed mailbox + wake relay for cooperating "
+               "agent sessions.")
+
+
+def _status_identity(args):
+    """(project, address) for the home view: --project/$SANDESH_PROJECT +
+    $SANDESH_ADDRESS; a missing one raises _UsageError naming both vars."""
+    project = getattr(args, "project", None) or os.environ.get("SANDESH_PROJECT")
+    address = os.environ.get("SANDESH_ADDRESS")
+    if not project or not address:
+        raise _UsageError("the home view needs your identity: set $SANDESH_PROJECT "
+                          "(or pass --project) and $SANDESH_ADDRESS")
+    return project, address
+
+
+def _status_fields(project, address):
+    con = sdb.connect()
+    try:
+        listening = sdb.notifier_live(con, address) is not None
+        unread = len(sdb.unread_to(con, address))
+    finally:
+        con.close()
+    return {"bin": _bin_path(), "description": DESCRIPTION, "project": project,
+            "address": address, "listening": listening, "unread": unread}
+
+
+def _bin_path():
+    """The entry point's absolute path with $HOME collapsed to `~`."""
+    path = os.path.abspath(sys.argv[0] or ".")
+    home = os.path.expanduser("~")
+    if home and (path == home or path.startswith(home + os.sep)):
+        path = "~" + path[len(home):]
+    return path
+
+
+def cmd_status(args):
+    """`sandesh status` (§S4b) — the read-only dashboard, human form."""
+    try:
+        project, address = _status_identity(args)
+    except _UsageError as exc:
+        sys.exit(f"[sandesh] ERROR: {exc}")
+    f = _status_fields(project, address)
+    state = "● listening" if f["listening"] else "○ not listening"
+    print(f"{f['address']} @ {f['project']} · {state} · {f['unread']} unread")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # Machine-mode verb handlers (CR-SAN-047 §S4). Each `axi_<verb>(args)` does the
 # verb's work, prints the human lines (→ stderr under _run_machine) and returns
@@ -720,6 +844,28 @@ ADDRESSBOOK_DEFAULT = ("address", "listening")
 INBOX_FIELDS = ("id", "from", "to", "cc", "kind", "subject", "created", "re", "unread")
 INBOX_DEFAULT = ("id", "from", "subject", "unread")
 INBOX_LIMIT = 50
+THREAD_FIELDS = ("id", "from", "subject", "created", "re")
+THREAD_DEFAULT = ("id", "from", "subject")
+SEARCH_DEFAULT = ("id", "from", "subject")
+BODY_LIMIT = 500          # P3: fetch bodies are cut here unless --full
+
+
+def _tmpl(project, rest):
+    """A `help[]` command template (P9): `sandesh --project <P> <rest>` — the
+    project is carried forward (placeholder when unknown); message ids and
+    addresses stay `<id>`/`<addr>` placeholders, never concrete values."""
+    return f"sandesh --project {project or '<project>'} {rest}"
+
+
+_SEND_TMPL = 'send --from <addr> --to <addr> --subject "<subject>"'
+
+
+def _truncate(text):
+    """(text, truncated?) — the first BODY_LIMIT chars + the size suffix (P3:
+    never omit a body, always state its size)."""
+    if len(text) <= BODY_LIMIT:
+        return text, False
+    return f"{text[:BODY_LIMIT]} (truncated, {len(text)} chars total)", True
 
 
 def _fields_arg(valid):
@@ -752,17 +898,19 @@ def axi_addressbook(args):
     live = sum(1 for b in book if b["listening"])
     if not book:
         participants = f"0 registered in {project}"
+        help_ = [_tmpl(project, "register --address <addr> --kind mainline|track")]
     else:
         participants = [_pick({
             "address": b["address"], "kind": b["kind"],
             "status": "active" if b["active"] else "inactive",
             "listening": b["listening"], "registered": b["registered_at"],
         }, cols) for b in book]
-    return 0, {"participants": participants, "listening": f"{live}/{len(book)}"}
+        help_ = [_tmpl(project, _SEND_TMPL), _tmpl(project, "notify --to <addr>")]
+    return 0, {"participants": participants, "listening": f"{live}/{len(book)}"}, help_
 
 
 def axi_inbox(args):
-    _, _, con = _ctx(args)
+    project, _, con = _ctx(args)
     who = _require_own_addr(args, "to", "--to '<address>'")
     cols = args.fields or INBOX_DEFAULT
     rows = _inbox_rows(con, args, who, not args.all)
@@ -780,11 +928,15 @@ def axi_inbox(args):
         "kind": r["kind"], "subject": r["subject"], "created": r["created_at"],
         "re": r["in_reply_to"], "unread": r["read_at"] is None,
     }, cols) for r in rows] or f"0 unread for {who}"
-    return 0, {"messages": messages, "unread": f"{unread} of {len(everything)}"}
+    if rows:
+        help_ = [_tmpl(project, "fetch --to <addr>"), _tmpl(project, "thread --id <id>")]
+    else:
+        help_ = [_tmpl(project, _SEND_TMPL)]
+    return 0, {"messages": messages, "unread": f"{unread} of {len(everything)}"}, help_
 
 
 def axi_fetch(args):
-    _, store, con = _ctx(args)
+    project, store, con = _ctx(args)
     who = _require_own_addr(args, "to", "--to '<address>'")
     items = _fetch_items(con, store, args, who)
     _print_fetch(items, who, args.peek)
@@ -798,9 +950,16 @@ def axi_fetch(args):
         "kind": it["kind"], "subject": it["subject"], "created": it["created_at"],
         "re": it["in_reply_to"][0] if it["in_reply_to"] else None,
     } for it in items]
-    bodies = {str(it["id"]): it["body"] for it in items if it["body"] is not None}
+    bodies, cut = {}, False
+    for it in items:
+        if it["body"] is None:
+            continue
+        text, was_cut = (it["body"], False) if args.full else _truncate(it["body"])
+        bodies[str(it["id"])] = text
+        cut = cut or was_cut
+    help_ = [_tmpl(project, "fetch --to <addr> --full  (complete bodies)")] if cut else []
     return 0, {"messages": rows, "bodies": bodies,
-               "marked_read": 0 if args.peek else len(items)}
+               "marked_read": 0 if args.peek else len(items)}, help_
 
 
 def _delivery_fields(con, mid, kind, subject):
@@ -819,7 +978,7 @@ def axi_send(args):
                    subject=args.subject, kind=args.kind, body_text=_read_body(args),
                    project=project)
     _print_sent(args, mid, sender)
-    return 0, _delivery_fields(con, mid, args.kind, args.subject)
+    return 0, _delivery_fields(con, mid, args.kind, args.subject), [_tmpl(project, "thread --id <id>")]
 
 
 def axi_reply(args):
@@ -831,21 +990,22 @@ def axi_reply(args):
     row = con.execute("SELECT kind, subject FROM message WHERE id=?", (mid,)).fetchone()
     fields = _delivery_fields(con, mid, row["kind"], row["subject"])
     fields["re"] = args.to_msg
-    return 0, fields
+    return 0, fields, [_tmpl(project, "thread --id <id>")]
 
 
 def axi_register(args):
     project, _, con = _ctx(args)
     fields = {"address": args.address, "project": project, "kind": args.kind,
               "result": "registered"}
+    help_ = [_tmpl(project, "notify --to <addr>")]
     try:
         sdb.register(con, args.address, kind=args.kind, display_name=args.name,
                      by=args.address, project=project)
     except sdb.AlreadyRegistered:          # P6: idempotent no-op, not a failure
         fields["result"] = "already"
-        return 0, fields
+        return 0, fields, help_
     _print_registered(args, project)
-    return 0, fields
+    return 0, fields, help_
 
 
 def axi_unregister(args):
@@ -902,10 +1062,130 @@ def axi_unarchive(args):
     return _axi_lifecycle(args, "active", op, _print_unarchived)
 
 
+# --- the remaining verbs (§S4 last sentences, PRD §4.4 last row) ---------------
+
+def axi_search(args):
+    project = getattr(args, "project", None) or os.environ.get("SANDESH_PROJECT")
+    con = sdb.connect()
+    try:
+        result = sdb.search(con, args.to, args.query, limit=args.limit,
+                            offset=args.offset, sender_project=args.from_project)
+    finally:
+        con.close()
+    _print_search(args, result)
+    hits = [_pick(h, SEARCH_DEFAULT) for h in result["hits"]] or f'0 for "{args.query}"'
+    help_ = [_tmpl(project, "thread --id <id>")] if result["hits"] else []
+    return 0, {"hits": hits, "total": result["total"], "limit": result["limit"],
+               "offset": result["offset"]}, help_
+
+
+def axi_thread(args):
+    _, _, con = _ctx(args)
+    cols = args.fields or THREAD_DEFAULT
+    chain = sdb.thread(con, args.id)
+    if not chain:
+        raise ValueError(f"no such message #{args.id}")
+    _print_thread(chain)
+    rows = [_pick({"id": m["id"], "from": m["from_addr"], "subject": m["subject"],
+                   "created": m["created_at"], "re": m["in_reply_to"]}, cols)
+            for m in chain if not _is_hole(m)]
+    return 0, {"chain": rows, "incomplete": any(_is_hole(m) for m in chain)}
+
+
+def axi_projects(args):
+    con = sdb.connect()
+    try:
+        rows = _project_rows(con, getattr(args, "all", False))
+    finally:
+        con.close()
+    _print_projects(rows)
+    projects = [{"project": r["project_id"], "state": r["state"],
+                 "cross_project": bool(r["xproj_granted_at"])} for r in rows] or "0 set up"
+    return 0, {"projects": projects}, [_tmpl(None, "setup"), _tmpl(None, "addressbook")]
+
+
+def axi_setup(args):
+    project = _project(args)
+    store = sdb.setup(project)
+    _print_setup(project, store)
+    return 0, {"project": project, "store": store}
+
+
+def _axi_xproj(args, op, done, granted):
+    con = sdb.connect()
+    try:
+        op(con, args.project, by=args.by)
+    finally:
+        con.close()
+    done(args)
+    return 0, {"project": args.project, "cross_project": granted}
+
+
+def axi_grant(args):
+    return _axi_xproj(args, sdb.grant_xproj, _print_granted, True)
+
+
+def axi_revoke(args):
+    return _axi_xproj(args, sdb.revoke_xproj, _print_revoked, False)
+
+
+def axi_tombstone(args):
+    """No prompts in machine mode (P6): without --yes (and not --dry-run) it is
+    a usage error; otherwise the human handler runs unchanged."""
+    if not args.yes and not args.dry_run:
+        raise _UsageError("tombstone in machine mode needs --yes "
+                          "(no interactive confirmation)")
+    rc = cmd_tombstone(args) or 0
+    fields = {} if args.dry_run or rc else {"project": args.project, "state": "tombstoned"}
+    return rc, fields
+
+
+_STEP_LINE = re.compile(r"^([A-Za-z][\w .-]*?): (.+)$")
+
+
+def axi_steps(args):
+    """init/migrate/consolidate/reindex: run the human handler, replaying its
+    stdout/stderr (stdout lands on stderr under _run_machine) and turning each
+    stdout line into a `{step, result}` row (`step: result` lines split; others
+    are the verb's). A non-zero return 	a _Failed with the steps so far + the
+    handler's stderr text as the error (the exit code equals human mode's)."""
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = args.fn(args) or 0
+    finally:
+        print(out.getvalue(), end="")
+        print(err.getvalue(), end="", file=sys.stderr)
+    steps = []
+    for line in out.getvalue().splitlines():
+        if not line.strip():
+            continue
+        m = _STEP_LINE.match(line)
+        steps.append({"step": m.group(1), "result": m.group(2)} if m
+                     else {"step": args.cmd, "result": line.strip()})
+    if rc:
+        lines = [ln[len(_ERR_PREFIX):] if ln.startswith(_ERR_PREFIX) else ln
+                 for ln in err.getvalue().splitlines() if ln.strip()]
+        raise _Failed(rc, "\n".join(lines) or f"{args.cmd} failed (exit {rc})",
+                      {"steps": steps})
+    return 0, {"steps": steps}
+
+
+def axi_status(args):
+    """The home view (P8/P10): `sandesh` with no subcommand or `sandesh status`."""
+    project, address = _status_identity(args)
+    fields = _status_fields(project, address)
+    return 0, fields, [_tmpl(project, "fetch --to <addr>"), _tmpl(project, "notify --to <addr>")]
+
+
 AXI_FN = {
     "addressbook": axi_addressbook, "inbox": axi_inbox, "fetch": axi_fetch,
     "send": axi_send, "reply": axi_reply, "register": axi_register,
     "unregister": axi_unregister, "archive": axi_archive, "unarchive": axi_unarchive,
+    "search": axi_search, "thread": axi_thread, "projects": axi_projects,
+    "setup": axi_setup, "grant": axi_grant, "revoke": axi_revoke,
+    "tombstone": axi_tombstone, "status": axi_status,
+    "init": axi_steps, "migrate": axi_steps, "consolidate": axi_steps, "reindex": axi_steps,
 }
 
 
@@ -927,7 +1207,13 @@ def build_parser(axi_format="human", axi_context=None):
     ap = _Parser(prog="sandesh", parents=[common],
                  description="Sandesh messaging CLI (standalone).")
     ap.add_argument("--version", action="version", version=f"sandesh {__version__}")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    # required=False (§S4b): a bare `sandesh` is the machine-mode home view;
+    # main() re-creates argparse's "required" error for human mode.
+    sub = ap.add_subparsers(dest="cmd", required=False)
+
+    sub.add_parser("status", parents=[common],
+                   help="the home view: your address, listening state + unread count "
+                        "(needs $SANDESH_PROJECT/$SANDESH_ADDRESS)").set_defaults(fn=cmd_status)
 
     sub.add_parser("setup", parents=[common],
                    help="provision a project (create store + init DB)").set_defaults(fn=cmd_setup)
@@ -1012,10 +1298,17 @@ def build_parser(axi_format="human", axi_context=None):
                                    "(YYYY-MM-DD or 'YYYY-MM-DD HH:MM:SS', inclusive; "
                                    "date-only means end of that day)")
     p.add_argument("--subject", help="case-insensitive substring match on subject")
+    p.add_argument("--full", action="store_true",
+                   help=f"machine-mode: complete bodies (default: first {BODY_LIMIT} chars)")
     p.set_defaults(fn=cmd_fetch)
 
     p = sub.add_parser("thread", parents=[common], help="show a message's reply chain")
     p.add_argument("--id", type=int, required=True)
+    p.add_argument("--fields", type=_fields_arg(THREAD_FIELDS), default=None, metavar="CSV",
+                   help="machine-mode columns (subset of "
+                        f"{','.join(THREAD_FIELDS)}; default {','.join(THREAD_DEFAULT)})")
+    p.add_argument("--full", action="store_true",
+                   help="machine-mode: accepted for symmetry with fetch (thread renders no bodies)")
     p.set_defaults(fn=cmd_thread)
 
     p = sub.add_parser(
@@ -1178,6 +1471,18 @@ def build_parser(axi_format="human", axi_context=None):
     return ap
 
 
+def _parse(argv, pre_fmt, pre_ctx):
+    """Build + parse. A missing subcommand in human mode is argparse's usual
+    "required" error (unchanged, exit 2); in machine mode it is the home view
+    (§S4b), resolved by main(). The parser is a local here so it is released
+    as soon as parsing is done."""
+    parser = build_parser(pre_fmt, pre_ctx)
+    args = parser.parse_args(argv)
+    if args.cmd is None and _resolve_format(args) == "human":
+        parser.error("the following arguments are required: cmd")
+    return args
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     # Pre-argparse format resolution so usage errors can be envelopes (§S4b).
@@ -1186,18 +1491,23 @@ def main(argv=None):
     pre_project = _prescan(argv, "--project") or os.environ.get("SANDESH_PROJECT")
     if pre_project:
         pre_ctx["project"] = pre_project
-    args = build_parser(pre_fmt, pre_ctx).parse_args(argv)
+    args = _parse(argv, pre_fmt, pre_ctx)
     fmt = _resolve_format(args)
-    if fmt != "human":
-        return _run_machine(args, fmt)
+    if args.cmd is None:                 # machine mode, no subcommand: the home view
+        args.cmd, args.fn = "status", cmd_status
     try:
-        return args.fn(args)
-    except sdb.MigrationRequired as exc:
-        # A schema-behind store with no [migrate] extra: surface the library's
-        # message as a clean '[sandesh]' line (never a raw traceback) and exit
-        # non-zero (CR-SAN-037 AC4).
-        print(f"[sandesh] {exc}", file=sys.stderr)
-        return 1
+        if fmt != "human":
+            return _run_machine(args, fmt)
+        try:
+            return args.fn(args)
+        except sdb.MigrationRequired as exc:
+            # A schema-behind store with no [migrate] extra: surface the library's
+            # message as a clean '[sandesh]' line (never a raw traceback) and exit
+            # non-zero (CR-SAN-037 AC4).
+            print(f"[sandesh] {exc}", file=sys.stderr)
+            return 1
+    finally:
+        _close_connections()
 
 
 if __name__ == "__main__":
