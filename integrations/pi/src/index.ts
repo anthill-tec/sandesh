@@ -13,6 +13,12 @@
  * CR-SAN-048: the 12 verb tools return AXI/TOON envelopes; `sandesh_status`
  * (home view) and `sandesh_notify_start/status/stop` (supervised wake) join
  * them — 16 tools — plus the `/sandesh-watcher` command.
+ *
+ * Binary resolution: the production path is unchanged — `sandesh` on PATH,
+ * else `uvx --from sandesh-relay[migrate] sandesh` (CR-SAN-038). A non-empty
+ * `$SANDESH_BIN` is a dev/test override (CR-SAN-048 AC10): every spawn — the
+ * verbs, the `--version` probe and the notify wake — uses that exact binary,
+ * with no uvx fallback.
  */
 
 import { Type } from "typebox";
@@ -136,11 +142,23 @@ function resetBinaryResolution(): void {
 }
 
 /**
+ * The `$SANDESH_BIN` dev/test override (CR-SAN-048 AC10), or `undefined` when
+ * unset/empty. Read per call so tests can set it after module load.
+ */
+function explicitBinary(): string | undefined {
+  const bin = process.env.SANDESH_BIN;
+  return bin && bin.length > 0 ? bin : undefined;
+}
+
+/**
  * Given the desired `sandesh` argv, return the actual `(command, args)` for
- * `pi.exec`. Local sandesh → `("sandesh", args)`; uvx fallback →
+ * `pi.exec`. `$SANDESH_BIN` set → `(SANDESH_BIN, args)` (no uvx fallback);
+ * local sandesh → `("sandesh", args)`; uvx fallback →
  * `("uvx", ["--from", "sandesh-relay[migrate]", "sandesh", ...args])`.
  */
 function resolveSandesh(args: string[]): [string, string[]] {
+  const bin = explicitBinary();
+  if (bin !== undefined) return [bin, args];
   if (useUvx) return ["uvx", [...UVX_PREFIX, ...args]];
   return ["sandesh", args];
 }
@@ -156,15 +174,18 @@ interface ProbeResult {
  * exec rejection OR a non-zero exit, set {@link useUvx} and re-probe via
  * `uvx --from sandesh-relay[migrate] sandesh --version`. The CLI is considered
  * unreachable only when BOTH the local and the uvx probes fail. The resolved
- * choice persists in `useUvx` for every later exec site.
+ * choice persists in `useUvx` for every later exec site. With `$SANDESH_BIN`
+ * set, only that binary is probed — an explicit override never falls back.
  */
 async function probeVersion(pi: ExtensionAPI): Promise<ProbeResult> {
+  const bin = explicitBinary();
   try {
-    const r = await pi.exec("sandesh", ["--version"]);
+    const r = await pi.exec(bin ?? "sandesh", ["--version"]);
     if (r.code === 0) return { reachable: true, stdout: r.stdout };
   } catch {
     // Local binary not found — fall through to the uvx retry.
   }
+  if (bin !== undefined) return { reachable: false, stdout: "" };
   // Local probe failed (non-zero or rejection): fall back to uvx and re-probe.
   useUvx = true;
   try {

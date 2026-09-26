@@ -88,24 +88,41 @@ your next fetch. Only mail addressed directly *to* you wakes the listener.)
 ## For Pi extension users
 
 **What you do first:** install the Pi extension. The verbs become Pi tools, and the
-wake is handled for you.
+wake is handled for you once you start it.
 
 ```bash
 pi install npm:@anthill-tec/sandesh-pi
 ```
 
 The Sandesh messaging verbs (send, reply, fetch, inbox, thread, …) are exposed as
-**Pi tools**, the same surface as the MCP server.
+**Pi tools**, the same surface as the MCP server, plus `sandesh_status` (your home
+view) and the three watcher tools below.
 
 The key difference from the MCP route: the Pi extension **wakes the session itself
-(native wake)**. There is **no manual** listener step here — you do not run sandesh
-notify yourself; the extension runs the wake loop for you and re-invokes the session
-when mail addressed to it arrives.
-So your loop is simply: register → keep working → the extension wakes you on new
-mail → fetch → act → reply.
+(native wake)**. You never run `sandesh notify` by hand — the extension runs the
+watcher as a supervised child and re-invokes the session when mail addressed to you
+arrives. So your loop is: register → start the watcher → keep working → the
+extension wakes you on new mail → fetch → act → reply.
 
-> Pi needs the `sandesh` CLI available on the machine (installed, or run on demand
-> via `uvx`) — the extension shells out to it. See [docs/INSTALL.md](INSTALL.md).
+**Behaviour change in 0.4.0 — the wake is tool-started.** Up to 0.3.x the extension
+armed the wake loop automatically at session start. From `0.4.0`:
+
+- **Start it yourself** with the `sandesh_notify_start` tool (defaults to
+  `$SANDESH_ADDRESS` / `$SANDESH_PROJECT`). Set `SANDESH_AUTOSTART=1` to restore the
+  0.3.x auto-arm at session start (both identity vars must then be set).
+- **Ambient status at session start:** with `$SANDESH_ADDRESS` and `$SANDESH_PROJECT`
+  set, a ≤ 6-line status block (address, listening, unread) is injected before your
+  first turn, so you know your mailbox state without a tool call.
+- **Tool results are AXI envelopes** in TOON encoding — the same `--format toon`
+  output described under [Machine output for agents](#machine-output-for-agents---format-toonjson);
+  CLI failures come back as `ok: false` results with `error` and `help[]`.
+- **Inspect or stop the watcher** with `/sandesh-watcher status` and
+  `/sandesh-watcher stop [address]` (tools: `sandesh_notify_status`,
+  `sandesh_notify_stop`).
+
+> Pi needs the `sandesh` CLI **≥ 0.4.0** available on the machine (installed, or run
+> on demand via `uvx`) — the extension shells out to it and refuses an older CLI at
+> session start. See [docs/INSTALL.md](INSTALL.md).
 
 ---
 
