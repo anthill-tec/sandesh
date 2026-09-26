@@ -18,13 +18,14 @@ de-duplication, no timeout cap, and no start/status/stop surface (`integrations/
 `bun-crucible.py`).
 
 ## Scope
-- **§S1 — decoder dependency (D5, gated).** Add `@toon-format/toon` to `dependencies` in
-  `integrations/pi/package.json` and a `src/toon.ts` wrapper `decodeEnvelope(text): AxiEnvelope`
-  (typed: `verb`, `ok`, `context`, `warnings: string[]`, `help?: string[]`, `error?: string`, plus a
-  `fields: Record<string, unknown>` for the rest). **Gate:** the AC1 install proof must pass; if
-  `pi install npm:` does not install dependencies, replace §S1 with `src/toon.ts` implementing a
-  ≤60-line parser for scalars + `key[N]: a,b` inline arrays + one nesting level (enough for the notify
-  envelope and `context`), and record the choice in this spec's `### S1 Findings`.
+- **§S1 — decoder dependency (D5, settled).** Add `@toon-format/toon` (`^4.1.1`, ESM, zero deps — the reference
+  implementation) to `dependencies` in `integrations/pi/package.json` and a `src/toon.ts` wrapper
+  `decodeEnvelope(text): AxiEnvelope` (typed: `verb`, `ok`, `context`, `warnings: string[]`, `help?: string[]`,
+  `error?: string`, plus `fields: Record<string, unknown>` for the rest). Gap-analysis settled the old gate: Pi
+  installs extensions with a real `npm install` (`~/.pi/agent/npm/package.json` + lockfile, transitive deps
+  present), so a runtime dependency IS installed — no fallback parser.
+- **§S1b — CLI version gate.** `MIN_CLI_VERSION` → `[0, 4, 0]` (every tool now passes `--format toon`, which a
+  CLI < 0.4.0 rejects with exit 2); the too-old notice names `0.4.0`. `version_gate.test.ts` updated.
 - **§S2 — AXI pass-through tools (P1/P2/P3/P6).** `runSandesh` adds `--format toon` to every invocation;
   each of the 12 verb tools returns the CLI's stdout (the AXI envelope text) as its result text, untouched.
   Tool parameters gain the AXI knobs where the verb has them: `fields?: string[]` (→ `--fields`), `full?:
@@ -35,9 +36,10 @@ de-duplication, no timeout cap, and no start/status/stop surface (`integrations/
   `result: tombstoned|absent` from the envelope. `sandesh_status()` (new, no args) returns the CLI home view
   (`sandesh status --format toon`) plus `watcher: running|stopped` appended by the extension (P8).
 - **§S2b — ambient context (P7).** On `session_start`, when both identity vars are set, run the home view
-  once and inject it as compact session context via the harness's context seam (≤6 lines incl. `help[2]`);
-  when unset inject nothing and emit no warning. Failure of the probe never breaks session start (existing
-  guard).
+  once (`sandesh --format toon status`) and inject it via `pi.sendMessage({customType: "sandesh-status",
+  content: <envelope text>, display: true}, {triggerTurn: false})` — a context message, not a user turn
+  (≤6 lines incl. `help[2]`); when unset inject nothing and emit no warning. Failure of the probe never
+  breaks session start (existing guard). The wake keeps `pi.sendUserMessage(…, {deliverAs: "followUp"})`.
 - **§S3 — supervision state machine (PRD §4.7 table).** New `src/wake.ts` exporting
   `WakeSupervisor` (per-address entries: child handle, `startedAt`, `lastExit`, `lastIds: number[]`,
   `timeoutExits: number[]` (timestamps, 60 s window), `stopped`). `start(address, project)` refuses a
@@ -66,9 +68,12 @@ de-duplication, no timeout cap, and no start/status/stop surface (`integrations/
   at release time (not in this CR).
 
 ## Acceptance criteria
-- **AC1** — Install proof (smoke, real binaries): `npm pack` the package, `pi install` it from the
-  tarball path into a temp Pi home; assert `node_modules/@toon-format/toon` exists under the installed
-  package (or the fallback parser is compiled in, per §S1 gate) and `pi` lists the 16 tools (12 verbs + `sandesh_status` + 3 notify).
+- **AC1** — Dependency proof: `package.json` `dependencies["@toon-format/toon"]` is `^4.1.1`; `npm pack` the
+  package into a temp dir and `npm install <tarball>` there (a throwaway prefix, never `~/.pi`) → `node_modules/
+  @toon-format/toon/package.json` exists; `src/toon.ts` imports from it and `decodeEnvelope` round-trips a
+  CR-047 fixture envelope. The extension registers exactly 16 tools (12 verbs + `sandesh_status` + 3 notify).
+- **AC1b** — Version gate: `MIN_CLI_VERSION` is `[0,4,0]`; a fake `--version` of `0.3.6` → the too-old notice
+  naming `0.4.0`; `0.4.0` passes.
 - **AC2** — Every verb tool's result text decodes via `decodeEnvelope` to `verb == <cli verb>` and
   `ok == true` on the happy path (fake `pi.exec` returning CR-047 fixture envelopes) and is byte-identical to
   the fixture stdout; each invocation's argv contains `--format` `toon`; `fields:["a","b"]` → `--fields a,b`,
@@ -101,17 +106,19 @@ de-duplication, no timeout cap, and no start/status/stop surface (`integrations/
   `wakeLoop` symbol is gone (`grep -c "function wakeLoop" src/index.ts` = 0); full `bun test` green;
   `tsc --noEmit` clean; `npm pack --dry-run` lists `LICENSE, README.md, package.json, src/index.ts,
   src/wake.ts, src/toon.ts` (the `files` whitelist is extended accordingly) and no `*.test.ts`.
-- **AC10** — Real-binary smoke (extends CR-SAN-019's): with `sandesh` 0.4.0-dev on PATH, `start` →
-  a message sent to the address → the supervisor's `sendUserMessage` fires naming the id → `stop`
-  exits the child; the whole run under 30 s.
+- **AC10** — Real-binary smoke (extends CR-SAN-019's `smoke.test.ts`): the binary is resolved from
+  `$SANDESH_BIN`, else `<repo>/.venv/bin/sandesh`, else PATH; the suite SKIPS (not fails) when the resolved
+  binary lacks `--format` (probe `--help`). Every spawn carries a temp `XDG_DATA_HOME` in `env` (the real
+  store is never touched — CR-SAN-049 rule). Flow: `start` → a message sent to the address → the supervisor's
+  `sendUserMessage` fires naming the id → `stop` exits the child; the whole run under 30 s.
 
 ## Estimated size
 Medium-large — a new supervisor module with an injectable clock, tool/command wiring, rewrite of two
 wake test files, the install-proof smoke, README/USER_GUIDE updates.
 
 ## Risks / open questions
-- §S1 gate: whether `pi install npm:` installs dependencies is unknown until AC1 runs — the fallback is
-  specified so the CR cannot stall on it.
+- `@toon-format/toon` is the extension's first runtime dependency; Pi's `npm install` resolves it (verified
+  at gap-analysis against `~/.pi/agent/npm`).
 - Model B's skills change is theirs; the tool names above are what we announce on the thread.
 
 ## Non-goals
