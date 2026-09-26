@@ -26,16 +26,18 @@ other running projects" after a VERIFY probe created a `Demo` project in the sha
   `[mcp]`/`[migrate]` unchanged). `publish-pypi.yml` installs `twine>=7.0` explicitly (no behaviour change,
   just the same floor). CLAUDE.md "How to run": dev venv = `pip install -e '.[mcp,migrate,dev]'`.
 - **§S2 — real-store guard + lifecycle.** New `tests/_store_guard.py` imported first by every test module
-  (one line: `import tests._store_guard  # noqa`) and by `tests/__init__.py`. If `XDG_DATA_HOME` is unset it
-  creates ONE per-process `tempfile.TemporaryDirectory(prefix="sandesh-tests-")` under the SYSTEM temp root
-  (`tempfile.gettempdir()` — `/tmp`, tmpfs on the dev box, so nothing survives a reboot; never `~/.cache`,
-  never the repo), exports it, and registers `atexit` cleanup. If it IS set but does not resolve under the
-  system temp root, it raises `RuntimeError("refusing to run tests against a non-temp XDG_DATA_HOME: …")`
-  before `sandesh_db` is imported. Test classes that need their own store use `setUp`:
-  `self._tmp = tempfile.TemporaryDirectory(prefix="sandesh-<test>-")` + `os.environ["XDG_DATA_HOME"] =
-  self._tmp.name` and `tearDown`: close connections, restore the previous env value, `self._tmp.cleanup()`
-  — a shared `tests/_store_guard.TempStore` context-manager/mixin provides exactly that so no test rolls its
-  own. `sandesh_db.db_path()` gains no change.
+  (one line: `import tests._store_guard  # noqa`) and by `tests/__init__.py`. At import it creates ONE
+  per-process `tempfile.TemporaryDirectory(prefix="sandesh-tests-")` under the SYSTEM temp root
+  (`tempfile.gettempdir()` — `/tmp`, tmpfs on the dev box, so nothing survives a reboot; never `$HOME`, never
+  the repo), registers `atexit` cleanup, and **re-points `XDG_DATA_HOME` to it** — unconditionally, unless the
+  incoming value already resolves under the system temp root (a harness-supplied temp store is respected).
+  The dev shell exports `XDG_DATA_HOME=~/.local/share` globally, so "set to the real store" is the NORMAL
+  case and must be overridden, not refused. The only bypass is `SANDESH_TESTS_ALLOW_REAL_STORE=1` (never set;
+  exists so the intent is explicit). Test classes that need their own store use the shared
+  `tests/_store_guard.TempStore` mixin: `setUp` → `self._tmp = tempfile.TemporaryDirectory(prefix=
+  "sandesh-<test>-")` + `os.environ["XDG_DATA_HOME"] = self._tmp.name`; `tearDown` → close connections,
+  restore the previous env value, `self._tmp.cleanup()` — so no test rolls its own. `sandesh_db.db_path()`
+  gains no change.
 - **§S3 — subprocess discipline.** Every test that spawns `python -m sandesh.cli …` passes `env={…,
   "XDG_DATA_HOME": <temp>}` explicitly (audit the existing subprocess tests: `test_axi_notify`,
   `test_lifecycle_e2e`, `test_publish_workflow`, `test_package`); a grep-guard test asserts no test file
@@ -50,9 +52,12 @@ other running projects" after a VERIFY probe created a `Demo` project in the sha
 ## Acceptance criteria
 - **AC1** — With `pip install -e '.[dev]'` the dev venv reports `twine ≥ 7.0` and `packaging ≥ 26.3`;
   `tests/test_publish_workflow.py` is fully green locally (`test_twine_check_passes` PASSED).
-- **AC2** — `tests/test_store_guard.py`: importing `tests._store_guard` with `XDG_DATA_HOME` unset sets it
-  to a path under the temp dir; with it set to `~/.local/share` (simulated via monkeypatched env in a
-  subprocess) the import raises `RuntimeError` naming the offending path and `sandesh_db` is never imported.
+- **AC2** — `tests/test_store_guard.py` (each case in a subprocess with a controlled env): with
+  `XDG_DATA_HOME` unset → after import it is a path under `tempfile.gettempdir()`; with it set to
+  `~/.local/share` → after import it is a DIFFERENT path under the temp root (re-pointed) and
+  `sandesh_db.db_path()` resolves under that temp path; with it set to an existing dir under the temp root →
+  unchanged (respected); with `SANDESH_TESTS_ALLOW_REAL_STORE=1` → unchanged (bypass). The guard's temp dir
+  is removed at interpreter exit (assert after the subprocess ends).
 - **AC3** — Every `tests/test_*.py` imports `tests._store_guard` before any `sandesh` import (a test scans
   the files); every `subprocess.run/Popen` call in `tests/` passes an `env` containing `XDG_DATA_HOME`.
 - **AC4** — Full suite green with `XDG_DATA_HOME` unset in the parent shell (the guard supplies it), and the
