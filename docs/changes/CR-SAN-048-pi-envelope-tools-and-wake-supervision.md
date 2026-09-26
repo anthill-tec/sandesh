@@ -36,9 +36,9 @@ de-duplication, no timeout cap, and no start/status/stop surface (`integrations/
   `result: tombstoned|absent` from the envelope. `sandesh_status()` (new, no args) returns the CLI home view
   (`sandesh status --format toon`) plus `watcher: running|stopped` appended by the extension (P8).
 - **§S2b — ambient context (P7).** On `session_start`, when both identity vars are set, run the home view
-  once (`sandesh --format toon status`) and inject it via `pi.sendMessage({customType: "sandesh-status",
+  once (`sandesh --format toon status`), strip the `bin:` and `description:` lines, and inject it via `pi.sendMessage({customType: "sandesh-status",
   content: <envelope text>, display: true}, {triggerTurn: false})` — a context message, not a user turn
-  (≤6 lines incl. `help[2]`); when unset inject nothing and emit no warning. Failure of the probe never
+  (≤ 12 lines incl. `help[2]`); when unset inject nothing and emit no warning. Failure of the probe never
   breaks session start (existing guard). The wake keeps `pi.sendUserMessage(…, {deliverAs: "followUp"})`.
 - **§S3 — supervision state machine (PRD §4.7 table).** New `src/wake.ts` exporting
   `WakeSupervisor` (per-address entries: child handle, `startedAt`, `lastExit`, `lastIds: number[]`,
@@ -49,13 +49,14 @@ de-duplication, no timeout cap, and no start/status/stop surface (`integrations/
   <A>: <ids>. Call sandesh_fetch for it.", {deliverAs:"followUp"})`, remember ids, relaunch now;
   **2** → relaunch silently, push timestamp; third within 60 s ⇒ `ctx.ui.notify(warning)` once per
   burst; **5** ⇒ stop silently ("already running"); **1/3/4/signal** ⇒ stop + `ctx.ui.notify` with
-  code + `error`. `stop(address?)` aborts (SIGTERM; SIGKILL after 2 s) and clears; no address = all.
+  code + `error`. `stop(address?)` aborts the child's AbortSignal (Pi's `exec` sends SIGTERM, then SIGKILL after its 5 s grace) and clears; no address = all.
   `status()` returns the table. Clock and sleep injectable (`__setWakeClock`, `__setWakeSleepFn`).
 - **§S4 — tools + command.** `sandesh_notify_start(address?, project?)` (defaults from
   `$SANDESH_ADDRESS`/`$SANDESH_PROJECT`; error naming both if unresolved), `sandesh_notify_status()`,
   `sandesh_notify_stop(address?)` — results are TOON envelopes built in-extension
-  (`verb: notify_start|notify_status|notify_stop`, same shape as PRD §4.1, `watchers[N]{address,
-  project,running,pid,startedAt,lastExit,lastIds,timeoutExits}`). Slash command `/sandesh-watcher
+  (`verb: notify_start|notify_status|notify_stop`, same shape as PRD §4.1 incl. `context.project` ALWAYS;
+  P2 default columns `watchers[N]{address,running,lastExit}` — the full status set via a `fields` knob is
+  deferred to the register). Slash command `/sandesh-watcher
   status|stop [address]`.
 - **§S5 — arming (D4).** `session_start`: probe/nudge unchanged; the wake loop is armed **only** when
   `SANDESH_AUTOSTART=1` and both identity vars are set (then it calls the same `start`). Otherwise a
@@ -83,7 +84,9 @@ de-duplication, no timeout cap, and no start/status/stop surface (`integrations/
   → throws with verb + code + stderr (unchanged). `sandesh_unregister` with `result: tombstoned` → returned, not
   thrown.
 - **AC3b** — Ambient context + home: with both identity vars set, `session_start` injects exactly one context
-  block that decodes to the home envelope (`address`, `listening`, `unread`, `help[2]`) and is ≤ 6 lines;
+  block that decodes to the home envelope (`address`, `listening`, `unread`, `help[2]`), contains no `bin:`
+  or `description:` line, and is ≤ 12 lines — asserted against the REAL `status` envelope shape (not a
+  hand-written fixture);
   with either var unset nothing is injected and no warning is shown; `sandesh_status()` returns the same
   envelope plus `watcher: running|stopped` reflecting the supervisor.
 - **AC4** — Supervision, exit 0: ids `[12,13]` → one `sendUserMessage` naming `12, 13` with
@@ -94,6 +97,9 @@ de-duplication, no timeout cap, and no start/status/stop surface (`integrations/
 - **AC6** — Exit 5 → loop stops, no message, no notify, no relaunch. Exit 1, 3, 4 and a signal (code
   `null`, `signalCode: "SIGTERM"`) → loop stops and one `ctx.ui.notify` carries the code and the
   envelope's `error`.
+- **AC7b** — `sandesh_notify_status()` and `sandesh_notify_stop()` envelopes carry `context.project` (from the
+  watcher's project, else `$SANDESH_PROJECT`); a rejected `exec` promise is handled as an undecodable exit 1
+  (one error notify, no relaunch) — tested in `wake_supervisor.test.ts`.
 - **AC7** — One per address: `sandesh_notify_start` twice for the same address → second returns
   `ok: true` with `already: true` and spawns nothing; two different addresses run concurrently;
   `sandesh_notify_stop()` with no address stops both (children aborted); `status` reflects each

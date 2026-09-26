@@ -1,163 +1,128 @@
 /**
- * CR-SAN-014 C1 — RED: lifecycle + env-gating (AC4/AC5)
+ * CR-SAN-048 §S5/§4.7 — RED: arming (D4) + session_shutdown + AC9 pins
+ * (PRD-axi-toon.md §4.7 "Arming (D4)"; AC8, AC9).
  *
- * These tests MUST FAIL before GREEN implements:
- *   1. A `session_shutdown` handler registered via `pi.on("session_shutdown", ...)`.
- *   2. An AbortController held by the wake loop; its signal threaded into `pi.exec notify`
- *      as the 3rd arg `{ signal: <AbortSignal> }`.
- *   3. `abort()` called on shutdown; stopped flag checked so no re-arm occurs after shutdown.
- *   4. A module-level single-loop guard preventing a second concurrent loop on double
- *      `session_start`.
- *   5. A one-time `ctx.ui.notify(...)` notice when probe succeeds but
- *      `$SANDESH_ADDRESS` / `$SANDESH_PROJECT` are unset (AC4).
+ * REWRITE (§S5/AC9): this file previously tested the OLD module-level
+ * `wakeLoop` lifecycle (`__resetWakeState`, AbortController threading,
+ * `MISSING_ENV_NOTICE` on any missing env var, single-loop guard). Cycle 216
+ * replaces all of that: `session_start` no longer auto-arms by default —
+ * arming now requires `SANDESH_AUTOSTART=1` (with both identity vars) and
+ * calls the same `WakeSupervisor.start()` the `sandesh_notify_start` tool
+ * uses (see wake.test.ts). `session_shutdown` stops every running watcher via
+ * the supervisor. AC9 also requires the old `wakeLoop` symbol gone and the
+ * npm `files` whitelist extended to ship `src/wake.ts`.
  *
- * Seams required of GREEN (in addition to the existing __setWakeSleepFn):
+ * RED reason: today's `session_start` handler unconditionally starts the OLD
+ * `wakeLoop` whenever both identity vars are set (no `SANDESH_AUTOSTART` gate
+ * exists at all) and emits `MISSING_ENV_NOTICE` — a "warning" — instead of
+ * the new "info" tool-started notice; `function wakeLoop` still exists in
+ * index.ts; `package.json` `files` does not list `src/wake.ts`.
  *
- *   export function __resetWakeState(): void
- *
- *   This resets the module-level single-loop guard between tests so the guard does
- *   not bleed across test cases. Mirrors the __setWakeSleepFn pattern.
- *
- *   The `pi.exec` call for `sandesh notify` MUST pass a 3rd options arg carrying
- *   an AbortSignal:
- *     pi.exec("sandesh", [..., "notify", "--to", self], { signal: <AbortSignal> })
- *
- *   The `session_shutdown` handler must:
- *     1. Call abort() on the AbortController.
- *     2. Set the stopped flag so no further re-arm occurs.
- *
- * ACs tested:
- *   AC4 — missing-env notice: when probe succeeds but $SANDESH_ADDRESS or
- *         $SANDESH_PROJECT is unset, ctx.ui.notify is called with a message naming
- *         those env vars; the wake loop does NOT start.
- *   AC5 — session_shutdown stops the loop (no re-arm after abort); only one loop
- *         runs per session (double session_start does not spawn two concurrent loops);
- *         pi.exec notify receives a { signal } options arg.
+ * Coincidental pass (documented per the axi_passthrough.test.ts precedent —
+ * "a coincidental pass, not a real signal"): the "SANDESH_AUTOSTART=1 with
+ * both vars unset" case already passes against TODAY's code, because old
+ * `MISSING_ENV_NOTICE` already fires unconditionally (independent of any
+ * autostart concept) whenever either identity var is missing, and already
+ * names both vars while spawning nothing — the exact same observable outcome
+ * AC8 requires for this input. There is no AUTOSTART-specific behavior left
+ * to differentiate for THIS combination of inputs (vars unset); the gate's
+ * real RED signal lives in the other three C tests (vars-set-no-autostart,
+ * autostart-spawns, shutdown-aborts), which all fail as expected.
  */
 
-import { test, expect, describe, mock, beforeEach, afterEach } from "bun:test";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ExecResult,
-  SessionStartEvent,
-  SessionShutdownEvent,
-  ExtensionHandler,
-} from "@earendil-works/pi-coding-agent";
+import { test, expect, describe, mock } from "bun:test";
+import { readFileSync } from "fs";
+import { resolve } from "path";
+import { spawnSync } from "child_process";
+import type { ExecResult, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import registerExtension from "./index";
-import { __setWakeSleepFn } from "./index";
+import { decodeEnvelope } from "./toon";
+import { packedFilePaths } from "./npm_pack";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+// ─── Deferred helper ────────────────────────────────────────────────────────
 
-type SessionStartHandler = ExtensionHandler<SessionStartEvent>;
-type SessionShutdownHandler = ExtensionHandler<SessionShutdownEvent>;
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}
 
-// ---------------------------------------------------------------------------
-// Helpers — exec sequence, fake ExecResults
-// ---------------------------------------------------------------------------
+function makeDeferred<T>(): Deferred<T> {
+  let resolveFn!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolveFn = res;
+  });
+  return { promise, resolve: resolveFn };
+}
 
-/** A scriptable sequence of exec results. Each call to exec pops the next entry. */
-function makeExecSequence(
-  sequence: Array<ExecResult | "reject" | "hang">,
-): (cmd: string, args: string[], opts?: unknown) => Promise<ExecResult> {
-  let index = 0;
-  return async (_cmd, _args, _opts) => {
-    const entry = sequence[index];
-    if (index < sequence.length - 1) index++;
-    if (entry === "reject") {
-      throw new Error("sandesh: command not found");
+async function flush(rounds = 10): Promise<void> {
+  for (let i = 0; i < rounds; i++) {
+    await new Promise<void>((r) => setTimeout(r, 0));
+  }
+}
+
+// ─── Fake exec — same routing as wake.test.ts: --version/init resolve
+// immediately; "notify" calls are deferred (tracked, never auto-resolved —
+// these tests only assert on the spawn/abort, not on exit-code reactions);
+// anything else (the ambient "status" probe) resolves immediately with an
+// empty/undecodable envelope so it never breaks session_start. ────────────
+
+interface ExecCall {
+  cmd: string;
+  args: string[];
+  signal?: AbortSignal;
+}
+
+interface NotifyDeferred {
+  args: string[];
+  signal?: AbortSignal;
+  resolve: (r: ExecResult) => void;
+}
+
+function makeFakeExec() {
+  const calls: ExecCall[] = [];
+  const notifyDeferreds: NotifyDeferred[] = [];
+
+  const exec = mock((cmd: string, args: string[], opts?: { signal?: AbortSignal }): Promise<ExecResult> => {
+    calls.push({ cmd, args, signal: opts?.signal });
+    if (args.includes("--version")) {
+      return Promise.resolve({ stdout: "sandesh 0.4.0", stderr: "", code: 0, killed: false });
     }
-    if (entry === "hang") {
-      // Simulate a long-blocking notify — resolves only after abort signal fires
-      // or after a generous timeout. Tests that use "hang" should fire shutdown.
-      return new Promise<ExecResult>((resolve) => {
-        const opts = _opts as { signal?: AbortSignal } | undefined;
-        if (opts?.signal) {
-          opts.signal.addEventListener("abort", () => {
-            resolve({ stdout: "", stderr: "aborted", code: 1, killed: true });
-          });
-        } else {
-          // No signal provided — resolve as error after microtask drain
-          setTimeout(() => resolve({ stdout: "", stderr: "no signal", code: 1, killed: false }), 0);
-        }
-      });
+    if (args.includes("init")) {
+      return Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false });
     }
-    return entry as ExecResult;
-  };
-}
-
-/** Minimal ok ExecResult */
-function ok(stdout = "", stderr = "", code = 0): ExecResult {
-  return { stdout, stderr, code, killed: false };
-}
-
-/** ExecResult with a specific exit code */
-function exit(code: number): ExecResult {
-  return { stdout: "", stderr: `exit ${code}`, code, killed: false };
-}
-
-// ---------------------------------------------------------------------------
-// Fake Pi harness (captures both session_start and session_shutdown handlers)
-// ---------------------------------------------------------------------------
-
-interface FakePiOptions {
-  execSequence: Array<ExecResult | "reject" | "hang">;
-}
-
-function makeFakePi(opts: FakePiOptions) {
-  const capturedTools = new Map<string, unknown>();
-  let sessionStartHandler: SessionStartHandler | undefined;
-  let sessionShutdownHandler: SessionShutdownHandler | undefined;
-
-  const execMock = mock(makeExecSequence(opts.execSequence));
-
-  const sendUserMessageMock = mock(
-    (_content: string | unknown[], _opts?: unknown): void => {
-      // no-op
-    },
-  );
-
-  const onMock = mock((event: string, handler: unknown) => {
-    if (event === "session_start") {
-      sessionStartHandler = handler as SessionStartHandler;
-    } else if (event === "session_shutdown") {
-      sessionShutdownHandler = handler as SessionShutdownHandler;
+    if (args.includes("notify")) {
+      const d = makeDeferred<ExecResult>();
+      notifyDeferreds.push({ args, signal: opts?.signal, resolve: d.resolve });
+      return d.promise;
     }
+    return Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false });
   });
 
-  const fakePi = {
-    registerTool: mock((tool: { name: string }) => {
-      capturedTools.set(tool.name, tool);
-    }),
-    on: onMock,
-    exec: execMock,
-    sendUserMessage: sendUserMessageMock,
-  } as unknown as ExtensionAPI;
-
-  return {
-    fakePi,
-    capturedTools,
-    execMock,
-    sendUserMessageMock,
-    onMock,
-    getSessionStartHandler: () => sessionStartHandler,
-    getSessionShutdownHandler: () => sessionShutdownHandler,
-    fireShutdown: async (ctx: ExtensionContext) => {
-      if (sessionShutdownHandler) {
-        const fakeShutdownEvent: SessionShutdownEvent = {
-          type: "session_shutdown",
-        } as SessionShutdownEvent;
-        await sessionShutdownHandler(fakeShutdownEvent, ctx);
-      }
-    },
-  };
+  return { exec, calls, notifyDeferreds };
 }
 
-// ---------------------------------------------------------------------------
-// Fake ctx harness
-// ---------------------------------------------------------------------------
+function makeFakePi() {
+  const capturedTools = new Map<string, ToolDefinition<any, any, any>>();
+  const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+  const { exec, calls: execCalls, notifyDeferreds } = makeFakeExec();
+  const sendUserMessageMock = mock((_text: string, _opts?: { deliverAs: string }): void => {});
+  const sendMessageMock = mock((_msg: unknown, _opts?: unknown): void => {});
+
+  const fakePi = {
+    registerTool: mock((tool: ToolDefinition<any, any, any>) => {
+      capturedTools.set(tool.name, tool);
+    }),
+    registerCommand: mock(() => {}),
+    on: mock((event: string, handler: unknown) => {
+      handlers.set(event, handler as (event: unknown, ctx: ExtensionContext) => unknown);
+    }),
+    exec,
+    sendUserMessage: sendUserMessageMock,
+    sendMessage: sendMessageMock,
+  } as unknown as ExtensionAPI;
+
+  return { fakePi, capturedTools, handlers, execCalls, notifyDeferreds };
+}
 
 function makeFakeCtx() {
   const notifyCalls: Array<{ msg: string; type?: string }> = [];
@@ -171,549 +136,179 @@ function makeFakeCtx() {
   return { fakeCtx, notifyCalls };
 }
 
-/** Minimal fake session_start event */
-const fakeSessionStartEvent: SessionStartEvent = {
-  type: "session_start",
-} as SessionStartEvent;
-
-// ---------------------------------------------------------------------------
-// Drain microtasks
-// ---------------------------------------------------------------------------
-
-async function drainMicrotasks(rounds = 20): Promise<void> {
-  for (let i = 0; i < rounds; i++) {
-    await new Promise<void>((r) => setTimeout(r, 0));
-  }
+function getTool(tools: Map<string, ToolDefinition<any, any, any>>, name: string): ToolDefinition<any, any, any> {
+  const t = tools.get(name);
+  if (!t) throw new Error(`Tool "${name}" not registered`);
+  return t;
 }
 
-// ---------------------------------------------------------------------------
-// Env setup / teardown
-// ---------------------------------------------------------------------------
+async function callExecute(tool: ToolDefinition<any, any, any>, params: Record<string, unknown>, ctx: ExtensionContext) {
+  return tool.execute("test-call-id", params, undefined, undefined, ctx);
+}
+
+function text(result: { content: unknown[] }): string {
+  return (result.content[0] as { type: "text"; text: string }).text;
+}
+
+// ─── Env save/restore (address, project, autostart) ───────────────────────
 
 const SAVED_ENV: Partial<Record<string, string>> = {};
 
-beforeEach(() => {
+function saveEnv(): void {
   SAVED_ENV.SANDESH_ADDRESS = process.env.SANDESH_ADDRESS;
   SAVED_ENV.SANDESH_PROJECT = process.env.SANDESH_PROJECT;
+  SAVED_ENV.SANDESH_AUTOSTART = process.env.SANDESH_AUTOSTART;
+}
 
-  // Inject no-op sleep so backoff paths don't use real timers
-  __setWakeSleepFn(async () => {});
+function restoreEnv(): void {
+  if (SAVED_ENV.SANDESH_ADDRESS === undefined) delete process.env.SANDESH_ADDRESS;
+  else process.env.SANDESH_ADDRESS = SAVED_ENV.SANDESH_ADDRESS;
+  if (SAVED_ENV.SANDESH_PROJECT === undefined) delete process.env.SANDESH_PROJECT;
+  else process.env.SANDESH_PROJECT = SAVED_ENV.SANDESH_PROJECT;
+  if (SAVED_ENV.SANDESH_AUTOSTART === undefined) delete process.env.SANDESH_AUTOSTART;
+  else process.env.SANDESH_AUTOSTART = SAVED_ENV.SANDESH_AUTOSTART;
+}
 
-  // Reset the module-level single-loop guard between tests.
-  // GREEN must export __resetWakeState() — until then this is a no-op
-  // (imported dynamically so a missing export doesn't fail the import).
-  const indexModule = require("./index") as Record<string, unknown>;
-  if (typeof indexModule.__resetWakeState === "function") {
-    (indexModule.__resetWakeState as () => void)();
-  }
-});
+const fakeSessionStartEvent = { type: "session_start", reason: "startup" } as const;
+const fakeSessionShutdownEvent = { type: "session_shutdown", reason: "quit" } as const;
 
-afterEach(() => {
-  if (SAVED_ENV.SANDESH_ADDRESS === undefined) {
-    delete process.env.SANDESH_ADDRESS;
-  } else {
-    process.env.SANDESH_ADDRESS = SAVED_ENV.SANDESH_ADDRESS;
-  }
-  if (SAVED_ENV.SANDESH_PROJECT === undefined) {
-    delete process.env.SANDESH_PROJECT;
-  } else {
-    process.env.SANDESH_PROJECT = SAVED_ENV.SANDESH_PROJECT;
-  }
-});
+// ============================================================================
+// C — arming (D4) + session_shutdown (AC8)
+// ============================================================================
 
-// ---------------------------------------------------------------------------
-// AC4 — missing-env notice
-// ---------------------------------------------------------------------------
+describe("C — arming: SANDESH_AUTOSTART gate (§S5, AC8)", () => {
+  test("both identity vars set, no SANDESH_AUTOSTART → no notify spawned, one info notice naming sandesh_notify_start", async () => {
+    saveEnv();
+    process.env.SANDESH_ADDRESS = "Mainline - Demo";
+    process.env.SANDESH_PROJECT = "Demo";
+    delete process.env.SANDESH_AUTOSTART;
+    try {
+      const { fakePi, handlers, notifyDeferreds } = makeFakePi();
+      registerExtension(fakePi);
+      const { fakeCtx, notifyCalls } = makeFakeCtx();
+      const startHandler = handlers.get("session_start")!;
+      await startHandler(fakeSessionStartEvent, fakeCtx);
+      await flush();
 
-describe("AC4 — missing-env notice when probe succeeds but env vars unset", () => {
-  test("AC4a — SANDESH_ADDRESS unset → ctx.ui.notify called with a message naming $SANDESH_ADDRESS", async () => {
-    delete process.env.SANDESH_ADDRESS;
-    process.env.SANDESH_PROJECT = "TestProj";
+      expect(notifyDeferreds.length).toBe(0);
 
-    // Probe would succeed, but address env is missing
-    const { fakePi } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0")],
-    });
-    registerExtension(fakePi);
-
-    const onCalls = (fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>;
-    const startCall = onCalls.find(([e]) => e === "session_start");
-    expect(startCall).toBeDefined();
-    const startHandler = startCall![1] as SessionStartHandler;
-
-    const { fakeCtx, notifyCalls } = makeFakeCtx();
-    await startHandler(fakeSessionStartEvent, fakeCtx);
-    await drainMicrotasks();
-
-    // A notice MUST have been surfaced via ctx.ui.notify
-    expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
-
-    // The notice must name $SANDESH_ADDRESS so the user knows what to set
-    const noticeText = notifyCalls.map((n) => n.msg).join(" ");
-    expect(noticeText).toContain("SANDESH_ADDRESS");
+      const infoNotices = notifyCalls.filter((n) => n.type === "info");
+      expect(infoNotices.length).toBe(1);
+      expect(infoNotices[0].msg).toContain("sandesh_notify_start");
+    } finally {
+      restoreEnv();
+    }
   });
 
-  test("AC4b — SANDESH_PROJECT unset → ctx.ui.notify called with a message naming $SANDESH_PROJECT", async () => {
-    process.env.SANDESH_ADDRESS = "Mainline - TestProj";
-    delete process.env.SANDESH_PROJECT;
+  test("SANDESH_AUTOSTART=1 with both identity vars set spawns exactly one notify with the tool's argv", async () => {
+    saveEnv();
+    process.env.SANDESH_ADDRESS = "Mainline - Demo";
+    process.env.SANDESH_PROJECT = "Demo";
+    process.env.SANDESH_AUTOSTART = "1";
+    try {
+      const { fakePi, handlers, notifyDeferreds } = makeFakePi();
+      registerExtension(fakePi);
+      const { fakeCtx } = makeFakeCtx();
+      const startHandler = handlers.get("session_start")!;
+      await startHandler(fakeSessionStartEvent, fakeCtx);
+      await flush();
 
-    const { fakePi } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0")],
-    });
-    registerExtension(fakePi);
-
-    const onCalls = (fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>;
-    const startCall = onCalls.find(([e]) => e === "session_start");
-    const startHandler = startCall![1] as SessionStartHandler;
-
-    const { fakeCtx, notifyCalls } = makeFakeCtx();
-    await startHandler(fakeSessionStartEvent, fakeCtx);
-    await drainMicrotasks();
-
-    expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
-
-    const noticeText = notifyCalls.map((n) => n.msg).join(" ");
-    expect(noticeText).toContain("SANDESH_PROJECT");
+      expect(notifyDeferreds.length).toBe(1);
+      expect(notifyDeferreds[0].args).toEqual([
+        "--project",
+        "Demo",
+        "--format",
+        "toon",
+        "notify",
+        "--to",
+        "Mainline - Demo",
+      ]);
+    } finally {
+      restoreEnv();
+    }
   });
 
-  test("AC4c — both env vars unset → notice surfaced (names both $SANDESH_ADDRESS and $SANDESH_PROJECT)", async () => {
+  test("SANDESH_AUTOSTART=1 with both vars unset emits an error/warning naming both vars and spawns nothing", async () => {
+    saveEnv();
     delete process.env.SANDESH_ADDRESS;
     delete process.env.SANDESH_PROJECT;
+    process.env.SANDESH_AUTOSTART = "1";
+    try {
+      const { fakePi, handlers, notifyDeferreds } = makeFakePi();
+      registerExtension(fakePi);
+      const { fakeCtx, notifyCalls } = makeFakeCtx();
+      const startHandler = handlers.get("session_start")!;
+      await startHandler(fakeSessionStartEvent, fakeCtx);
+      await flush();
 
-    const { fakePi } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0")],
-    });
-    registerExtension(fakePi);
+      expect(notifyDeferreds.length).toBe(0);
 
-    const onCalls = (fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>;
-    const startCall = onCalls.find(([e]) => e === "session_start");
-    const startHandler = startCall![1] as SessionStartHandler;
-
-    const { fakeCtx, notifyCalls } = makeFakeCtx();
-    await startHandler(fakeSessionStartEvent, fakeCtx);
-    await drainMicrotasks();
-
-    expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
-    // Combined notice text must name both env vars
-    const noticeText = notifyCalls.map((n) => n.msg).join(" ");
-    expect(noticeText).toContain("SANDESH_ADDRESS");
-    expect(noticeText).toContain("SANDESH_PROJECT");
+      const severe = notifyCalls.filter((n) => n.type === "warning" || n.type === "error");
+      expect(severe.length).toBeGreaterThanOrEqual(1);
+      const joined = severe.map((n) => n.msg).join(" ");
+      expect(joined).toContain("SANDESH_ADDRESS");
+      expect(joined).toContain("SANDESH_PROJECT");
+    } finally {
+      restoreEnv();
+    }
   });
 
-  test("AC4d — missing-env notice is distinct from the missing-CLI notice (probe succeeded)", async () => {
-    delete process.env.SANDESH_ADDRESS;
-    process.env.SANDESH_PROJECT = "TestProj";
-
-    // Probe succeeds (code:0) — so the missing-CLI notice must NOT appear
-    const { fakePi } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0")],
-    });
+  test("session_shutdown aborts every running child; sandesh_notify_status then reports running:false for both", async () => {
+    const { fakePi, capturedTools, handlers, notifyDeferreds } = makeFakePi();
     registerExtension(fakePi);
+    const { fakeCtx } = makeFakeCtx();
+    const startTool = getTool(capturedTools, "sandesh_notify_start");
+    const statusTool = getTool(capturedTools, "sandesh_notify_status");
 
-    const onCalls = (fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>;
-    const startHandler = (onCalls.find(([e]) => e === "session_start")![1]) as SessionStartHandler;
+    await callExecute(startTool, { address: "Mainline - Demo", project: "Demo" }, fakeCtx);
+    await callExecute(startTool, { address: "Track 1 - Demo", project: "Demo" }, fakeCtx);
+    expect(notifyDeferreds.length).toBe(2);
+    expect(notifyDeferreds[0].signal?.aborted).toBe(false);
+    expect(notifyDeferreds[1].signal?.aborted).toBe(false);
 
-    const { fakeCtx, notifyCalls } = makeFakeCtx();
-    await startHandler(fakeSessionStartEvent, fakeCtx);
-    await drainMicrotasks();
+    const shutdownHandler = handlers.get("session_shutdown")!;
+    await shutdownHandler(fakeSessionShutdownEvent, fakeCtx);
+    await flush();
 
-    // The notice must NOT be the install-CLI notice (which would mention installation)
-    // It should be the env-vars notice
-    expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
-    const noticeText = notifyCalls.map((n) => n.msg).join(" ");
-    // Must name the env vars (not just "install sandesh")
-    expect(noticeText).toContain("SANDESH_ADDRESS");
-  });
+    expect(notifyDeferreds[0].signal?.aborted).toBe(true);
+    expect(notifyDeferreds[1].signal?.aborted).toBe(true);
 
-  test("AC4e — missing env → no notify exec, notice surfaced naming SANDESH_ADDRESS, verbs still registered (12 tools)", async () => {
-    delete process.env.SANDESH_ADDRESS;
-    process.env.SANDESH_PROJECT = "TestProj";
-
-    const { fakePi, execMock, capturedTools } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0")],
-    });
-    registerExtension(fakePi);
-
-    const onCalls = (fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>;
-    const startHandler = (onCalls.find(([e]) => e === "session_start")![1]) as SessionStartHandler;
-
-    const { fakeCtx, notifyCalls } = makeFakeCtx();
-    await startHandler(fakeSessionStartEvent, fakeCtx);
-    await drainMicrotasks();
-
-    // No notify exec (C0 already ensured this; kept as regression guard)
-    const wakeNotifyCalls = (execMock.mock.calls as Array<[string, string[], unknown?]>).filter(
-      ([, args]) => Array.isArray(args) && args.includes("notify"),
-    );
-    expect(wakeNotifyCalls.length).toBe(0);
-
-    // Verbs still registered (12 tools after CR-SAN-032)
-    expect(capturedTools.size).toBe(12);
-
-    // C1 NEW: a notice MUST have been surfaced via ctx.ui.notify naming $SANDESH_ADDRESS
-    expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
-    const noticeText = notifyCalls.map((n) => n.msg).join(" ");
-    expect(noticeText).toContain("SANDESH_ADDRESS");
+    const result = await callExecute(statusTool, {}, fakeCtx);
+    const env = decodeEnvelope(text(result));
+    const watchers = env.fields.watchers as Array<{ address: string; running: boolean }>;
+    expect(watchers.length).toBe(2);
+    for (const w of watchers) expect(w.running).toBe(false);
   });
 });
 
-// ---------------------------------------------------------------------------
-// AC5 — session_shutdown stops the loop
-// ---------------------------------------------------------------------------
+// ============================================================================
+// F — AC9 pins: wakeLoop deleted; files whitelist + npm pack ship src/wake.ts
+// ============================================================================
 
-describe("AC5 — session_shutdown: registered handler, stops loop, no re-arm after abort", () => {
-  test("AC5a — registerExtension registers a session_shutdown handler via pi.on", () => {
-    process.env.SANDESH_ADDRESS = "Mainline - Demo";
-    process.env.SANDESH_PROJECT = "Demo";
-
-    const { fakePi, onMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), exit(3)],
-    });
-    registerExtension(fakePi);
-
-    // pi.on must have been called with "session_shutdown"
-    const onCalls = (onMock as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>;
-    const shutdownCall = onCalls.find(([e]) => e === "session_shutdown");
-    expect(shutdownCall).toBeDefined();
-    expect(typeof shutdownCall![1]).toBe("function");
+describe("F — AC9 pins", () => {
+  test("src/index.ts source no longer defines a wakeLoop function", () => {
+    const src = readFileSync(resolve(import.meta.dir, "index.ts"), "utf-8");
+    expect(src).not.toContain("function wakeLoop");
   });
 
-  test("AC5b — shutdown handler invoked after loop starts → loop stops re-arming (notify call count frozen)", async () => {
-    process.env.SANDESH_ADDRESS = "Mainline - Demo";
-    process.env.SANDESH_PROJECT = "Demo";
-
-    // Sequence: probe → notify(2, timeout/re-arm) × many — loop keeps running
-    // until we fire shutdown. Use "hang" for the second notify so it blocks
-    // waiting for the abort signal, then resolves as error (code:1) — but the
-    // stopped flag should prevent re-arm after shutdown.
-    const { fakePi, execMock, getSessionShutdownHandler } = makeFakePi({
-      execSequence: [
-        ok("sandesh 1.0.0"), // probe
-        ok(""),              // init --check (provisioned)
-        exit(2),             // first notify: timeout → re-arm
-        "hang",              // second notify: blocks until aborted
-        exit(3),             // fallback (should not be reached)
-      ],
-    });
-    registerExtension(fakePi);
-
-    const onCalls = (fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>;
-    const startHandler = (onCalls.find(([e]) => e === "session_start")![1]) as SessionStartHandler;
-
-    const { fakeCtx } = makeFakeCtx();
-    await startHandler(fakeSessionStartEvent, fakeCtx);
-
-    // Let the loop advance past the first notify (code:2 → re-arm → hits "hang")
-    await drainMicrotasks(10);
-
-    // Capture notify call count at the moment of shutdown
-    const countAtShutdown = (execMock.mock.calls as Array<[string, string[], unknown?]>).filter(
-      ([, args]) => Array.isArray(args) && args.includes("notify"),
-    ).length;
-
-    // Fire shutdown
-    await (getSessionShutdownHandler() as SessionShutdownHandler)(
-      { type: "session_shutdown" } as SessionShutdownEvent,
-      fakeCtx,
-    );
-
-    // Drain further — loop must NOT re-arm after shutdown
-    await drainMicrotasks(20);
-
-    const countAfterShutdown = (execMock.mock.calls as Array<[string, string[], unknown?]>).filter(
-      ([, args]) => Array.isArray(args) && args.includes("notify"),
-    ).length;
-
-    // Count must not have grown beyond countAtShutdown + 1 (the aborted "hang" call itself)
-    expect(countAfterShutdown).toBeLessThanOrEqual(countAtShutdown + 1);
+  test("package.json files includes src/wake.ts and src/toon.ts", () => {
+    const pkg = JSON.parse(readFileSync(resolve(import.meta.dir, "..", "package.json"), "utf-8")) as {
+      files?: string[];
+    };
+    expect(pkg.files).toContain("src/wake.ts");
+    expect(pkg.files).toContain("src/toon.ts");
   });
 
-  test("AC5c — pi.exec notify call receives a { signal } options arg (AbortSignal threaded)", async () => {
-    process.env.SANDESH_ADDRESS = "Mainline - Demo";
-    process.env.SANDESH_PROJECT = "Demo";
-
-    // probe → init --check(0) → notify(3, stop immediately so test is deterministic)
-    const { fakePi, execMock } = makeFakePi({
-      execSequence: [ok("sandesh 1.0.0"), ok(""), exit(3)],
+  test("npm pack --dry-run --json lists src/wake.ts in the tarball", () => {
+    const result = spawnSync("npm", ["pack", "--dry-run", "--json"], {
+      cwd: resolve(import.meta.dir, ".."),
+      encoding: "utf-8",
+      shell: true,
     });
-    registerExtension(fakePi);
-
-    const onCalls = (fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>;
-    const startHandler = (onCalls.find(([e]) => e === "session_start")![1]) as SessionStartHandler;
-
-    const { fakeCtx } = makeFakeCtx();
-    await startHandler(fakeSessionStartEvent, fakeCtx);
-    await drainMicrotasks();
-
-    // Find the notify exec call and assert it received a 3rd options arg with a signal
-    const calls = execMock.mock.calls as Array<[string, string[], unknown]>;
-    const notifyCall = calls.find(([, args]) => Array.isArray(args) && args.includes("notify"));
-    expect(notifyCall).toBeDefined();
-
-    // The 3rd argument MUST be present and carry a signal property
-    const opts = notifyCall![2] as { signal?: unknown } | undefined;
-    expect(opts).toBeDefined();
-    expect(opts).not.toBeNull();
-    expect(opts!.signal).toBeDefined();
-    // The signal must be an AbortSignal instance
-    expect(opts!.signal).toBeInstanceOf(AbortSignal);
-  });
-
-  test("AC5d — AbortSignal is aborted after session_shutdown fires", async () => {
-    process.env.SANDESH_ADDRESS = "Track 1 - Demo";
-    process.env.SANDESH_PROJECT = "Demo";
-
-    // We need to capture the AbortSignal passed into pi.exec notify, then
-    // verify it is aborted after shutdown.
-    let capturedSignal: AbortSignal | undefined;
-
-    // Custom exec mock that captures the signal from the notify call
-    const execMock = mock(async (cmd: string, args: string[], opts?: { signal?: AbortSignal }) => {
-      if (cmd === "sandesh" && Array.isArray(args) && args.includes("notify")) {
-        capturedSignal = opts?.signal;
-        // Hang until aborted
-        return new Promise<ExecResult>((resolve) => {
-          if (opts?.signal) {
-            opts.signal.addEventListener("abort", () => {
-              resolve({ stdout: "", stderr: "aborted", code: 1, killed: true });
-            });
-          } else {
-            setTimeout(() => resolve({ stdout: "", stderr: "no signal", code: 1, killed: false }), 0);
-          }
-        });
-      }
-      // Version probe
-      return { stdout: "sandesh 1.0.0", stderr: "", code: 0, killed: false };
-    });
-
-    let sessionStartHandler: SessionStartHandler | undefined;
-    let sessionShutdownHandler: SessionShutdownHandler | undefined;
-
-    const fakePi = {
-      registerTool: mock((_tool: unknown) => {}),
-      on: mock((event: string, handler: unknown) => {
-        if (event === "session_start") sessionStartHandler = handler as SessionStartHandler;
-        if (event === "session_shutdown") sessionShutdownHandler = handler as SessionShutdownHandler;
-      }),
-      exec: execMock,
-      sendUserMessage: mock((_content: unknown) => {}),
-    } as unknown as ExtensionAPI;
-
-    registerExtension(fakePi);
-
-    const { fakeCtx } = makeFakeCtx();
-    await sessionStartHandler!(fakeSessionStartEvent, fakeCtx);
-
-    // Let the loop reach the notify call
-    await drainMicrotasks(5);
-
-    // Signal not yet aborted
-    expect(capturedSignal).toBeDefined();
-    expect(capturedSignal!.aborted).toBe(false);
-
-    // Fire shutdown
-    await sessionShutdownHandler!(
-      { type: "session_shutdown" } as SessionShutdownEvent,
-      fakeCtx,
-    );
-
-    // Now the signal must be aborted
-    expect(capturedSignal!.aborted).toBe(true);
-  });
-
-  test("AC5e — after shutdown, no further pi.exec notify calls occur (stopped flag prevents re-arm)", async () => {
-    process.env.SANDESH_ADDRESS = "Mainline - Demo";
-    process.env.SANDESH_PROJECT = "Demo";
-
-    // Use custom exec to track calls and resolve notify immediately (code:2) until
-    // shutdown fires, then stop counting.
-    let notifyCallCount = 0;
-    let shutdownFired = false;
-
-    const execMock = mock(async (cmd: string, args: string[]) => {
-      if (cmd === "sandesh" && Array.isArray(args) && args.includes("--version")) {
-        return { stdout: "sandesh 1.0.0", stderr: "", code: 0, killed: false };
-      }
-      if (cmd === "sandesh" && Array.isArray(args) && args.includes("notify")) {
-        notifyCallCount++;
-        if (shutdownFired) {
-          // This call should never happen — fail loudly if it does
-          throw new Error("notify called after shutdown — single-loop guard failed");
-        }
-        // Return timeout (code:2 → re-arm) for the first call, then hang
-        if (notifyCallCount === 1) {
-          return { stdout: "", stderr: "", code: 2, killed: false };
-        }
-        // Second call: hang, waiting for abort
-        return new Promise<ExecResult>((resolve) => {
-          setTimeout(() => {
-            // If shutdown not fired by now, resolve as terminal to prevent infinite hang
-            resolve({ stdout: "", stderr: "timeout", code: 3, killed: false });
-          }, 50);
-        });
-      }
-      return { stdout: "", stderr: "", code: 0, killed: false };
-    });
-
-    let sessionStartHandler: SessionStartHandler | undefined;
-    let sessionShutdownHandler: SessionShutdownHandler | undefined;
-
-    const fakePi = {
-      registerTool: mock((_tool: unknown) => {}),
-      on: mock((event: string, handler: unknown) => {
-        if (event === "session_start") sessionStartHandler = handler as SessionStartHandler;
-        if (event === "session_shutdown") sessionShutdownHandler = handler as SessionShutdownHandler;
-      }),
-      exec: execMock,
-      sendUserMessage: mock((_content: unknown) => {}),
-    } as unknown as ExtensionAPI;
-
-    registerExtension(fakePi);
-
-    const { fakeCtx } = makeFakeCtx();
-    await sessionStartHandler!(fakeSessionStartEvent, fakeCtx);
-
-    // Let the loop advance at least one iteration (code:2 → re-arm)
-    await drainMicrotasks(10);
-
-    const countBeforeShutdown = notifyCallCount;
-    expect(countBeforeShutdown).toBeGreaterThanOrEqual(1);
-
-    // Mark shutdown as fired before invoking the handler
-    shutdownFired = true;
-    await sessionShutdownHandler!(
-      { type: "session_shutdown" } as SessionShutdownEvent,
-      fakeCtx,
-    );
-
-    // Drain and verify no new calls beyond what was already in-flight
-    await drainMicrotasks(20);
-    // notifyCallCount may have gone to 2 (the in-flight "hang" arm), but not 3+
-    expect(notifyCallCount).toBeLessThanOrEqual(countBeforeShutdown + 1);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// AC5 — single-loop guard
-// ---------------------------------------------------------------------------
-
-describe("AC5 — single-loop guard: double session_start does not spawn two concurrent loops", () => {
-  test("AC5f — session_start fired twice → only one loop runs (notify call count matches single-loop pattern)", async () => {
-    process.env.SANDESH_ADDRESS = "Mainline - Demo";
-    process.env.SANDESH_PROJECT = "Demo";
-
-    // Both session_start fires share the same exec sequence.
-    // A single loop: probe(ok) → notify(5, stop). Total notify calls: 1.
-    // Two loops: probe(ok) × 2 → notify(5) × 2. Total notify calls: 2+.
-    //
-    // We script the sequence for a SINGLE pass. If a second loop starts, the
-    // exec mock will run past the scripted entries and clamp to the last (exit(5)),
-    // but the notify count will exceed 1 — revealing the double-start bug.
-    const { fakePi, execMock } = makeFakePi({
-      // Enough entries for ONE probe + init --check + ONE notify (terminal). If two
-      // loops run concurrently, the second loop's notify call reveals it.
-      execSequence: [
-        ok("sandesh 1.0.0"), // probe for first session_start
-        ok(""),              // init --check for first session_start (provisioned)
-        exit(5),             // notify for first loop → stops
-        ok("sandesh 1.0.0"), // probe for second session_start (guard must prevent loop)
-        ok(""),              // init --check for second session_start
-      ],
-    });
-    registerExtension(fakePi);
-
-    const onCalls = (fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>;
-    const startHandler = (onCalls.find(([e]) => e === "session_start")![1]) as SessionStartHandler;
-
-    const { fakeCtx } = makeFakeCtx();
-
-    // First session_start — starts the loop
-    await startHandler(fakeSessionStartEvent, fakeCtx);
-    await drainMicrotasks(10);
-
-    // Second session_start — guard must prevent a second loop
-    await startHandler(fakeSessionStartEvent, fakeCtx);
-    await drainMicrotasks(10);
-
-    // Count notify calls: a single loop produces exactly 1 (stopped by exit(5))
-    // Two concurrent loops would produce 2.
-    const notifyCalls = (execMock.mock.calls as Array<[string, string[], unknown?]>).filter(
-      ([, args]) => Array.isArray(args) && args.includes("notify"),
-    );
-    expect(notifyCalls.length).toBe(1);
-  });
-
-  test("AC5g — single-loop guard: __resetWakeState() exported and resets the guard between tests", () => {
-    // This test documents the required seam.
-    // GREEN must export __resetWakeState from index.ts.
-    // If the export is absent, this test will fail — surfacing the missing seam.
-    const indexModule = require("./index") as Record<string, unknown>;
-    expect(typeof indexModule.__resetWakeState).toBe("function");
-  });
-
-  test("AC5h — __resetWakeState must be exported AND functional: after reset, single-loop guard allows a new loop", async () => {
-    // This test FAILS RED because:
-    //   (a) __resetWakeState is not yet exported (AC5g covers that), AND
-    //   (b) without a guard, the second session_start in AC5f already launches a second loop
-    //       CONCURRENTLY — meaning the guard logic itself is absent.
-    //
-    // GREEN must:
-    //   1. Export __resetWakeState().
-    //   2. Implement a module-level "loop running" flag that __resetWakeState() clears.
-    //   3. The session_start handler checks the flag — if set, skips starting a new loop.
-    //
-    // The assertion here verifies the COMPLETE contract: guard exists, reset works,
-    // and a post-reset second session_start starts exactly one more loop (not two concurrent).
-    //
-    // Strategy: use a guard-check assertion that REQUIRES __resetWakeState to exist.
-    // Without it, the require() check fails the test.
-    process.env.SANDESH_ADDRESS = "Track 1 - Demo";
-    process.env.SANDESH_PROJECT = "Demo";
-
-    const indexModule = require("./index") as Record<string, unknown>;
-
-    // AC5h requires the seam to exist — fail immediately if missing
-    expect(typeof indexModule.__resetWakeState).toBe("function");
-    const resetWakeState = indexModule.__resetWakeState as () => void;
-
-    const { fakePi, execMock } = makeFakePi({
-      execSequence: [
-        ok("sandesh 1.0.0"), // probe for first session_start
-        ok(""),              // init --check for first session_start (provisioned)
-        exit(5),             // notify → stop (first loop ends naturally; guard becomes "stopped")
-        ok("sandesh 1.0.0"), // probe for second session_start (after guard reset)
-        ok(""),              // init --check for second session_start
-        exit(5),             // notify → stop (second loop)
-      ],
-    });
-    registerExtension(fakePi);
-
-    const onCalls = (fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>;
-    const startHandler = (onCalls.find(([e]) => e === "session_start")![1]) as SessionStartHandler;
-
-    const { fakeCtx } = makeFakeCtx();
-
-    // First session_start — loop runs and stops (exit:5)
-    await startHandler(fakeSessionStartEvent, fakeCtx);
-    await drainMicrotasks(10);
-
-    // Verify exactly 1 notify call consumed so far
-    const firstPassNotifyCalls = (execMock.mock.calls as Array<[string, string[], unknown?]>).filter(
-      ([, args]) => Array.isArray(args) && args.includes("notify"),
-    );
-    expect(firstPassNotifyCalls.length).toBe(1);
-
-    // Reset the guard so a new loop can start
-    resetWakeState();
-
-    // Second session_start — should be allowed to start a fresh loop
-    await startHandler(fakeSessionStartEvent, fakeCtx);
-    await drainMicrotasks(10);
-
-    // Both loops should have run sequentially: 2 notify calls total (one per loop)
-    const allNotifyCalls = (execMock.mock.calls as Array<[string, string[], unknown?]>).filter(
-      ([, args]) => Array.isArray(args) && args.includes("notify"),
-    );
-    expect(allNotifyCalls.length).toBe(2);
+    if (result.status !== 0) {
+      throw new Error(`npm pack failed (exit ${result.status ?? "null"}): ${result.stderr}`);
+    }
+    const files = packedFilePaths(result.stdout);
+    expect(files).toContain("src/wake.ts");
   });
 });
