@@ -25,6 +25,8 @@ or via crucible:
         --tests tests.test_provision_automigrate --agent CR-SAN-036-C1-RED
 """
 
+import os, sys; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root — CR-SAN-049 guard bootstrap
+import tests._store_guard  # noqa: F401 — real-store guard (CR-SAN-049): must be the first non-bootstrap import
 import builtins
 import os
 import shutil

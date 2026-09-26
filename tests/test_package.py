@@ -13,6 +13,8 @@ mcp_server pulls in `mcp`.
   python-crucible.py test --tests tests.test_package --agent CR-SAN-008-C0-RED
 """
 
+import os, sys; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root — CR-SAN-049 guard bootstrap
+import tests._store_guard  # noqa: F401 — real-store guard (CR-SAN-049): must be the first non-bootstrap import
 import unittest
 
 

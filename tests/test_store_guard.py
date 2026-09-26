@@ -51,16 +51,8 @@ Run targeted (Crucible client resolves the venv interpreter):
       test --tests tests.test_store_guard --agent CR-SAN-049-C1-RED
 """
 
-import glob
-import json
 import os
-import shutil
-import sqlite3
-import subprocess
 import sys
-import tempfile
-import time
-import unittest
 
 # Repo root — resolve from this file so it works regardless of cwd.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -69,6 +61,15 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 import tests._store_guard as guard  # noqa: E402,F401 — AC3: first import, re-points XDG_DATA_HOME to tmpfs
+
+import glob  # noqa: E402
+import json  # noqa: E402
+import shutil  # noqa: E402
+import sqlite3  # noqa: E402
+import subprocess  # noqa: E402
+import tempfile  # noqa: E402
+import time  # noqa: E402
+import unittest  # noqa: E402
 
 _VENV_PYTHON = os.path.join(_REPO_ROOT, ".venv", "bin", "python")
 _SUBPROCESS_PYTHON = _VENV_PYTHON if os.path.exists(_VENV_PYTHON) else sys.executable
