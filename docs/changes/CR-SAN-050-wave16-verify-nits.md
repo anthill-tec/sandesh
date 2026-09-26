@@ -13,7 +13,7 @@ Each VERIFY approved with SHOULD-FIX/SUGGESTION items that are in-scope and smal
 one chore, before the 0.4.0 release boundary so the release ships without known nits.
 
 ## Scope
-- **§S1 (047 SHOULD-FIX 1 — AC2 breadth, python).** `tests/test_axi_verbs.py`: a table-driven test that, for
+- **§S1 (047 SHOULD-FIX 1 — AC2 breadth, python).** `tests/test_axi_roundtrip_all_verbs.py` (new file): a table-driven test that, for
   EVERY verb `cli.py` routes through `AXI_FN`, runs the verb once in `toon` and once in `json` on the fixture
   store and asserts `_toon.decode(toon_out) == json.loads(json_out)` (the literal AC2 oracle, per verb).
 - **§S2 (047 SHOULD-FIX 2, python).** `cli.py`: replace the repeated `con = sdb.connect(); try … finally
@@ -31,7 +31,7 @@ one chore, before the 0.4.0 release boundary so the release ships without known 
   `__resetWakeState` → `resetExtensionState` (still exported; the two test importers updated).
 
 ## Acceptance criteria
-- **AC1** — `test_axi_verbs.py::AC2 round-trip` covers every `AXI_FN` verb (the test derives the list from
+- **AC1** — `test_axi_roundtrip_all_verbs.py` covers every `AXI_FN` verb (the test derives the list from
   `cli.AXI_FN` so a new verb cannot be missed) and passes.
 - **AC2** — `grep -c "con.close()" sandesh/cli.py` decreases by 3 and `git diff` shows no behaviour change
   (all `test_axi_*` + `test_lifecycle_cli` green).
