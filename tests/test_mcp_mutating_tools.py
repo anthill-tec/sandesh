@@ -18,6 +18,8 @@ CR-SAN-005 contract: sandesh_actioned has been removed (10 → 9 tools).
   python-crucible.py test --tests tests.test_mcp_mutating_tools --agent CR-SAN-005-C0-RED
 """
 
+import os, sys; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root — CR-SAN-049 guard bootstrap
+import tests._store_guard  # noqa: F401 — real-store guard (CR-SAN-049): must be the first non-bootstrap import
 import json
 import os
 import shutil

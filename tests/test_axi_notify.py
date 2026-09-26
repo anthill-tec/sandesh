@@ -52,6 +52,8 @@ Run targeted (Crucible client resolves the venv interpreter):
   PYTHONPATH=. .venv/bin/python tests/test_axi_notify.py
 """
 
+import os, sys; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root — CR-SAN-049 guard bootstrap
+import tests._store_guard  # noqa: F401 — real-store guard (CR-SAN-049): must be the first non-bootstrap import
 import contextlib
 import io
 import json
@@ -442,6 +444,7 @@ class NotifySubprocessTest(unittest.TestCase):
         self.assertIn("[notify]", err)
 
     def test_toon_exit0_wakes_on_send_unread_lists_triggering_id(self):
+        # self.env carries XDG_DATA_HOME=<temp store> (built in setUp via _build_env) — §S3 subprocess discipline
         proc = subprocess.Popen(
             [_SUBPROCESS_PYTHON, "-m", "sandesh.cli", "--format", "toon",
              "notify", "--project", self.PROJ, "--to", self.TO, "--timeout", "30"],
@@ -470,6 +473,7 @@ class NotifySubprocessTest(unittest.TestCase):
         self.assertEqual(axi["unread"], [mid])
 
     def test_sigterm_exit_143_single_envelope_error_names_signal_notifier_released(self):
+        # self.env carries XDG_DATA_HOME=<temp store> (built in setUp via _build_env) — §S3 subprocess discipline
         proc = subprocess.Popen(
             [_SUBPROCESS_PYTHON, "-m", "sandesh.cli", "--format", "toon",
              "notify", "--project", self.PROJ, "--to", self.TO, "--timeout", "60"],

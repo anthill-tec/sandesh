@@ -7,6 +7,8 @@ in-process via FastMCP.call_tool / list_tools (unittest.IsolatedAsyncioTestCase)
 """
 
 import os
+import os, sys; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root — CR-SAN-049 guard bootstrap
+import tests._store_guard  # noqa: F401 — real-store guard (CR-SAN-049): must be the first non-bootstrap import
 import tempfile
 import shutil
 import unittest

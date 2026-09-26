@@ -24,6 +24,8 @@ Run via the crucible (uses .venv interpreter):
 """
 
 import os
+import os, sys; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root — CR-SAN-049 guard bootstrap
+import tests._store_guard  # noqa: F401 — real-store guard (CR-SAN-049): must be the first non-bootstrap import
 import sqlite3
 import subprocess
 import sys
@@ -5501,16 +5503,17 @@ class MigrateCorePurityStdlibTest(unittest.TestCase):
         GREEN must keep it passing after status removal.
         If it fails after GREEN, the removal broke stdlib compatibility.
         """
-        r = subprocess.run(
-            [
-                _SYSTEM_PYTHON,
-                "-m", "unittest", "tests.test_sandesh",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=_REPO_ROOT,
-            env={**os.environ, "PYTHONPATH": _REPO_ROOT},
-        )
+        with tempfile.TemporaryDirectory(prefix="sandesh-migrate-core-") as xdg:
+            r = subprocess.run(
+                [
+                    _SYSTEM_PYTHON,
+                    "-m", "unittest", "tests.test_sandesh",
+                ],
+                capture_output=True,
+                text=True,
+                cwd=_REPO_ROOT,
+                env={**os.environ, "PYTHONPATH": _REPO_ROOT, "XDG_DATA_HOME": xdg},
+            )
         self.assertEqual(
             r.returncode,
             0,
@@ -5526,16 +5529,17 @@ class MigrateCorePurityStdlibTest(unittest.TestCase):
         exits non-zero due to test errors (which would already be caught above)
         but provides an explicit message about which failure kind occurred.
         """
-        r = subprocess.run(
-            [
-                _SYSTEM_PYTHON,
-                "-m", "unittest", "tests.test_sandesh",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=_REPO_ROOT,
-            env={**os.environ, "PYTHONPATH": _REPO_ROOT},
-        )
+        with tempfile.TemporaryDirectory(prefix="sandesh-migrate-core-") as xdg:
+            r = subprocess.run(
+                [
+                    _SYSTEM_PYTHON,
+                    "-m", "unittest", "tests.test_sandesh",
+                ],
+                capture_output=True,
+                text=True,
+                cwd=_REPO_ROOT,
+                env={**os.environ, "PYTHONPATH": _REPO_ROOT, "XDG_DATA_HOME": xdg},
+            )
         combined = r.stdout + r.stderr
         # unittest outputs "ERROR:" for test errors and "FAIL:" for assertion failures
         has_error = "ERROR:" in combined or "\nERROR " in combined

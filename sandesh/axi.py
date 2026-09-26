@@ -11,7 +11,7 @@ form of a clean envelope. Stdlib + ``sandesh._toon`` only.
 import json
 import sys
 
-from sandesh import _toon
+import sandesh._toon as _toon
 
 FORMATS = ("human", "toon", "json")
 

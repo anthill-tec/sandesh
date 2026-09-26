@@ -86,7 +86,9 @@ sandesh/                         (this repo — source of truth)
 ├── integrations/pi/    the Pi extension (bun/TS; npm @anthill-tec/sandesh-pi; 12 tools + native wake)
 ├── install.sh          builds a venv at $XDG_DATA_HOME/sandesh/.venv, pip-installs [mcp,migrate],
 │                       symlinks launchers, then migrate --all → consolidate → reindex → admin assign
-├── tests/              63 test files (run against a temp store; no install needed)
+├── tests/              65 test files (run against a temp store; no install needed)
+│   ├── _store_guard.py the real-store guard (imported FIRST by every test module) + the TempStore mixin (CR-SAN-049)
+│   ├── test_dev_hygiene.py  scans every test for the guard-first import + XDG_DATA_HOME in every subprocess env
 │   └── golden/         pre-CR-SAN-047 human-mode stdout goldens (byte-identical human mode gate)
 ├── README.md / RELEASING.md / pyproject.toml
 └── CLAUDE.md           (this file)
@@ -223,7 +225,9 @@ liveness table is crash-safe rather than relying on a shutdown hook.
 
 ```bash
 # tests (no install needed — run against a temp store; per-file, discovery is broken)
-PYTHONPATH=. .venv/bin/python tests/<test_file>.py    # dev venv has [mcp,migrate]
+.venv/bin/python tests/<test_file>.py    # PYTHONPATH=. optional — each test carries its own bootstrap
+# dev venv: pip install -e '.[mcp,migrate,dev]'   ([dev] = twine>=7 / packaging>=26.3 / build /
+#                                                  xmlrunner / coverage — the same floors CI uses)
 
 # install / update the local tool from the published PyPI release (uv tool)
 uv tool install 'sandesh-relay[mcp,migrate]'   # first install
@@ -324,6 +328,16 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
   verbatim copy of the fleet's `toon.py`, provenance-pinned by `_toon_provenance.py` +
   `tests/test_toon_vendor.py` hashing the file minus its header) — **never edit it**; to
   pick up an upstream change, re-vendor the whole file and re-pin `TOON_SOURCE_SHA256`.
+- **The global store is shared by every project on the machine — tests/probes/agents MUST
+  never write it (CR-SAN-049).** `tests/_store_guard.py` (imported first by every test module,
+  with a self-contained bootstrap line) re-points `XDG_DATA_HOME` to a per-process tmpfs dir
+  (`/tmp/sandesh-tests-*`, atexit-cleaned) unless the incoming value is already temp-rooted;
+  `SANDESH_TESTS_ALLOW_REAL_STORE=1` is the explicit (never-used) bypass. Per-test stores: use
+  the `TempStore` mixin (setUp/tearDown, `self.connect()` tracked and closed). Subprocess tests
+  spawning `sandesh` pass `env={..., "XDG_DATA_HOME": <temp>}` explicitly;
+  `tests/test_dev_hygiene.py` scans for both rules. A manual probe must set the env INSIDE the
+  subprocess env / `os.environ`, never as a shell prefix (tool wrappers can drop it — that is
+  how a stray `Demo` project once landed in the real store).
 
 ---
 
