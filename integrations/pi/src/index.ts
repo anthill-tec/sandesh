@@ -100,7 +100,7 @@ const MISSING_CLI_NOTICE =
 /**
  * Minimum `sandesh` CLI version this extension requires (CR-SAN-032 §S3 / AC3).
  */
-const MIN_CLI_VERSION: readonly [number, number, number] = [0, 2, 0];
+const MIN_CLI_VERSION: readonly [number, number, number] = [0, 4, 0];
 
 /**
  * Outdated-CLI notice (CR-SAN-032 §S3 / AC3). Surfaced once when the probe's
@@ -108,7 +108,7 @@ const MIN_CLI_VERSION: readonly [number, number, number] = [0, 2, 0];
  * unparseable). Names the required minimum and an upgrade hint.
  */
 const OUTDATED_CLI_NOTICE =
-  "sandesh CLI is too old for this extension: version 0.2.0 or newer is required. " +
+  "sandesh CLI is too old for this extension: version 0.4.0 or newer is required. " +
   "Upgrade it with `uv tool install sandesh` or `pipx upgrade sandesh` " +
   "(or re-run the repo's install.sh).";
 

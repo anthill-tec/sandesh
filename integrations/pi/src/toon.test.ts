@@ -187,7 +187,7 @@ describe("decodeEnvelope — round-trips through the reference @toon-format/toon
         warnings: env.warnings,
       },
     };
-    expect(decode(ADDRESSBOOK_TEXT)).toEqual(expected);
+    expect<unknown>(decode(ADDRESSBOOK_TEXT)).toEqual(expected);
   });
 
   test("notify fixture: decode(text) equals {axi: {...}} reconstructed from decodeEnvelope", () => {
@@ -201,7 +201,7 @@ describe("decodeEnvelope — round-trips through the reference @toon-format/toon
         warnings: env.warnings,
       },
     };
-    expect(decode(NOTIFY_TEXT)).toEqual(expected);
+    expect<unknown>(decode(NOTIFY_TEXT)).toEqual(expected);
   });
 
   test("send failure fixture: decode(text) equals {axi: {...}} reconstructed from decodeEnvelope", () => {
@@ -215,6 +215,6 @@ describe("decodeEnvelope — round-trips through the reference @toon-format/toon
         warnings: env.warnings,
       },
     };
-    expect(decode(SEND_FAILURE_TEXT)).toEqual(expected);
+    expect<unknown>(decode(SEND_FAILURE_TEXT)).toEqual(expected);
   });
 });

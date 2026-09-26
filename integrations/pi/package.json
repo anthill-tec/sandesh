@@ -13,9 +13,12 @@
   "publishConfig": {
     "access": "public"
   },
-  "files": ["src/index.ts", "README.md", "LICENSE"],
+  "files": ["src/index.ts", "src/toon.ts", "README.md", "LICENSE"],
   "pi": {
     "extensions": ["./src/index.ts"]
+  },
+  "dependencies": {
+    "@toon-format/toon": "^4.1.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
