@@ -459,5 +459,45 @@ class HumanIsDefaultSanityTest(_DemoFixture):
         self.assertEqual(rc_human, rc_noflag)
 
 
+# --------------------------------------------------------------------------- #
+# AC2 pin (CR-SAN-050 \u00a7S2) \u2014 the con.close() call-count regression pin.
+# --------------------------------------------------------------------------- #
+
+_CLI_PATH = os.path.join(_REPO_ROOT, "sandesh", "cli.py")
+
+
+class ConCloseCallCountPinTest(unittest.TestCase):
+    """AC2 (CR-SAN-050 \u00a7S2) \u2014 `axi_search`/`axi_projects`/`_axi_xproj` (the
+    latter backs `axi_grant`/`axi_revoke`) each currently open their own
+    `con = sdb.connect()` ... `finally: con.close()` block instead of reusing
+    the `_ctx()`-tracked connection seam (`_ctx()` appends to `_CONNECTIONS`,
+    closed once by `main()`'s `_close_connections()`) already used by every
+    other `axi_*` handler. \u00a7S2 replaces those three literal `con.close()`
+    call sites with the shared seam, with no behaviour change.
+
+    `grep -c "con.close()" sandesh/cli.py` on this branch at the RED commit
+    (a8d084c) is 15 \u2014 verified via `grep -c "con.close()" sandesh/cli.py` from
+    the repo root just before writing this test. \u00a7S2 removes exactly 3 of
+    those 15 (one each from `cmd_search`... no \u2014 from `axi_search`,
+    `axi_projects`, and `_axi_xproj`), so the post-GREEN count must be
+    <= 15 - 3 = 12. EXPECTED_MAX is hardcoded to that computed value (not
+    derived from a live grep) so this test pins the TARGET, not whatever the
+    code happens to produce.
+
+    RED today: the literal count is still 15 (> 12).
+    """
+
+    def test_con_close_literal_call_count_is_at_most_baseline_minus_three(self):
+        with open(_CLI_PATH, encoding="utf-8") as fh:
+            source = fh.read()
+        count = source.count("con.close()")
+        EXPECTED_MAX = 12  # baseline 15 (this branch, RED commit) minus the 3 \u00a7S2 removes
+        self.assertLessEqual(
+            count, EXPECTED_MAX,
+            f"sandesh/cli.py must have at most {EXPECTED_MAX} literal 'con.close()' "
+            f"calls (baseline 15 minus the 3 \u00a7S2 removes via the _ctx()-tracked seam "
+            f"in axi_search/axi_projects/_axi_xproj); found {count}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -527,5 +527,47 @@ class AxiImportFormTest(unittest.TestCase):
         )
 
 
+# --------------------------------------------------------------------------- #
+# CR-SAN-050 §S4/AC4 — the dead 'if False' branch + the 049 spec's stale
+# 'tests/__init__.py' phrase.
+
+_STORE_GUARD_TEST_PATH = os.path.join(_REPO_ROOT, "tests", "test_store_guard.py")
+_CR049_SPEC_PATH = os.path.join(
+    _REPO_ROOT, "docs", "changes", "CR-SAN-049-dev-tooling-pins-and-store-guard.md")
+
+
+class StoreGuardDeadBranchAndStaleSpecPhraseTest(unittest.TestCase):
+    """CR-SAN-050 §S4/AC4 — tests/test_store_guard.py no longer contains the
+    dead `if False` branch in its AC4b subprocess-runner snippet (the
+    `unittest.main(..., exit=False, ...)` call built and immediately
+    discarded by the `if False else ...` ternary every time it runs), and the
+    CR-SAN-049 spec's stale `tests/__init__.py` phrase (§S2 never actually
+    touches a `tests/__init__.py` file — the guard is imported by each test
+    module directly) has been corrected in place.
+
+    RED today: test_store_guard.py still contains the literal `if False`
+    dead branch; docs/changes/CR-SAN-049-dev-tooling-pins-and-store-guard.md
+    still contains the literal string `tests/__init__.py`.
+    """
+
+    def test_store_guard_test_file_has_no_if_false_branch(self):
+        with open(_STORE_GUARD_TEST_PATH, encoding="utf-8") as fh:
+            source = fh.read()
+        self.assertNotIn(
+            "if False", source,
+            "tests/test_store_guard.py must not contain a dead 'if False' "
+            "branch in its AC4b subprocess-runner snippet",
+        )
+
+    def test_cr049_spec_no_longer_mentions_tests_init_py(self):
+        with open(_CR049_SPEC_PATH, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertNotIn(
+            "tests/__init__.py", text,
+            "the CR-SAN-049 spec must no longer contain the stale phrase "
+            "'tests/__init__.py' (§S4 corrects it in place)",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
