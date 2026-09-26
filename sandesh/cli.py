@@ -196,6 +196,11 @@ def _run_machine(args, fmt):
     verb = args.cmd
     context = _axi_context(args)
     fn = AXI_FN.get(verb)
+    if fn is not None and verb in _EMITS_OWN_ENVELOPE:
+        # notify (§S5): the watcher writes its own final envelope to the stdout
+        # current at entry and its progress to stderr — no redirect, no second
+        # envelope, and a signal-handler SystemExit propagates untouched.
+        return fn(args)[0]
     rc, error, fields, help_, exited = 0, None, {}, [], False
     try:
         with contextlib.redirect_stdout(sys.stderr):
@@ -458,6 +463,13 @@ def cmd_thread(args):
 
 def cmd_notify(args):
     return _notify.run(_project(args), args.to, args.timeout)
+
+
+def axi_notify(args):
+    """Machine-mode notify: `run()` with the resolved format emits its own final
+    envelope (see `_EMITS_OWN_ENVELOPE`), so `_run_machine` must not emit one."""
+    rc = _notify.run(_project(args), args.to, args.timeout, fmt=_resolve_format(args))
+    return rc, {}
 
 
 def cmd_migrate(args):
@@ -1184,9 +1196,14 @@ AXI_FN = {
     "unregister": axi_unregister, "archive": axi_archive, "unarchive": axi_unarchive,
     "search": axi_search, "thread": axi_thread, "projects": axi_projects,
     "setup": axi_setup, "grant": axi_grant, "revoke": axi_revoke,
-    "tombstone": axi_tombstone, "status": axi_status,
+    "tombstone": axi_tombstone, "status": axi_status, "notify": axi_notify,
     "init": axi_steps, "migrate": axi_steps, "consolidate": axi_steps, "reindex": axi_steps,
 }
+
+# Verbs whose AXI handler writes its own final envelope (notify: on every exit
+# path incl. signals) — _run_machine calls them directly, outside its stdout
+# redirect, and emits nothing itself.
+_EMITS_OWN_ENVELOPE = frozenset({"notify"})
 
 
 def build_parser(axi_format="human", axi_context=None):
