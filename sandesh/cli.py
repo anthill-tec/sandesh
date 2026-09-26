@@ -10,13 +10,18 @@ Every data command needs a project: `--project <id>` or $SANDESH_PROJECT.
 The store lives at  <data_home>/sandesh/projects/<project_id>/.
 The caller's own address for send/reply/inbox/fetch comes from --from/--to or
 $SANDESH_ADDRESS (falling back to $WF_TRACK).
+Output format: `--format {human,toon,json}` (before or after the subcommand) or
+$SANDESH_FORMAT; default human. In the machine modes the human printers go to
+stderr and one AXI envelope (sandesh.axi) is written to stdout (CR-SAN-047 §S3).
 """
 
 import argparse
+import contextlib
 import os
 import sys
 
 from sandesh import __version__
+from sandesh import axi
 from sandesh import sandesh_db as sdb
 from sandesh import notify as _notify
 from sandesh import migrate as _migrate
@@ -49,6 +54,108 @@ def _read_body(args):
         with open(args.body_file, encoding="utf-8") as fh:
             return fh.read()
     return getattr(args, "body", None)
+
+
+# --------------------------------------------------------------------------- #
+# --format plumbing (CR-SAN-047 §S3 / §S4b)
+
+_ERR_PREFIX = "[sandesh] "
+
+
+def _prescan(argv, flag):
+    """Last `flag X` / `flag=X` value anywhere in argv, without argparse
+    (None if absent) — so usage errors can be reported in the right format."""
+    value = None
+    for i, tok in enumerate(argv):
+        if tok == flag and i + 1 < len(argv):
+            value = argv[i + 1]
+        elif tok.startswith(flag + "="):
+            value = tok[len(flag) + 1:]
+    return value
+
+
+def _prescan_format(argv):
+    """`--format` from argv → $SANDESH_FORMAT → human (unvalidated)."""
+    return _prescan(argv, "--format") or os.environ.get("SANDESH_FORMAT") or "human"
+
+
+def _resolve_format(args):
+    """args.format → $SANDESH_FORMAT → human; an invalid env value exits 2."""
+    fmt = getattr(args, "format", None) or os.environ.get("SANDESH_FORMAT") or "human"
+    if fmt not in axi.FORMATS:
+        print(f"{_ERR_PREFIX}invalid $SANDESH_FORMAT {fmt!r} — expected one of: "
+              f"{', '.join(axi.FORMATS)}", file=sys.stderr)
+        sys.exit(2)
+    return fmt
+
+
+def _axi_context(args):
+    """`{project, address?}` for the envelope; address is the verb's own-address
+    flag (--from/--as/--address/--to) or $SANDESH_ADDRESS."""
+    context = {}
+    project = getattr(args, "project", None) or os.environ.get("SANDESH_PROJECT")
+    if project:
+        context["project"] = project
+    for flag in ("from_", "as_", "address", "to"):
+        if hasattr(args, flag):
+            address = _self_addr(args, flag)
+            if address:
+                context["address"] = address
+            break
+    return context
+
+
+class _Parser(argparse.ArgumentParser):
+    """ArgumentParser whose usage errors become an `ok:false` AXI envelope on
+    stdout (exit 2) when the pre-scanned format is a machine mode; in human
+    mode argparse's usage-on-stderr behaviour is unchanged. `axi_format` /
+    `axi_context` are stamped on by build_parser (subparsers inherit the class
+    via argparse's default parser_class=type(parent))."""
+
+    axi_format = "human"
+    axi_context = None
+
+    def error(self, message):
+        if self.axi_format not in ("toon", "json"):
+            return super().error(message)
+        parts = self.prog.split()
+        verb = parts[1] if len(parts) > 1 else "sandesh"
+        help_ = [f"{self.prog} --help"]
+        if verb == "sandesh":
+            help_.append("sandesh [--project <id>] [--format {human,toon,json}] <verb> ...")
+        env = axi.error_envelope(verb, ValueError(message), self.axi_context or {})
+        env.help = help_
+        axi.emit(env, self.axi_format)
+        return self.exit(2)
+
+
+def _run_machine(args, fmt):
+    """Machine-mode dispatch: the handler's prints land on stderr; one envelope
+    on stdout. `sys.exit('[sandesh] …')` → error_envelope + exit 1 (the code a
+    real process reports for that idiom); a non-zero int → error envelope."""
+    verb = args.cmd
+    context = _axi_context(args)
+    rc, error = 0, None
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            rc = args.fn(args) or 0
+    except sdb.MigrationRequired as exc:
+        rc, error = 1, str(exc)
+    except SystemExit as exc:
+        code = exc.code
+        if isinstance(code, str):
+            rc = 1
+            error = code[len(_ERR_PREFIX):] if code.startswith(_ERR_PREFIX) else code
+        else:
+            rc = code or 0
+    if rc and error is None:
+        error = f"{verb} failed (exit {rc})"
+    if error is None:
+        env = axi.Envelope(verb, True, {}, context)
+    else:
+        env = axi.error_envelope(verb, ValueError(error), context)
+    axi.emit(env, fmt)
+    return rc
 
 
 # --------------------------------------------------------------------------- #
@@ -537,17 +644,23 @@ def _cmd_init_check():
     return 0
 
 
-def build_parser():
+def build_parser(axi_format="human", axi_context=None):
     # --project is shared so it works BOTH before and after the subcommand:
     #   sandesh --project X setup    AND    sandesh setup --project X
-    common = argparse.ArgumentParser(add_help=False)
+    common = _Parser(add_help=False)
     # SUPPRESS: an absent --project in one position must not clobber a value given in
     # the other (so it works both before AND after the subcommand).
     common.add_argument("--project", default=argparse.SUPPRESS,
                         help="project id (overrides $SANDESH_PROJECT)")
+    # Same SUPPRESS idiom for --format (CR-SAN-047 §S3).
+    common.add_argument("--format", choices=list(axi.FORMATS), default=argparse.SUPPRESS,
+                        help="output format (overrides $SANDESH_FORMAT; default human)")
 
-    ap = argparse.ArgumentParser(prog="sandesh", parents=[common],
-                                 description="Sandesh messaging CLI (standalone).")
+    # _Parser (and, via argparse's default parser_class=type(parent), every
+    # subparser) turns usage errors into an AXI envelope when the pre-scanned
+    # format is toon/json; the format/context are stamped on at the end.
+    ap = _Parser(prog="sandesh", parents=[common],
+                 description="Sandesh messaging CLI (standalone).")
     ap.add_argument("--version", action="version", version=f"sandesh {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -785,11 +898,24 @@ def build_parser():
                    help="read-only status probe: report provisioning state and "
                         "exit (writes nothing; non-zero if store absent or admin unset)")
     p.set_defaults(fn=cmd_init)
+    for parser in (ap, *sub.choices.values()):
+        parser.axi_format = axi_format
+        parser.axi_context = axi_context
     return ap
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    argv = sys.argv[1:] if argv is None else list(argv)
+    # Pre-argparse format resolution so usage errors can be envelopes (§S4b).
+    pre_fmt = _prescan_format(argv)
+    pre_ctx = {}
+    pre_project = _prescan(argv, "--project") or os.environ.get("SANDESH_PROJECT")
+    if pre_project:
+        pre_ctx["project"] = pre_project
+    args = build_parser(pre_fmt, pre_ctx).parse_args(argv)
+    fmt = _resolve_format(args)
+    if fmt != "human":
+        return _run_machine(args, fmt)
     try:
         return args.fn(args)
     except sdb.MigrationRequired as exc:
