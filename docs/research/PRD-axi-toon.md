@@ -75,7 +75,7 @@ Model B's own words fix the target (#1394 Q2/Q3, #1396 3a/3b) and are the wire c
 | 4 | Pre-computed aggregates | `inbox` → `unread: <n> of <total>`; `addressbook` → `listening: <n>/<m>`; `send`/`reply` → `delivered: <n>`; `fetch` → `marked_read`; `search` → `total`. The home view (§4.6) answers listening + unread in one call. |
 | 5 | Definitive empty states | An empty result is a sentence field, never a bare `key: []` alone: `messages: 0 unread for <addr>`, `participants: 0 registered in <project>`, `hits: 0 for "<q>"`. `ok: true` — absence is the answer. |
 | 6 | Structured errors, idempotent no-ops, exit codes | `register` of an active address → `ok:true result:already`; `unregister` of an absent one → `ok:true result:absent`; `archive` of an archived project → `ok:true result:already`; `notify_start` on a running loop → `ok:true already:true`. Errors go on **stdout** as `ok:false error help[]` (exit 1 unchanged; usage errors exit 2 and name the valid flags). Unknown flags fail loud. No prompts in machine mode (`tombstone` requires `--yes`). Progress only on stderr. |
-| 7 | Ambient context | The Pi extension injects a ≤6-line dashboard at `session_start` (address, listening, unread count, `help[]`) — opt-in by the identity env being set; nothing when unset. |
+| 7 | Ambient context | The Pi extension injects the home envelope at `session_start` **minus the `bin` and `description` lines** (self-identification is noise inside a session that already holds the tools) — ≤ 12 lines: verb/ok, project, address, listening, unread, context, `help[2]`, warnings. Opt-in by the identity env being set; nothing when unset. (Amended 2026-09-27 at CR-SAN-048 VERIFY: the original "≤ 6 lines" predates the P8/P10 home-view fields.) |
 | 8 | Content first | `sandesh` with no arguments (machine mode) and the `sandesh_status` tool print the same dashboard: `bin`, one-line description, address/listening/unread, `help[]`. |
 | 9 | Contextual disclosure | List and mutation results carry 1–3 `help[]` templates with `<id>`/`"<subject>"` placeholders (after `inbox` → fetch; after `send` → `thread <id>`; after an empty addressbook → register). Detail views and confirmations carry none. Truncated lists say how to see all. |
 | 10 | Consistent help | Every verb's `--help` is the concise per-verb reference (flags + defaults + 2 examples); tool descriptions are that reference. `--version`/`-v`/`-V` print the bare version fast (already true). |
@@ -191,8 +191,8 @@ State machine per address, owned by the extension:
 
 - **Tools:** `sandesh_notify_start(address?, project?)`, `sandesh_notify_status()`,
   `sandesh_notify_stop(address?)`; `address`/`project` default to `$SANDESH_ADDRESS` /
-  `$SANDESH_PROJECT`. Results are AXI envelopes (`watchers[N]{address,running,lastExit}` default; `fields`
-  widens). `start` on a running address → `ok:true already:true` (P6); `stop` on nothing → `ok:true stopped: 0`.
+  `$SANDESH_PROJECT`. Results are AXI envelopes with the P2 minimal default `watchers[N]{address,running,lastExit}`
+  (`context.project` always present); a `fields` knob widening to the full status set is deferred. `start` on a running address → `ok:true already:true` (P6); `stop` on nothing → `ok:true stopped: 0`.
   A `/sandesh-watcher status|stop` slash command mirrors status/stop.
 - **Arming (D4):** `session_start` **no longer arms by default**. Setting
   `SANDESH_AUTOSTART=1` (with both identity vars) restores the 0.3.x auto-arm for users who
