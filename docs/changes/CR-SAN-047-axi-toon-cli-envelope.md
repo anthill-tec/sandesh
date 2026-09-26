@@ -17,13 +17,19 @@ context budget, so schemas are minimal by default, bodies truncated with size hi
 states pre-computed, no-op mutations succeed, errors are structured on stdout, and every list/mutation
 carries `help[]`. All of that is shaped HERE, once, so the Pi extension (CR-SAN-048) passes it through. The
 default `human` output must stay byte-identical to 0.3.6. Core stays stdlib-only (D1: the codec is a
-vendored copy of the fleet's `toon.py`). `sandesh_db.py` is untouched; this CR is presentation only
-(`cli.py`, `notify.py`, two new modules).
+vendored copy of the fleet's `toon.py`). `sandesh_db.py` gains only ADDITIVE read helpers + exception subclasses (no behavioural change to any
+existing function); the rest is presentation (`cli.py`, `notify.py`, two new modules).
 
 ## Scope
 - **§S1 — vendored codec.** Add `sandesh/_toon.py` = verbatim copy of `~/.crucible/clients/toon.py`
   (stdlib-only, `encode()`/`decode()`), prefixed with a provenance header (source path, source SHA-256,
   copy date). Add `sandesh/_toon_provenance.py` holding `TOON_SOURCE_SHA256` for the test in AC1.
+- **§S1b — additive library seams (no behavioural change).** In `sandesh_db.py`: `message_recipients(con,
+  ids) -> dict[id, {"to": [addr…], "cc": [addr…]}]` (one query over `message_recipient`, ordered by
+  recipient) for the `to`/`cc` columns; exception subclasses `AlreadyRegistered(ValueError)` raised by
+  `register()` where it raises `"address already registered"` today, and `AlreadyInState(ValueError)` raised
+  by `archive()`/`unarchive()` where they refuse a project already in the target state — same messages, same
+  base class, so MCP's `ValueError → ToolError` mapping and human-mode exits are unchanged.
 - **§S2 — envelope builder + serialisers.** New `sandesh/axi.py`: `Envelope(verb, ok, fields: dict,
   context: dict, help: list[str] = [], warnings: list[str] = [])` → `.to_dict()` producing
   `{"axi": {"verb", "ok", …fields, "context", "help"?, "warnings"}}` (`help` omitted when empty;
@@ -47,8 +53,10 @@ vendored copy of the fleet's `toon.py`). `sandesh_db.py` is untouched; this CR i
   the first 500 chars + `(truncated, N chars total)` unless `--full`, and `help[]` names `fetch … --full` only
   when something was truncated. `send`/`reply` → `id,to,cc,kind,subject,delivered:n` (+`re`) with
   `help[1]: thread --id <id>`. `register`/`unregister` → `address,project,kind,result` where `result` ∈
-  `registered|already|unregistered|absent|tombstoned` and `already`/`absent` are `ok:true` (idempotent, P6).
-  `archive`/`unarchive` of a project already in that state → `ok:true result:already`. Empty lists state the
+  `registered|already|unregistered|absent|tombstoned`; machine mode catches `AlreadyRegistered` → `ok:true
+  result:already` (human mode still exits 1); `unregister` of an inactive/absent address → `result:absent`
+  (the library already no-ops). `archive`/`unarchive` catching `AlreadyInState` → `ok:true result:already`.
+  `inbox --limit N` (default 50) slices in the presentation layer; `total` is the pre-slice count. Empty lists state the
   zero as a field (`messages: 0 unread for <addr>`, `participants: 0 registered in <project>`, `hits: 0 for
   "<q>"`) — P5. `help[]` (1–3 command templates with `<id>` placeholders) on lists and mutations only; none on
   `thread`/`fetch` of a single message or on confirmations — P9. Remaining verbs (`setup`, `tombstone`,
@@ -56,13 +64,16 @@ vendored copy of the fleet's `toon.py`). `sandesh_db.py` is untouched; this CR i
   (`setup`→`project,store`; lifecycle→`project,state,evicted[N]`(+`purged` counts); grant/revoke→
   `project,cross_project:bool`; provisioning→`steps[N]{step,result}`). `context.project` on all;
   `context.address` on register/unregister/inbox/fetch/notify/send/reply.
-- **§S4b — home view (P8/P10).** `sandesh` with no subcommand in machine mode (and `sandesh status`, new
+- **§S4b — home view (P8/P10).** `add_subparsers(required=False)`; `sandesh` with no subcommand in machine mode (and `sandesh status`, new
   read-only verb) prints the dashboard: `bin` (`~`-collapsed path), `description`, `project`, `address`
   (from `$SANDESH_ADDRESS`, else absent), `listening:bool`, `unread: n`, `help[2]`. In human mode the
   no-subcommand path keeps printing usage (unchanged). Usage errors (unknown flag/subcommand, bad
-  `--fields`) → exit 2 with `ok:false error help[]` on stdout in machine mode. `tombstone` without `--yes`
+  `--fields`) → exit 2 with `ok:false error help[]` on stdout in machine mode — the format is resolved by a
+  pre-scan of argv + `$SANDESH_FORMAT` before argparse runs, and `ArgumentParser.error` is overridden to emit
+  the envelope in machine mode (human mode: argparse's usage on stderr, unchanged). `tombstone` without `--yes`
   in machine mode → exit 2 (no prompt).
-- **§S5 — `notify` final envelope (PRD §4.5).** In `notify.py`, when format is `toon`/`json`: progress
+- **§S5 — `notify` final envelope (PRD §4.5).** `notify.run(project_id, address, timeout, fmt="human")`;
+  `cmd_notify` passes the resolved format (`notify.main` keeps `human`). When `fmt` is `toon`/`json`: progress
   lines → stderr; a single envelope `{verb:"notify", ok, exit, address, project, unread[N]}` is written to
   stdout on **every** exit (return paths 0/2/3/4/5/1 and the SIGTERM/SIGINT handlers), exactly once
   (guarded flag). `ok` true for 0/2/5, false for 1/3/4 with `error`. `unread` = the triggering ids in
@@ -79,8 +90,9 @@ vendored copy of the fleet's `toon.py`). `sandesh_db.py` is untouched; this CR i
   env.to_dict()` and `json.loads(render(env,"json")) == env.to_dict()`; one test per verb over a
   fixture store.
 - **AC3** — Byte-identical human mode: for each of the 8 named verbs, stdout with no `--format`
-  equals stdout with `--format human` equals a golden captured from 0.3.6 for the same fixture store
-  (goldens committed under `tests/golden/`).
+  equals stdout with `--format human` equals a golden captured from the PRE-CR tree (`develop` @ cf4057b, whose `sandesh/` is byte-identical
+  to v0.3.6) for the same fixture store (goldens committed under `tests/golden/`; capture command in the
+  test docstring).
 - **AC4** — Placement: `sandesh --format toon addressbook --project P` and `sandesh addressbook
   --project P --format toon` produce identical stdout; `SANDESH_FORMAT=toon` with no flag likewise;
   `SANDESH_FORMAT=xml` → exit 2 with a message naming `human, toon, json`.
@@ -97,7 +109,7 @@ vendored copy of the fleet's `toon.py`). `sandesh_db.py` is untouched; this CR i
   triggering ids and `ok: true`; exit 2 (short `--timeout`) → `unread[0]:`, `ok: true`; exit 5 (dedup) →
   `ok: true`; exit 3 (tombstoned) and 4 (evicted) → `ok: false` + `error`; SIGTERM → exactly one
   envelope with `exit: 143`. All progress text is on stderr; stdout decodes as one envelope.
-- **AC9** — In `human` mode `notify` output is byte-identical to 0.3.6 (golden).
+- **AC9** — In `human` mode `notify` output is byte-identical to the pre-CR tree (golden, as AC3).
 - **AC11** — AXI conformance, table-driven over `addressbook, inbox, search, thread, projects, send, reply,
   register, unregister, archive`: default list column count ≤ 4; the named aggregate field present; the
   empty-state sentence present on an empty fixture; `help[]` present on lists/mutations and absent on
@@ -113,8 +125,10 @@ vendored copy of the fleet's `toon.py`). `sandesh_db.py` is untouched; this CR i
   set prints `bin`, `description`, `listening`, `unread`, `help[2]` and exits 0; a live notifier flips
   `listening`; without the env it prints `ok:false` + `error` naming both vars, exit 2. `sandesh --format toon
   --bogus` → exit 2, `ok:false`, `help[]` lists the valid global flags.
-- **AC10** — `sandesh_db.py` is untouched (`git diff --stat` on the file is empty at VERIFY); the full
-  Python suite is green; no new runtime dependency in `pyproject.toml`.
+- **AC10** — `sandesh_db.py` changes are ADDITIVE only: the diff adds `message_recipients`, `AlreadyRegistered`,
+  `AlreadyInState` and the two `raise` sites' class names — no other line changes (VERIFY reads the diff);
+  every pre-existing `sandesh_db` test passes unmodified; MCP `register` of a duplicate still raises
+  `ToolError` (existing test); no new runtime dependency in `pyproject.toml`.
 
 ## Estimated size
 Medium-large — one vendored module, one new ~250-line presentation module (envelope, fields/limit/full
@@ -122,8 +136,8 @@ handling, truncation, help templates, home view), a sweep of the `cli.py` verb h
 `Envelope`), the `notify.py` exit seam, goldens + oracle + AXI-conformance tests.
 
 ## Risks / open questions
-- Golden capture must come from a real 0.3.6 install (`uv tool` 0.3.6 is on this machine) — record
-  the command in the test file's docstring.
+- Goldens are captured by the RED agent from the pre-CR tree (command in the test docstring) — `sandesh/`
+  there equals v0.3.6.
 - The `notify` signal path must not double-emit (atexit + handler): the guarded flag is the AC8
   SIGTERM case.
 
