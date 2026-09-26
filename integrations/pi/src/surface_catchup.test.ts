@@ -32,6 +32,7 @@ function makeFakePi(
       execResult,
   );
   const fakePi = {
+    registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
     registerTool: mock((tool: CapturedTool) => {
       capturedTools.set(tool.name, tool);
     }),

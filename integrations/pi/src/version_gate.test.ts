@@ -111,6 +111,7 @@ function makeFakePi(opts: FakePiOptions) {
   });
 
   const fakePi = {
+    registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
     registerTool: mock((tool: CapturedTool) => {
       capturedTools.set(tool.name, tool);
     }),
@@ -157,6 +158,7 @@ const SAVED_ENV: Partial<Record<string, string>> = {};
 beforeEach(() => {
   SAVED_ENV.SANDESH_ADDRESS = process.env.SANDESH_ADDRESS;
   SAVED_ENV.SANDESH_PROJECT = process.env.SANDESH_PROJECT;
+  SAVED_ENV.SANDESH_AUTOSTART = process.env.SANDESH_AUTOSTART; // CR-SAN-048 §S5 arming gate
 });
 
 afterEach(() => {
@@ -169,6 +171,11 @@ afterEach(() => {
     delete process.env.SANDESH_PROJECT;
   } else {
     process.env.SANDESH_PROJECT = SAVED_ENV.SANDESH_PROJECT;
+  }
+  if (SAVED_ENV.SANDESH_AUTOSTART === undefined) {
+    delete process.env.SANDESH_AUTOSTART; // CR-SAN-048
+  } else {
+    process.env.SANDESH_AUTOSTART = SAVED_ENV.SANDESH_AUTOSTART;
   }
 });
 
@@ -376,6 +383,7 @@ describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () 
   test("AC3i — probe stdout 'sandesh 0.4.0' (exact minimum) → armed (notify exec called)", async () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
+    process.env.SANDESH_AUTOSTART = "1"; // CR-SAN-048 §S5: arming is opt-in
 
     // 0.4.0 meets minimum — loop should arm; exit-3 terminates immediately
     const { fakePi, execMock } = makeFakePi({
@@ -401,6 +409,7 @@ describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () 
   test("AC3j — probe stdout 'sandesh 0.4.1' (above minimum) → armed (notify exec called)", async () => {
     process.env.SANDESH_ADDRESS = "Track 1 - Demo";
     process.env.SANDESH_PROJECT = "Demo";
+    process.env.SANDESH_AUTOSTART = "1"; // CR-SAN-048 §S5: arming is opt-in
 
     const { fakePi, execMock } = makeFakePi({
       execSequence: [ok("sandesh 0.4.1"), exit(5)],
@@ -423,6 +432,7 @@ describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () 
   test("AC3k — existing probe: 'sandesh 1.0.0' still arms the loop (no regression)", async () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
+    process.env.SANDESH_AUTOSTART = "1"; // CR-SAN-048 §S5: arming is opt-in
 
     // All pre-existing tests use "sandesh 1.0.0" — must still arm
     const { fakePi, execMock } = makeFakePi({
@@ -440,6 +450,29 @@ describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () 
     const versionGateNotice = notifyCalls.find((c) => c.msg.includes("0.4.0"));
     expect(versionGateNotice).toBeUndefined();
     expect(countNotifyCalls(execMock)).toBeGreaterThanOrEqual(1);
+  });
+
+  test("AC3k-neg — 'sandesh 1.0.0' without SANDESH_AUTOSTART → NOT armed, one info line (CR-SAN-048 §S5)", async () => {
+    process.env.SANDESH_ADDRESS = "Mainline - Demo";
+    process.env.SANDESH_PROJECT = "Demo";
+    delete process.env.SANDESH_AUTOSTART;
+
+    const { fakePi, execMock } = makeFakePi({
+      execSequence: [ok("sandesh 1.0.0"), exit(3)],
+    });
+    registerExtension(fakePi);
+
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
+      ([e]: [string, unknown]) => e === "session_start",
+    )![1] as SessionStartHandler;
+
+    const { fakeCtx, notifyCalls } = makeFakeCtx();
+    await fireSessionStart(handler, fakeCtx);
+
+    expect(countNotifyCalls(execMock)).toBe(0);
+    const info = notifyCalls.filter((c) => c.type === "info");
+    expect(info.length).toBe(1);
+    expect(info[0].msg).toContain("sandesh_notify_start");
   });
 
   test("AC3l — missing CLI (non-zero exit code) → install notice unchanged (not version gate)", async () => {
@@ -544,6 +577,7 @@ describe("AC4 — error passthrough: project archived", () => {
       async (): Promise<ExecResult> => ({ stdout: "", stderr: stderrMsg, code: 1, killed: false }),
     );
     const staticPi = {
+      registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
       registerTool: mock((tool: CapturedTool) => {
         capturedTools.set(tool.name, tool);
       }),
@@ -565,6 +599,7 @@ describe("AC4 — error passthrough: project archived", () => {
     const stderrMsg = "project 'Demo' is archived";
     const capturedTools = new Map<string, CapturedTool>();
     const staticPi = {
+      registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
       registerTool: mock((tool: CapturedTool) => capturedTools.set(tool.name, tool)),
       on: mock(() => {}),
       exec: mock(async (): Promise<ExecResult> => ({ stdout: "", stderr: stderrMsg, code: 1, killed: false })),
@@ -588,6 +623,7 @@ describe("AC4 — error passthrough: project tombstoned", () => {
     const stderrMsg = "project 'Demo' is tombstoned";
     const capturedTools = new Map<string, CapturedTool>();
     const staticPi = {
+      registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
       registerTool: mock((tool: CapturedTool) => capturedTools.set(tool.name, tool)),
       on: mock(() => {}),
       exec: mock(async (): Promise<ExecResult> => ({ stdout: "", stderr: stderrMsg, code: 1, killed: false })),
@@ -617,6 +653,7 @@ describe("AC4 — error passthrough: project tombstoned", () => {
     const stderrMsg = "project 'Demo' is tombstoned";
     const capturedTools = new Map<string, CapturedTool>();
     const staticPi = {
+      registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
       registerTool: mock((tool: CapturedTool) => capturedTools.set(tool.name, tool)),
       on: mock(() => {}),
       exec: mock(async (): Promise<ExecResult> => ({ stdout: "", stderr: stderrMsg, code: 1, killed: false })),
@@ -640,6 +677,7 @@ describe("AC4 — error passthrough: unknown project", () => {
     const stderrMsg = "unknown project 'Demo'";
     const capturedTools = new Map<string, CapturedTool>();
     const staticPi = {
+      registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
       registerTool: mock((tool: CapturedTool) => capturedTools.set(tool.name, tool)),
       on: mock(() => {}),
       exec: mock(async (): Promise<ExecResult> => ({ stdout: "", stderr: stderrMsg, code: 1, killed: false })),
@@ -669,6 +707,7 @@ describe("AC4 — error passthrough: unknown project", () => {
     const stderrMsg = "unknown project 'Demo'";
     const capturedTools = new Map<string, CapturedTool>();
     const staticPi = {
+      registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
       registerTool: mock((tool: CapturedTool) => capturedTools.set(tool.name, tool)),
       on: mock(() => {}),
       exec: mock(async (): Promise<ExecResult> => ({ stdout: "", stderr: stderrMsg, code: 1, killed: false })),
@@ -693,6 +732,7 @@ describe("AC4 — error passthrough: cross-project grant error", () => {
   test("send tool: grant refusal stderr → Error contains verbatim grant string", async () => {
     const capturedTools = new Map<string, CapturedTool>();
     const staticPi = {
+      registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
       registerTool: mock((tool: CapturedTool) => capturedTools.set(tool.name, tool)),
       on: mock(() => {}),
       exec: mock(async (): Promise<ExecResult> => ({ stdout: "", stderr: GRANT_ERROR, code: 1, killed: false })),
@@ -721,6 +761,7 @@ describe("AC4 — error passthrough: cross-project grant error", () => {
   test("send tool: grant refusal stderr contains full admin hint substring", async () => {
     const capturedTools = new Map<string, CapturedTool>();
     const staticPi = {
+      registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
       registerTool: mock((tool: CapturedTool) => capturedTools.set(tool.name, tool)),
       on: mock(() => {}),
       exec: mock(async (): Promise<ExecResult> => ({ stdout: "", stderr: GRANT_ERROR, code: 1, killed: false })),
@@ -749,6 +790,7 @@ describe("AC4 — error passthrough: cross-project grant error", () => {
   test("reply tool: grant refusal stderr → Error contains verbatim grant string", async () => {
     const capturedTools = new Map<string, CapturedTool>();
     const staticPi = {
+      registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
       registerTool: mock((tool: CapturedTool) => capturedTools.set(tool.name, tool)),
       on: mock(() => {}),
       exec: mock(async (): Promise<ExecResult> => ({ stdout: "", stderr: GRANT_ERROR, code: 1, killed: false })),
@@ -802,6 +844,7 @@ describe("AC5 — docs markers: inbox and fetch carry sender_project / proxy-str
   function getRegisteredTools(): Map<string, CapturedTool> {
     const capturedTools = new Map<string, CapturedTool>();
     const pi = {
+      registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
       registerTool: mock((tool: CapturedTool) => capturedTools.set(tool.name, tool)),
       on: mock(() => {}),
       exec: mock(async (): Promise<ExecResult> => ({ stdout: "", stderr: "", code: 0, killed: false })),

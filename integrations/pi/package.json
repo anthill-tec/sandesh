@@ -13,7 +13,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "files": ["src/index.ts", "src/toon.ts", "README.md", "LICENSE"],
+  "files": ["src/index.ts", "src/toon.ts", "src/wake.ts", "README.md", "LICENSE"],
   "pi": {
     "extensions": ["./src/index.ts"]
   },

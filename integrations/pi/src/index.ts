@@ -10,84 +10,71 @@
  * C1 scope: each tool's execute() builds the `sandesh` CLI argv per the mapping
  * table, shells out via pi.exec, and maps the result to an AgentToolResult
  * (zero code → stdout text; non-zero → an error result surfacing stderr).
+ * CR-SAN-048: the 12 verb tools return AXI/TOON envelopes; `sandesh_status`
+ * (home view) and `sandesh_notify_start/status/stop` (supervised wake) join
+ * them — 16 tools — plus the `/sandesh-watcher` command.
  */
 
 import { Type } from "typebox";
+import { encode } from "@toon-format/toon";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {
   AgentToolResult,
-  ExecResult,
   ExtensionAPI,
   ExtensionContext,
   SessionShutdownEvent,
   SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import { decodeEnvelope } from "./toon";
+import { WakeSupervisor, type WatcherStatus } from "./wake";
 
 // ---------------------------------------------------------------------------
-// Native wake loop (CR-SAN-014 C0) — backoff seam
-// ---------------------------------------------------------------------------
-
-/** Backoff cap (ms) for the wake loop's error branch (notify exit 1/other). */
-const WAKE_BACKOFF_MS = 5000;
-
-/**
- * Injectable sleep for the wake loop's error-branch backoff. Defaults to a real
- * timer; tests replace it with a no-op via {@link __setWakeSleepFn} so the
- * backoff path resolves immediately.
- */
-let wakeSleepFn: () => Promise<void> = () =>
-  new Promise<void>((res) => setTimeout(res, WAKE_BACKOFF_MS));
-
-/** Test seam: inject the wake-loop backoff sleep (e.g. a no-op in tests). */
-export function __setWakeSleepFn(fn: () => Promise<void>): void {
-  wakeSleepFn = fn;
-}
-
-// ---------------------------------------------------------------------------
-// Wake-loop lifecycle state (CR-SAN-014 C1)
+// --- wake supervision (CR-SAN-048) ---
 // ---------------------------------------------------------------------------
 
 /**
- * Single-loop guard: true while a wake loop is active. A second `session_start`
- * while the loop runs does NOT start a second concurrent loop.
+ * The latest `ctx.ui` seen by a session handler / tool / command. `ctx` only
+ * exists inside those, so the supervisor's `notify` dep routes through this
+ * holder and no-ops until one has been captured.
  */
-let wakeLoopRunning = false;
+let latestUi: ExtensionContext["ui"] | undefined;
+
+/** The supervisor of the current registration (one per `registerExtension`). */
+let supervisor: WakeSupervisor | undefined;
 
 /**
- * Module-level AbortController for the active wake loop. `session_shutdown`
- * aborts it; its signal is threaded into every `pi.exec("sandesh", … notify …)`
- * call so a long-blocking notify is cancelled on shutdown.
- */
-let wakeController: AbortController | undefined;
-
-/**
- * Stopped flag set by `session_shutdown`. The wake loop checks it so it exits
- * and does not re-arm after a shutdown.
- */
-let wakeStopped = false;
-
-/**
- * Test seam: reset the wake-loop lifecycle state (single-loop guard, controller,
- * stopped flag) so a fresh `session_start` can start one loop. Mirrors
- * {@link __setWakeSleepFn}.
+ * Test seam: stop every watcher of the current supervisor and reset the
+ * resolved binary choice so a fresh `session_start` re-probes.
  */
 export function __resetWakeState(): void {
-  wakeLoopRunning = false;
-  wakeController = undefined;
-  wakeStopped = false;
+  supervisor?.stop();
   resetBinaryResolution();
 }
 
-/**
- * Notice surfaced when the CLI probe succeeds but this session's identity env
- * vars are unset. Names BOTH $SANDESH_ADDRESS and $SANDESH_PROJECT so the user
- * knows what to set to enable native wake (§S4 / AC4). Distinct from the
- * missing-CLI notice.
- */
-const MISSING_ENV_NOTICE =
-  "Sandesh native wake is disabled: $SANDESH_ADDRESS and $SANDESH_PROJECT are not both set. " +
-  "Set $SANDESH_ADDRESS (this session's address) and $SANDESH_PROJECT (the project id) to enable it.";
+/** Wire a supervisor to this extension's real host effects (§S3 deps). */
+function makeSupervisor(pi: ExtensionAPI): WakeSupervisor {
+  return new WakeSupervisor({
+    exec: (cmd, args, { signal }) => pi.exec(cmd, args, { signal }),
+    sendUserMessage: (text, opts) => pi.sendUserMessage(text, opts),
+    notify: (text, level) => latestUi?.notify(text, level),
+    now: Date.now,
+    sleep: (ms) => new Promise<void>((res) => setTimeout(res, ms)),
+    resolve: resolveSandesh,
+  });
+}
+
+/** Error returned (as a result) when `sandesh_notify_start` cannot resolve its identity. */
+const NOTIFY_START_UNRESOLVED =
+  "address and project are unresolved: pass them or set $SANDESH_ADDRESS and $SANDESH_PROJECT";
+
+/** Arming warning (§S5): `SANDESH_AUTOSTART=1` but the identity vars are not both set. */
+const AUTOSTART_ENV_NOTICE =
+  "SANDESH_AUTOSTART=1 but $SANDESH_ADDRESS and $SANDESH_PROJECT are not both set — " +
+  "the Sandesh wake was not armed.";
+
+/** Arming info (§S5): the wake is tool-started unless `SANDESH_AUTOSTART=1`. */
+const TOOL_STARTED_NOTICE =
+  "Sandesh wake is tool-started: call sandesh_notify_start (or set SANDESH_AUTOSTART=1)";
 
 /**
  * Install-options notice surfaced when the `sandesh` CLI is not reachable.
@@ -332,18 +319,93 @@ function isEnvelope(stdout: string): boolean {
  *   - non-zero with undecodable/empty stdout (CLI missing, crash) → throw
  *     Error(verb + exit code + stderr); Pi catches it and sets isError.
  */
+async function runSandeshText(
+  pi: ExtensionAPI,
+  verb: string,
+  args: string[],
+  signal?: AbortSignal,
+): Promise<string> {
+  const [cmd, resolvedArgs] = resolveSandesh(["--format", "toon", ...args]);
+  const r = await pi.exec(cmd, resolvedArgs, { signal });
+  if (r.code !== 0 && !isEnvelope(r.stdout)) {
+    throw new Error(`sandesh ${verb} failed (exit ${r.code}): ${r.stderr}`);
+  }
+  return r.stdout;
+}
+
+/** Wrap envelope text as the tool result. */
+function textResult(text: string): AgentToolResult<undefined> {
+  return { content: [{ type: "text", text }], details: undefined };
+}
+
+/** {@link runSandeshText} mapped to an AgentToolResult. */
 async function runSandesh(
   pi: ExtensionAPI,
   verb: string,
   args: string[],
   signal?: AbortSignal,
 ): Promise<AgentToolResult<undefined>> {
-  const [cmd, resolvedArgs] = resolveSandesh(["--format", "toon", ...args]);
-  const r = await pi.exec(cmd, resolvedArgs, { signal });
-  if (r.code !== 0 && !isEnvelope(r.stdout)) {
-    throw new Error(`sandesh ${verb} failed (exit ${r.code}): ${r.stderr}`);
+  return textResult(await runSandeshText(pi, verb, args, signal));
+}
+
+// ---------------------------------------------------------------------------
+// In-extension envelopes (CR-SAN-048 §S4) — PRD §4.1 shape
+// ---------------------------------------------------------------------------
+
+/** The `context:` block of an in-extension envelope (only defined keys emitted). */
+interface EnvelopeContext {
+  project?: string;
+  address?: string;
+}
+
+/**
+ * Encode `{axi:{verb, ok, ...fields, context, warnings:[]}}` as TOON text.
+ * `fields` may carry `ok:false` + `error` to build an error result.
+ */
+function envelopeText(verb: string, fields: Record<string, unknown>, context: EnvelopeContext = {}): string {
+  const ctx: Record<string, string> = {};
+  if (context.project !== undefined) ctx.project = context.project;
+  if (context.address !== undefined) ctx.address = context.address;
+  return encode({ axi: { verb, ok: true, ...fields, context: ctx, warnings: [] } });
+}
+
+/** The default `watchers[]` row: `{address, running, lastExit}`. */
+function watcherRow(w: WatcherStatus): { address: string; running: boolean; lastExit: number | null } {
+  return { address: w.address, running: w.running, lastExit: w.lastExit };
+}
+
+/** One human line per watcher (the `/sandesh-watcher status` view). */
+function watcherLines(watchers: WatcherStatus[]): string {
+  if (watchers.length === 0) return "Sandesh watchers: none";
+  return watchers
+    .map((w) => `${w.address}: ${w.running ? "running" : "stopped"} (last exit ${w.lastExit ?? "-"})`)
+    .join("\n");
+}
+
+/**
+ * `watcher: running|stopped` for the home view (§S2 P8): "running" iff the
+ * watcher for `$SANDESH_ADDRESS` is running (any watcher, when the env is unset).
+ */
+function watcherState(sup: WakeSupervisor): "running" | "stopped" {
+  const self = process.env.SANDESH_ADDRESS;
+  const running = sup.status().some((w) => w.running && (self === undefined || w.address === self));
+  return running ? "running" : "stopped";
+}
+
+/**
+ * Insert `  watcher: <state>` inside the `axi:` block of a status envelope so
+ * the text stays a valid TOON document: before `  context:` when present,
+ * else right after `  ok:`.
+ */
+function withWatcherLine(text: string, state: "running" | "stopped"): string {
+  const lines = text.split("\n");
+  let at = lines.findIndex((l) => l.startsWith("  context:"));
+  if (at === -1) {
+    const okAt = lines.findIndex((l) => l.startsWith("  ok:"));
+    at = okAt === -1 ? lines.length : okAt + 1;
   }
-  return { content: [{ type: "text", text: r.stdout }], details: undefined };
+  lines.splice(at, 0, `  watcher: ${state}`);
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -443,16 +505,24 @@ interface SearchParams {
   sender_project?: string;
 }
 
+interface NotifyStartParams {
+  address?: string;
+  project?: string;
+}
+
+interface NotifyStopParams {
+  address?: string;
+}
+
 // ---------------------------------------------------------------------------
-// Extension entry — register the 12 Sandesh verb tools
+// Extension entry: the 12 verb tools + sandesh_status + 3 notify tools (16)
 // ---------------------------------------------------------------------------
 
 export default function registerExtension(pi: ExtensionAPI): void {
-  // Each extension registration owns a fresh wake-loop lifecycle: clear the
-  // single-loop guard / controller / stopped flag so this registration's first
-  // session_start starts exactly one loop (the guard then persists across
-  // re-entrant session_start until __resetWakeState() or the next registration).
+  // Each registration owns a fresh supervisor and re-probes the binary.
   __resetWakeState();
+  const sup = makeSupervisor(pi);
+  supervisor = sup;
 
   // sandesh_setup — provision a project's store (idempotent).
   pi.registerTool({
@@ -821,13 +891,108 @@ export default function registerExtension(pi: ExtensionAPI): void {
     },
   });
 
-  // Missing-CLI prerequisite probe (AC7) + native wake loop (CR-SAN-014 C0).
-  // On session start, probe `sandesh --version`; if the CLI is unreachable
-  // (exec rejects or non-zero code), surface a one-time install notice via
-  // ctx.ui.notify (the probe never blocks tool registration and never throws).
-  // When the probe succeeds and the session identity is known, start a detached
-  // wake loop that arms `sandesh notify` and surfaces unread mail.
+  // sandesh_status — the CLI home view plus the supervisor's watcher state (§S2 P8).
+  pi.registerTool({
+    name: "sandesh_status",
+    label: "Sandesh: Status",
+    description:
+      "Show this session's Sandesh home view (address, listening, unread) plus watcher: running|stopped for the in-session wake watcher.",
+    promptSnippet: "Home view: your address, listening state, unread count and the wake watcher state.",
+    parameters: Type.Object({}),
+    execute: async (_callId, _params: Record<string, never>, signal, _onUpdate, ctx) => {
+      latestUi = ctx.ui;
+      const home = await runSandeshText(pi, "status", ["status"], signal);
+      return textResult(withWatcherLine(home, watcherState(sup)));
+    },
+  });
+
+  // sandesh_notify_start — start (or report) the supervised wake watcher for an address.
+  pi.registerTool({
+    name: "sandesh_notify_start",
+    label: "Sandesh: Notify Start",
+    description:
+      "Start the supervised wake watcher for an address (defaults to $SANDESH_ADDRESS / $SANDESH_PROJECT). " +
+      "One watcher per address: starting an already-running address returns already:true and spawns nothing.",
+    promptSnippet: "Start your wake watcher so unread mail wakes you (one per address; idempotent).",
+    parameters: Type.Object({
+      address: Type.Optional(
+        Type.String({ description: "Address to watch. Falls back to $SANDESH_ADDRESS when omitted." }),
+      ),
+      project: Type.Optional(
+        Type.String({ description: "Project id. Falls back to $SANDESH_PROJECT when omitted." }),
+      ),
+    }),
+    execute: async (_callId, params: NotifyStartParams, _signal, _onUpdate, ctx) => {
+      latestUi = ctx.ui;
+      const address = params.address ?? process.env.SANDESH_ADDRESS;
+      const project = params.project ?? process.env.SANDESH_PROJECT;
+      if (!address || !project) {
+        return textResult(envelopeText("notify_start", { ok: false, error: NOTIFY_START_UNRESOLVED }));
+      }
+      const r = sup.start(address, project);
+      return textResult(
+        envelopeText(
+          "notify_start",
+          { already: r.already, watchers: [watcherRow(r.status)] },
+          { project, address },
+        ),
+      );
+    },
+  });
+
+  // sandesh_notify_status — the supervisor's watcher table.
+  pi.registerTool({
+    name: "sandesh_notify_status",
+    label: "Sandesh: Notify Status",
+    description: "List the in-session wake watchers: address, running, lastExit.",
+    promptSnippet: "List your wake watchers and whether each is running.",
+    parameters: Type.Object({}),
+    execute: async (_callId, _params: Record<string, never>, _signal, _onUpdate, ctx) => {
+      latestUi = ctx.ui;
+      return textResult(envelopeText("notify_status", { watchers: sup.status().map(watcherRow) }));
+    },
+  });
+
+  // sandesh_notify_stop — stop one watcher (or all when no address is given).
+  pi.registerTool({
+    name: "sandesh_notify_stop",
+    label: "Sandesh: Notify Stop",
+    description: "Stop the wake watcher for an address, or every watcher when address is omitted.",
+    promptSnippet: "Stop your wake watcher(s).",
+    parameters: Type.Object({
+      address: Type.Optional(Type.String({ description: "Address whose watcher to stop; omit to stop all." })),
+    }),
+    execute: async (_callId, params: NotifyStopParams, _signal, _onUpdate, ctx) => {
+      latestUi = ctx.ui;
+      const { stopped } = sup.stop(params.address);
+      return textResult(envelopeText("notify_stop", { stopped }, { address: params.address }));
+    },
+  });
+
+  // /sandesh-watcher status | stop [address] — the user-facing view of the supervisor.
+  pi.registerCommand("sandesh-watcher", {
+    description: "Sandesh wake watchers: /sandesh-watcher status | stop [address]",
+    handler: async (args, ctx) => {
+      latestUi = ctx.ui;
+      const [sub = "status", ...rest] = args.trim().split(/\s+/);
+      const address = rest.length > 0 ? rest.join(" ") : undefined;
+      if (sub === "stop") {
+        const { stopped } = sup.stop(address);
+        ctx.ui.notify(`Sandesh watchers stopped: ${stopped}`, "info");
+        return;
+      }
+      if (sub !== "status" && sub !== "") {
+        ctx.ui.notify("usage: /sandesh-watcher status | stop [address]", "warning");
+        return;
+      }
+      ctx.ui.notify(watcherLines(sup.status()), "info");
+    },
+  });
+
+  // Session start: the CLI probe (AC7) + version gate + provision nudge, then
+  // the ambient home view (§S2b) and the wake arming (§S5). Nothing here throws.
   pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext): Promise<void> => {
+    latestUi = ctx.ui;
     let probeOk = false;
     // uvx-on-demand (§S1): probe the local `sandesh` first; if it rejects or
     // exits non-zero, fall back to `uvx --from sandesh-relay[migrate] sandesh`
@@ -837,7 +1002,7 @@ export default function registerExtension(pi: ExtensionAPI): void {
     if (probe.reachable) {
       // §S3 version gate: a CLI below MIN_CLI_VERSION (or unparseable
       // output) takes the missing-CLI-style path — one-time warning,
-      // wake loop NOT armed. Tool registration stays static/unblocked.
+      // wake NOT armed. Tool registration stays static/unblocked.
       if (cliVersionOk(probe.stdout)) {
         probeOk = true;
       } else {
@@ -864,95 +1029,39 @@ export default function registerExtension(pi: ExtensionAPI): void {
       // A probe rejection here must not break session start; skip the nudge.
     }
 
-    // Probe-gated wake loop: only arm when this session's identity is known.
-    // When env is missing, surface a distinct notice naming both env vars
-    // (AC4) and do NOT start the loop.
     const self = process.env.SANDESH_ADDRESS;
     const project = process.env.SANDESH_PROJECT;
-    if (!self || !project) {
-      ctx.ui.notify(MISSING_ENV_NOTICE, "warning");
-      return;
-    }
+    const identified = Boolean(self && project);
 
-    // Single-loop guard: a second session_start while a loop runs must not
-    // spawn a second concurrent loop.
-    if (wakeLoopRunning) return;
-    wakeLoopRunning = true;
-    wakeStopped = false;
-    wakeController = new AbortController();
-
-    // Fire-and-forget: the detached loop owns its own lifetime; the handler
-    // must not await it (it blocks on `sandesh notify`).
-    void wakeLoop(pi, project, self, wakeController.signal);
-  });
-
-  // session_shutdown — stop the wake loop: abort any in-flight notify and set
-  // the stopped flag so the loop exits and does not re-arm (AC5).
-  pi.on("session_shutdown", async (_event: SessionShutdownEvent, _ctx: ExtensionContext): Promise<void> => {
-    wakeStopped = true;
-    if (wakeController) wakeController.abort();
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Wake loop — arms `sandesh notify` and reacts to its exit code (W1 design).
-// ---------------------------------------------------------------------------
-
-/**
- * Detached wake loop. Repeatedly runs `sandesh --project <P> notify --to <self>`
- * and dispatches on the notify exit code:
- *   - 0           → unread mail: prompt the agent to fetch, then re-arm.
- *   - 2           → timeout: re-arm silently.
- *   - 3 | 4 | 5   → terminal (tombstoned / evicted / dedup): stop.
- *   - 1 | other   → error: back off (injectable sleep) then re-arm.
- */
-async function wakeLoop(
-  pi: ExtensionAPI,
-  project: string,
-  self: string,
-  signal: AbortSignal,
-): Promise<void> {
-  let stopped = false;
-  // Respect the module-level stopped flag so an abort/shutdown breaks the loop.
-  while (!stopped && !wakeStopped) {
-    const [notifyCmd, notifyArgs] = resolveSandesh([
-      "--project",
-      project,
-      "notify",
-      "--to",
-      self,
-    ]);
-    const r: ExecResult = await pi.exec(notifyCmd, notifyArgs, { signal });
-    // A shutdown during the awaited notify must prevent any re-arm.
-    if (wakeStopped) break;
-    switch (r.code) {
-      case 0:
-        // deliverAs "followUp": ignored when idle (immediate turn), queued when the
-        // agent is mid-turn — without it Pi's prompt() throws while streaming and the
-        // wake message is silently lost (CR-SAN-031 / PE11).
-        try {
-          pi.sendUserMessage(
-            `You have unread Sandesh mail — call sandesh_fetch for "${self}", then act on it.`,
-            { deliverAs: "followUp" },
+    // Ambient context (§S2b): with a known identity, inject the home view once
+    // as a context message (not a user turn). A failed/undecodable probe or an
+    // ok:false envelope injects nothing and never breaks session start.
+    if (identified) {
+      try {
+        const home = await runSandeshText(pi, "status", ["status"]);
+        if (decodeEnvelope(home).ok) {
+          pi.sendMessage(
+            { customType: "sandesh-status", content: home, display: true, details: undefined },
+            { triggerTurn: false },
           );
-        } catch {
-          // The real Pi wrapper is void/catching; this guards host variations where a
-          // synchronous throw would otherwise kill the loop. Swallow and re-arm.
         }
-        break; // re-arm
-      case 2:
-        break; // re-arm, no message
-      case 3:
-      case 4:
-      case 5:
-        stopped = true; // terminal — stop the loop
-        break;
-      default:
-        await wakeSleepFn(); // backoff, then re-arm
-        break;
+      } catch {
+        // The home-view probe must not break session start; skip the injection.
+      }
     }
-  }
-  // The single-loop guard stays set for this session's lifetime once a loop has
-  // started; only __resetWakeState() clears it so a fresh session_start (after a
-  // reset) can start exactly one new loop (AC5f/AC5h).
+
+    // Arming (§S5 / D4): only SANDESH_AUTOSTART=1 with both identity vars
+    // starts the watcher — through the same start the tool uses.
+    if (process.env.SANDESH_AUTOSTART === "1") {
+      if (self && project) sup.start(self, project);
+      else ctx.ui.notify(AUTOSTART_ENV_NOTICE, "warning");
+    } else if (identified) {
+      ctx.ui.notify(TOOL_STARTED_NOTICE, "info");
+    }
+  });
+
+  // session_shutdown — stop every watcher (children aborted; no relaunch).
+  pi.on("session_shutdown", async (_event: SessionShutdownEvent, _ctx: ExtensionContext): Promise<void> => {
+    sup.stop();
+  });
 }

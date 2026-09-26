@@ -42,6 +42,7 @@ function makeFakePi(execResult: ExecResult) {
   const capturedTools = new Map<string, CapturedTool>();
   const execMock = mock(async (_cmd: string, _args: string[], _opts?: unknown): Promise<ExecResult> => execResult);
   const fakePi = {
+    registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
     registerTool: mock((tool: CapturedTool) => {
       capturedTools.set(tool.name, tool);
     }),

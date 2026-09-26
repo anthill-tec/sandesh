@@ -73,6 +73,7 @@ function makeFakePi(opts: FakePiOptions) {
   });
 
   const fakePi = {
+    registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
     registerTool: mock((tool: CapturedTool) => {
       capturedTools.set(tool.name, tool);
     }),
@@ -132,6 +133,7 @@ const SAVED_ENV: Partial<Record<string, string>> = {};
 beforeEach(() => {
   SAVED_ENV.SANDESH_ADDRESS = process.env.SANDESH_ADDRESS;
   SAVED_ENV.SANDESH_PROJECT = process.env.SANDESH_PROJECT;
+  SAVED_ENV.SANDESH_AUTOSTART = process.env.SANDESH_AUTOSTART; // CR-SAN-048 §S5 arming gate
 });
 
 afterEach(() => {
@@ -144,6 +146,11 @@ afterEach(() => {
     delete process.env.SANDESH_PROJECT;
   } else {
     process.env.SANDESH_PROJECT = SAVED_ENV.SANDESH_PROJECT;
+  }
+  if (SAVED_ENV.SANDESH_AUTOSTART === undefined) {
+    delete process.env.SANDESH_AUTOSTART; // CR-SAN-048
+  } else {
+    process.env.SANDESH_AUTOSTART = SAVED_ENV.SANDESH_AUTOSTART;
   }
 });
 
@@ -175,6 +182,7 @@ describe("AC1b — version gate: MIN_CLI_VERSION is [0,4,0]", () => {
   test("probe stdout 'sandesh 0.4.0' (exact new minimum) → armed, no too-old notice", async () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
+    process.env.SANDESH_AUTOSTART = "1"; // CR-SAN-048 §S5: arming is opt-in
 
     const { fakePi, execMock, getSessionStartHandler } = makeFakePi({
       execSequence: [ok("sandesh 0.4.0"), exit(3)],
@@ -193,6 +201,7 @@ describe("AC1b — version gate: MIN_CLI_VERSION is [0,4,0]", () => {
   test("probe stdout 'sandesh 0.4.1' (above the new minimum) → armed, no too-old notice", async () => {
     process.env.SANDESH_ADDRESS = "Track 1 - Demo";
     process.env.SANDESH_PROJECT = "Demo";
+    process.env.SANDESH_AUTOSTART = "1"; // CR-SAN-048 §S5: arming is opt-in
 
     const { fakePi, execMock, getSessionStartHandler } = makeFakePi({
       execSequence: [ok("sandesh 0.4.1"), exit(5)],
