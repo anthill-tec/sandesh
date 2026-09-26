@@ -45,6 +45,15 @@ def _self_addr(args, flag):
     return getattr(args, flag, None) or os.environ.get("SANDESH_ADDRESS") or os.environ.get("WF_TRACK")
 
 
+def _require_own_addr(args, flag, placeholder):
+    """The caller's own address from its `flag` (else $SANDESH_ADDRESS); a
+    missing one is the house `[sandesh] ERROR: pass …` exit."""
+    address = _self_addr(args, flag)
+    if not address:
+        sys.exit(f"[sandesh] ERROR: pass {placeholder} (or set $SANDESH_ADDRESS).")
+    return address
+
+
 def _split(csv):
     return [x.strip() for x in csv.split(",") if x.strip()] if csv else []
 
@@ -90,19 +99,27 @@ def _resolve_format(args):
 
 
 def _axi_context(args):
-    """`{project, address?}` for the envelope; address is the verb's own-address
-    flag (--from/--as/--address/--to) or $SANDESH_ADDRESS."""
+    """`{project, address?}` for the envelope; address is the verb's OWN address
+    (its --from/--as/--address/--to flag, keyed by verb — `inbox`'s --from is a
+    FILTER, not the caller) or $SANDESH_ADDRESS."""
     context = {}
     project = getattr(args, "project", None) or os.environ.get("SANDESH_PROJECT")
     if project:
         context["project"] = project
-    for flag in ("from_", "as_", "address", "to"):
-        if hasattr(args, flag):
-            address = _self_addr(args, flag)
-            if address:
-                context["address"] = address
-            break
+    flag = _OWN_ADDRESS_FLAG.get(getattr(args, "cmd", None))
+    if flag:
+        address = _self_addr(args, flag)
+        if address:
+            context["address"] = address
     return context
+
+
+# The verb's own-address flag (dest name) — §S4: context.address on
+# register/unregister/inbox/fetch/notify/send/reply only.
+_OWN_ADDRESS_FLAG = {
+    "register": "address", "unregister": "as_", "inbox": "to", "fetch": "to",
+    "notify": "to", "send": "from_", "reply": "from_",
+}
 
 
 class _Parser(argparse.ArgumentParser):
@@ -131,27 +148,38 @@ class _Parser(argparse.ArgumentParser):
 
 def _run_machine(args, fmt):
     """Machine-mode dispatch: the handler's prints land on stderr; one envelope
-    on stdout. `sys.exit('[sandesh] …')` → error_envelope + exit 1 (the code a
-    real process reports for that idiom); a non-zero int → error envelope."""
+    on stdout. Verbs in AXI_FN run their `axi_<verb>` handler → `(rc, fields)`
+    (a RETURNED non-zero rc is still `ok:true`; failures RAISE — ValueError/
+    PermissionError/FileNotFoundError/RuntimeError → error_envelope + exit 1).
+    Other verbs fall back to the human handler with empty fields. Either way
+    `sys.exit('[sandesh] …')` → error_envelope + exit 1 (the code a real process
+    reports for that idiom); a non-zero exit int (or, on the fallback path, a
+    non-zero return) → a generic error envelope."""
     verb = args.cmd
     context = _axi_context(args)
-    rc, error = 0, None
+    fn = AXI_FN.get(verb)
+    rc, error, fields, exited = 0, None, {}, False
     try:
         with contextlib.redirect_stdout(sys.stderr):
-            rc = args.fn(args) or 0
+            if fn is not None:
+                rc, fields = fn(args)
+            else:
+                rc = args.fn(args) or 0
     except sdb.MigrationRequired as exc:
         rc, error = 1, str(exc)
+    except (ValueError, PermissionError, FileNotFoundError, RuntimeError) as exc:
+        rc, error = 1, str(exc)
     except SystemExit as exc:
-        code = exc.code
+        code, exited = exc.code, True
         if isinstance(code, str):
             rc = 1
             error = code[len(_ERR_PREFIX):] if code.startswith(_ERR_PREFIX) else code
         else:
             rc = code or 0
-    if rc and error is None:
+    if rc and error is None and (exited or fn is None):
         error = f"{verb} failed (exit {rc})"
     if error is None:
-        env = axi.Envelope(verb, True, {}, context)
+        env = axi.Envelope(verb, True, fields, context)
     else:
         env = axi.error_envelope(verb, ValueError(error), context)
     axi.emit(env, fmt)
@@ -190,6 +218,10 @@ def cmd_projects(args):
     return 0
 
 
+def _print_registered(args, project):
+    print(f"registered: {args.address}  (project={project}, kind={args.kind or '-'})")
+
+
 def cmd_register(args):
     project, _, con = _ctx(args)
     try:
@@ -197,19 +229,11 @@ def cmd_register(args):
                      by=args.address, project=project)
     except ValueError as exc:
         sys.exit(f"[sandesh] {exc}")
-    print(f"registered: {args.address}  (project={project}, kind={args.kind or '-'})")
+    _print_registered(args, project)
     return 0
 
 
-def cmd_unregister(args):
-    project, _, con = _ctx(args)
-    requester = _self_addr(args, "as_")
-    if not requester:
-        sys.exit("[sandesh] ERROR: pass --as '<your address>' (or set $SANDESH_ADDRESS).")
-    try:
-        verdict, pid = sdb.unregister(con, args.address, requester=requester, project=project)
-    except (ValueError, PermissionError) as exc:
-        sys.exit(f"[sandesh] {exc}")
+def _print_unregister(args, verdict, pid):
     if verdict == "tombstoned":
         print(f"tombstone set on {args.address} (notifier pid {pid}). It stops within one poll; "
               f"re-run once `addressbook` shows it offline.")
@@ -218,48 +242,66 @@ def cmd_unregister(args):
     return 0
 
 
-def cmd_addressbook(args):
+def cmd_unregister(args):
     project, _, con = _ctx(args)
-    book = sdb.addressbook(con, project)
+    requester = _require_own_addr(args, "as_", "--as '<your address>'")
+    try:
+        verdict, pid = sdb.unregister(con, args.address, requester=requester, project=project)
+    except (ValueError, PermissionError) as exc:
+        sys.exit(f"[sandesh] {exc}")
+    return _print_unregister(args, verdict, pid)
+
+
+def _print_addressbook(project, book):
     if not book:
         print(f"addressbook ({project}): empty")
-        return 0
+        return
     print(f"{'ADDRESS':22} {'KIND':9} {'STATUS':9} {'LISTENING':10} REGISTERED")
     for b in book:
         print(f"{b['address']:22} {b['kind'] or '-':9} "
               f"{'active' if b['active'] else 'inactive':9} "
               f"{'● live' if b['listening'] else '○ offline':10} {b['registered_at']}")
+
+
+def cmd_addressbook(args):
+    project, _, con = _ctx(args)
+    book = sdb.addressbook(con, project)
+    _print_addressbook(project, book)
     return 0
+
+
+def _print_sent(args, mid, sender):
+    kind = "subject-only" if not _read_body(args) else "with body"
+    print(f"sent #{mid} ({kind}) from {sender} → to:[{args.to or ''}] cc:[{args.cc or ''}]")
 
 
 def cmd_send(args):
     project, store, con = _ctx(args)
-    sender = _self_addr(args, "from_")
-    if not sender:
-        sys.exit("[sandesh] ERROR: pass --from '<your address>' (or set $SANDESH_ADDRESS).")
+    sender = _require_own_addr(args, "from_", "--from '<your address>'")
     try:
         mid = sdb.send(con, store, sender, to=_split(args.to), cc=_split(args.cc),
                        subject=args.subject, kind=args.kind, body_text=_read_body(args),
                        project=project)
     except (ValueError, FileNotFoundError) as exc:
         sys.exit(f"[sandesh] {exc}")
-    kind = "subject-only" if not _read_body(args) else "with body"
-    print(f"sent #{mid} ({kind}) from {sender} → to:[{args.to or ''}] cc:[{args.cc or ''}]")
+    _print_sent(args, mid, sender)
     return 0
+
+
+def _print_replied(args, mid):
+    print(f"replied #{mid} to #{args.to_msg}")
 
 
 def cmd_reply(args):
     project, store, con = _ctx(args)
-    sender = _self_addr(args, "from_")
-    if not sender:
-        sys.exit("[sandesh] ERROR: pass --from '<your address>' (or set $SANDESH_ADDRESS).")
+    sender = _require_own_addr(args, "from_", "--from '<your address>'")
     try:
         mid = sdb.reply(con, store, args.to_msg, sender, subject=args.subject,
                         body_text=_read_body(args), reply_all=args.all,
                         project=project)
     except (ValueError, FileNotFoundError) as exc:
         sys.exit(f"[sandesh] {exc}")
-    print(f"replied #{mid} to #{args.to_msg}")
+    _print_replied(args, mid)
     return 0
 
 
@@ -280,43 +322,57 @@ def _render(items, recipient):
         print()
 
 
-def cmd_inbox(args):
-    _, _, con = _ctx(args)
-    who = _self_addr(args, "to")
-    if not who:
-        sys.exit("[sandesh] ERROR: pass --to '<address>' (or set $SANDESH_ADDRESS).")
-    try:
-        rows = sdb.inbox(con, who, unread_only=not args.all,
-                         sender=args.from_, sender_project=args.from_project,
-                         kind=args.kind, since=args.since, until=args.until,
-                         subject_like=args.subject)
-    except ValueError as exc:
-        print(f"[sandesh] {exc}", file=sys.stderr)
-        sys.exit(1)
+def _inbox_rows(con, args, who, unread_only):
+    """sdb.inbox with the CLI's filter flags mapped 1:1."""
+    return sdb.inbox(con, who, unread_only=unread_only,
+                     sender=args.from_, sender_project=args.from_project,
+                     kind=args.kind, since=args.since, until=args.until,
+                     subject_like=args.subject)
+
+
+def _print_inbox(rows, show_all):
     print(f"{'#':>5} {'FROM':16} {'ROLE':4} {'READ':5} SUBJECT")
     for r in rows:
         print(f"{r['id']:>5} {r['from_addr']:16} {r['role']:4} "
               f"{'·' if r['read_at'] is None else '✓':5} {r['subject']}")
-    print(f"({len(rows)} {'unread' if not args.all else 'total'})")
+    print(f"({len(rows)} {'unread' if not show_all else 'total'})")
+
+
+def cmd_inbox(args):
+    _, _, con = _ctx(args)
+    who = _require_own_addr(args, "to", "--to '<address>'")
+    try:
+        rows = _inbox_rows(con, args, who, not args.all)
+    except ValueError as exc:
+        print(f"[sandesh] {exc}", file=sys.stderr)
+        sys.exit(1)
+    _print_inbox(rows, args.all)
     return 0
+
+
+def _fetch_items(con, store, args, who):
+    """sdb.fetch with the CLI's filter flags mapped 1:1 (marks unless --peek)."""
+    return sdb.fetch(con, store, who, mark=not args.peek,
+                     sender=args.from_, sender_project=args.from_project,
+                     kind=args.kind, since=args.since, until=args.until,
+                     subject_like=args.subject)
+
+
+def _print_fetch(items, who, peek):
+    _render(items, who)
+    if items and not peek:
+        print(f"(marked {len(items)} read)")
 
 
 def cmd_fetch(args):
     _, store, con = _ctx(args)
-    who = _self_addr(args, "to")
-    if not who:
-        sys.exit("[sandesh] ERROR: pass --to '<address>' (or set $SANDESH_ADDRESS).")
+    who = _require_own_addr(args, "to", "--to '<address>'")
     try:
-        items = sdb.fetch(con, store, who, mark=not args.peek,
-                          sender=args.from_, sender_project=args.from_project,
-                          kind=args.kind, since=args.since, until=args.until,
-                          subject_like=args.subject)
+        items = _fetch_items(con, store, args, who)
     except ValueError as exc:
         print(f"[sandesh] {exc}", file=sys.stderr)
         sys.exit(1)
-    _render(items, who)
-    if items and not args.peek:
-        print(f"(marked {len(items)} read)")
+    _print_fetch(items, who, args.peek)
     return 0
 
 
@@ -374,6 +430,11 @@ def cmd_revoke(args):
     return 0
 
 
+def _print_archived(args):
+    print(f"archived project {args.project!r} (by {args.by}) — "
+          f"read-only until unarchived; nothing deleted")
+
+
 def cmd_archive(args):
     con = sdb.connect()
     try:
@@ -394,9 +455,12 @@ def cmd_archive(args):
         sys.exit(1)
     finally:
         con.close()
-    print(f"archived project {args.project!r} (by {args.by}) — "
-          f"read-only until unarchived; nothing deleted")
+    _print_archived(args)
     return 0
+
+
+def _print_unarchived(args):
+    print(f"unarchived project {args.project!r} (by {args.by}) — active again")
 
 
 def cmd_unarchive(args):
@@ -413,7 +477,7 @@ def cmd_unarchive(args):
         sys.exit(1)
     finally:
         con.close()
-    print(f"unarchived project {args.project!r} (by {args.by}) — active again")
+    _print_unarchived(args)
     return 0
 
 
@@ -644,6 +708,207 @@ def _cmd_init_check():
     return 0
 
 
+# --------------------------------------------------------------------------- #
+# Machine-mode verb handlers (CR-SAN-047 §S4). Each `axi_<verb>(args)` does the
+# verb's work, prints the human lines (→ stderr under _run_machine) and returns
+# `(rc, fields)`; failures RAISE (ValueError/PermissionError/…) and _run_machine
+# turns them into the error envelope. Lists emit the DEFAULT columns unless
+# `--fields` names a subset of the FULL set (PRD §4.0 P2/P4/P5).
+
+ADDRESSBOOK_FIELDS = ("address", "kind", "status", "listening", "registered")
+ADDRESSBOOK_DEFAULT = ("address", "listening")
+INBOX_FIELDS = ("id", "from", "to", "cc", "kind", "subject", "created", "re", "unread")
+INBOX_DEFAULT = ("id", "from", "subject", "unread")
+INBOX_LIMIT = 50
+
+
+def _fields_arg(valid):
+    """argparse `type` for `--fields <csv>`: a subset of `valid` (given order
+    kept); an unknown name → ArgumentTypeError naming it AND the valid set, which
+    argparse routes through parser.error() (exit 2; an envelope in machine mode)."""
+    def parse(csv):
+        names = _split(csv)
+        bad = [n for n in names if n not in valid]
+        if bad or not names:
+            raise argparse.ArgumentTypeError(
+                f"unknown field(s) {', '.join(bad) or '(none)'} — valid: {', '.join(valid)}")
+        return names
+    return parse
+
+
+def _pick(row, cols):
+    return {c: row[c] for c in cols}
+
+
+def _joined(recipients, role):
+    return ";".join(recipients[role])
+
+
+def axi_addressbook(args):
+    project, _, con = _ctx(args)
+    cols = args.fields or ADDRESSBOOK_DEFAULT
+    book = sdb.addressbook(con, project)
+    _print_addressbook(project, book)
+    live = sum(1 for b in book if b["listening"])
+    if not book:
+        participants = f"0 registered in {project}"
+    else:
+        participants = [_pick({
+            "address": b["address"], "kind": b["kind"],
+            "status": "active" if b["active"] else "inactive",
+            "listening": b["listening"], "registered": b["registered_at"],
+        }, cols) for b in book]
+    return 0, {"participants": participants, "listening": f"{live}/{len(book)}"}
+
+
+def axi_inbox(args):
+    _, _, con = _ctx(args)
+    who = _require_own_addr(args, "to", "--to '<address>'")
+    cols = args.fields or INBOX_DEFAULT
+    rows = _inbox_rows(con, args, who, not args.all)
+    _print_inbox(rows, args.all)
+    # The aggregate counts the recipient's WHOLE (filtered) mailbox, read or
+    # not, regardless of --all; --limit slices only the rows.
+    everything = rows if args.all else _inbox_rows(con, args, who, False)
+    unread = sum(1 for r in everything if r["read_at"] is None)
+    rows = rows[:args.limit]
+    recipients = sdb.message_recipients(con, [r["id"] for r in rows])
+    messages = [_pick({
+        "id": r["id"], "from": r["from_addr"],
+        "to": _joined(recipients[r["id"]], "to"),
+        "cc": _joined(recipients[r["id"]], "cc"),
+        "kind": r["kind"], "subject": r["subject"], "created": r["created_at"],
+        "re": r["in_reply_to"], "unread": r["read_at"] is None,
+    }, cols) for r in rows] or f"0 unread for {who}"
+    return 0, {"messages": messages, "unread": f"{unread} of {len(everything)}"}
+
+
+def axi_fetch(args):
+    _, store, con = _ctx(args)
+    who = _require_own_addr(args, "to", "--to '<address>'")
+    items = _fetch_items(con, store, args, who)
+    _print_fetch(items, who, args.peek)
+    if not items:
+        return 0, {"messages": f"0 unread for {who}", "marked_read": 0}
+    recipients = sdb.message_recipients(con, [it["id"] for it in items])
+    rows = [{
+        "id": it["id"], "from": it["from"],
+        "to": _joined(recipients[it["id"]], "to"),
+        "cc": _joined(recipients[it["id"]], "cc"),
+        "kind": it["kind"], "subject": it["subject"], "created": it["created_at"],
+        "re": it["in_reply_to"][0] if it["in_reply_to"] else None,
+    } for it in items]
+    bodies = {str(it["id"]): it["body"] for it in items if it["body"] is not None}
+    return 0, {"messages": rows, "bodies": bodies,
+               "marked_read": 0 if args.peek else len(items)}
+
+
+def _delivery_fields(con, mid, kind, subject):
+    """send/reply confirmation: the recipients as actually written (expanded,
+    deduped, sender dropped) + `delivered` = the recipient rows created."""
+    recipients = sdb.message_recipients(con, [mid])[mid]
+    return {"id": mid, "to": _joined(recipients, "to"), "cc": _joined(recipients, "cc"),
+            "kind": kind, "subject": subject,
+            "delivered": len(recipients["to"]) + len(recipients["cc"])}
+
+
+def axi_send(args):
+    project, store, con = _ctx(args)
+    sender = _require_own_addr(args, "from_", "--from '<your address>'")
+    mid = sdb.send(con, store, sender, to=_split(args.to), cc=_split(args.cc),
+                   subject=args.subject, kind=args.kind, body_text=_read_body(args),
+                   project=project)
+    _print_sent(args, mid, sender)
+    return 0, _delivery_fields(con, mid, args.kind, args.subject)
+
+
+def axi_reply(args):
+    project, store, con = _ctx(args)
+    sender = _require_own_addr(args, "from_", "--from '<your address>'")
+    mid = sdb.reply(con, store, args.to_msg, sender, subject=args.subject,
+                    body_text=_read_body(args), reply_all=args.all, project=project)
+    _print_replied(args, mid)
+    row = con.execute("SELECT kind, subject FROM message WHERE id=?", (mid,)).fetchone()
+    fields = _delivery_fields(con, mid, row["kind"], row["subject"])
+    fields["re"] = args.to_msg
+    return 0, fields
+
+
+def axi_register(args):
+    project, _, con = _ctx(args)
+    fields = {"address": args.address, "project": project, "kind": args.kind,
+              "result": "registered"}
+    try:
+        sdb.register(con, args.address, kind=args.kind, display_name=args.name,
+                     by=args.address, project=project)
+    except sdb.AlreadyRegistered:          # P6: idempotent no-op, not a failure
+        fields["result"] = "already"
+        return 0, fields
+    _print_registered(args, project)
+    return 0, fields
+
+
+def axi_unregister(args):
+    project, _, con = _ctx(args)
+    requester = _require_own_addr(args, "as_", "--as '<your address>'")
+    kind = next((b["kind"] for b in sdb.addressbook(con, project)
+                 if b["address"] == args.address), None)
+    fields = {"address": args.address, "project": project, "kind": kind, "result": "absent"}
+    if not sdb.is_active(con, args.address):    # P6: already gone → no-op
+        return 0, fields
+    verdict, pid = sdb.unregister(con, args.address, requester=requester, project=project)
+    fields["result"] = verdict
+    return _print_unregister(args, verdict, pid), fields
+
+
+def _axi_lifecycle(args, target, op, done):
+    """archive/unarchive in machine mode: `op(con)` performs the change and
+    returns the evicted watchers; AlreadyInState with the project already in
+    `target` → `result: already` (P6); any other refusal propagates."""
+    con = sdb.connect()
+    try:
+        fields = {"project": args.project, "state": target}
+        try:
+            fields["evicted"] = op(con)
+        except sdb.AlreadyInState:
+            if sdb.project_state(con, args.project) != target:
+                raise
+            fields["result"] = "already"
+            return 0, fields
+    finally:
+        con.close()
+    done(args)
+    return 0, fields
+
+
+def axi_archive(args):
+    if args.dry_run:
+        return cmd_archive(args) or 0, {}
+
+    def op(con):
+        evicted = sdb.archive_preview(con, args.project, args.by)
+        sdb.archive(con, args.project, args.by, force=args.force)
+        return evicted
+    return _axi_lifecycle(args, "archived", op, _print_archived)
+
+
+def axi_unarchive(args):
+    if args.dry_run:
+        return cmd_unarchive(args) or 0, {}
+
+    def op(con):
+        sdb.unarchive(con, args.project, args.by)
+        return []
+    return _axi_lifecycle(args, "active", op, _print_unarchived)
+
+
+AXI_FN = {
+    "addressbook": axi_addressbook, "inbox": axi_inbox, "fetch": axi_fetch,
+    "send": axi_send, "reply": axi_reply, "register": axi_register,
+    "unregister": axi_unregister, "archive": axi_archive, "unarchive": axi_unarchive,
+}
+
+
 def build_parser(axi_format="human", axi_context=None):
     # --project is shared so it works BOTH before and after the subcommand:
     #   sandesh --project X setup    AND    sandesh setup --project X
@@ -684,6 +949,10 @@ def build_parser(axi_format="human", axi_context=None):
 
     sub.add_parser("addressbook", parents=[common],
                    help="list participants + who's listening").set_defaults(fn=cmd_addressbook)
+    p = sub.choices["addressbook"]
+    p.add_argument("--fields", type=_fields_arg(ADDRESSBOOK_FIELDS), default=None,
+                   metavar="CSV", help="machine-mode columns (subset of "
+                   f"{','.join(ADDRESSBOOK_FIELDS)}; default {','.join(ADDRESSBOOK_DEFAULT)})")
 
     p = sub.add_parser("send", parents=[common], help="send a message")
     p.add_argument("--from", dest="from_", help="sender (or $SANDESH_ADDRESS)")
@@ -722,6 +991,11 @@ def build_parser(axi_format="human", axi_context=None):
                                    "(YYYY-MM-DD or 'YYYY-MM-DD HH:MM:SS', inclusive; "
                                    "date-only means end of that day)")
     p.add_argument("--subject", help="case-insensitive substring match on subject")
+    p.add_argument("--fields", type=_fields_arg(INBOX_FIELDS), default=None, metavar="CSV",
+                   help="machine-mode columns (subset of "
+                        f"{','.join(INBOX_FIELDS)}; default {','.join(INBOX_DEFAULT)})")
+    p.add_argument("--limit", type=int, default=INBOX_LIMIT,
+                   help=f"machine-mode row cap (default {INBOX_LIMIT}; the aggregate is unsliced)")
     p.set_defaults(fn=cmd_inbox)
 
     p = sub.add_parser("fetch", parents=[common], help="consolidate + read unread messages")

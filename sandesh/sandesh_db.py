@@ -148,6 +148,18 @@ class MigrationRequired(Exception):
     install-method-appropriate remediation command (see install_method_hint())."""
 
 
+class AlreadyRegistered(ValueError):
+    """register() of an address that is already active (CR-SAN-047 §S1b).
+    A ValueError subclass so the MCP ValueError → ToolError mapping and the
+    human-mode exit 1 are unchanged; machine mode maps it to result:already."""
+
+
+class AlreadyInState(ValueError):
+    """archive()/unarchive() of a project that is not in the required source
+    state (CR-SAN-047 §S1b). Same ValueError base + message as before; machine
+    mode maps it to result:already when the project IS in the target state."""
+
+
 def install_method_hint(executable=None):
     """Best-effort install-method remediation string for the [migrate] extra,
     inferred from the running interpreter's path.
@@ -400,7 +412,7 @@ def register(con, addr, kind=None, display_name=None, by=None, project=None):
     row = con.execute("SELECT active FROM address WHERE address=?", (addr,)).fetchone()
     if row is not None:
         if row["active"]:
-            raise ValueError(f"address already registered: {addr}")
+            raise AlreadyRegistered(f"address already registered: {addr}")
         con.execute(
             "UPDATE address SET active=TRUE, kind=COALESCE(?,kind), "
             "display_name=COALESCE(?,display_name), registered_at=datetime('now'), "
@@ -435,6 +447,23 @@ def addressbook(con, project):
         "active": bool(r["active"]), "registered_at": r["registered_at"],
         "listening": notifier_live(con, r["address"]) is not None,
     } for r in rows]
+
+
+def message_recipients(con, ids):
+    """{message_id: {"to": [addr…], "cc": [addr…]}} for the given ids — one
+    query over message_recipient, each list ordered by recipient address. Every
+    requested id is present (empty lists when it has no rows); [] → {}."""
+    ids = list(ids)
+    result = {i: {"to": [], "cc": []} for i in ids}
+    if not ids:
+        return result
+    rows = con.execute(
+        "SELECT message_id, recipient, role FROM message_recipient "
+        f"WHERE message_id IN ({','.join('?' * len(ids))}) "
+        "ORDER BY message_id, recipient", ids).fetchall()
+    for r in rows:
+        result[r["message_id"]][r["role"]].append(r["recipient"])
+    return result
 
 
 def active_addresses(con, project):
@@ -1036,7 +1065,7 @@ def _archive_guards(con, project_id, by):
     if state is None:
         raise ValueError(f"unknown project '{project_id}'")
     if state != "active":
-        raise ValueError(f"project '{project_id}' is not active")
+        raise AlreadyInState(f"project '{project_id}' is not active")
     # Escape hatch (CR-SAN-045): a zero-address project has no Mainline that
     # could ever satisfy the check; the super-admin may archive it so it can
     # enter the mandatory two-step. A grammar-valid 'Mainline - <id>' still
@@ -1054,7 +1083,7 @@ def _unarchive_guards(con, project_id, by):
     if state is None:
         raise ValueError(f"unknown project '{project_id}'")
     if state != "archived":
-        raise ValueError(f"project '{project_id}' is not archived")
+        raise AlreadyInState(f"project '{project_id}' is not archived")
     _require_project_mainline(project_id, by)
 
 
