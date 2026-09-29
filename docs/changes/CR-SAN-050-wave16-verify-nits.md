@@ -1,6 +1,7 @@
 # CR-SAN-050 — Wave 16 VERIFY nits (047/048/049 follow-through before 0.4.0)
 
-**Status:** PENDING
+**Status:** COMPLETED (2026-09-29 — cycles 221–225 done; re-gate after the power-outage resume: python 1768/1768
+(lines 83.3%), bun 405/405 (lines 98.7%); merge 2c1a14d)
 **Priority:** Medium (chore — closes findings that should have been fixed inside their CRs)
 **Depends on:** CR-SAN-047, CR-SAN-048, CR-SAN-049
 **Labels:** chore, tests, axi, python, bun
