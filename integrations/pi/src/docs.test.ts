@@ -91,3 +91,48 @@ describe("docs/USER_GUIDE.md §Pi — 0.4.0 arming behaviour change (CR-SAN-048 
     expect(piSection).toContain("0.4.0");
   });
 });
+
+// ============================================================================
+// CR-SAN-051 §S2 — RED: identity-loading guidance (AC7)
+// ============================================================================
+
+describe("docs/USER_GUIDE.md §Pi — identity-loading guidance (CR-SAN-051 §S2, AC7)", () => {
+  const guide = fs.readFileSync(USER_GUIDE_PATH, "utf-8");
+  const piSection = extractPiSection(guide);
+
+  test("tells the reader to run `direnv allow` once", () => {
+    expect(piSection).toContain("direnv allow");
+  });
+
+  test("names the .envrc `dotenv` directive", () => {
+    expect(piSection).toContain("dotenv");
+  });
+
+  test("gives the fish direnv hook line", () => {
+    expect(piSection).toContain("direnv hook fish");
+  });
+
+  test("gives the bash direnv hook line", () => {
+    expect(piSection).toContain("direnv hook bash");
+  });
+
+  test("describes the session-start warning for an unexported identity", () => {
+    expect(piSection).toContain("not exported");
+  });
+
+  test("no longer describes the ambient block as '≤ 6-line' (corrected to '≤ 12-line', CR-SAN-048 amendment)", () => {
+    expect(piSection).not.toContain("≤ 6-line");
+  });
+});
+
+describe("integrations/pi/README.md — .env / direnv loading pointer (CR-SAN-051 §S2, AC7)", () => {
+  const readme = fs.readFileSync(README_PATH, "utf-8");
+
+  test("mentions direnv", () => {
+    expect(readme).toContain("direnv");
+  });
+
+  test("mentions .env", () => {
+    expect(readme).toContain(".env");
+  });
+});
