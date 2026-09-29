@@ -18,6 +18,7 @@ start/status/stop surface. CRs derived from this PRD cite it via `**Design refer
 |---|---|---|---|
 | 1.0 | 2026-09-26 | Mainline - Sandesh | Initial contract from the Model B thread; six design decisions D1–D6 fixed by the owner's delegation. |
 | 1.1 | 2026-09-26 | Mainline - Sandesh | Owner ruling: the extension is the orchestrator's interface — adopt the ten AXI principles (axi.md) as the standard for the whole agent surface, shaped once in the CLI (§4.0); minimal schemas, truncation, aggregates, empty states, idempotent no-ops, structured errors as results, ambient context, home view, `help[]`. |
+| 1.2 | 2026-09-29 | Mainline - Sandesh | Owner ruling: the identity environment is loaded at the shell boundary (direnv, owned by Model B's `modelb-axi init`); the extension never parses `.env`. P7 gains the unexported-identity nudge (§4.6). |
 
 ---
 
@@ -75,7 +76,7 @@ Model B's own words fix the target (#1394 Q2/Q3, #1396 3a/3b) and are the wire c
 | 4 | Pre-computed aggregates | `inbox` → `unread: <n> of <total>`; `addressbook` → `listening: <n>/<m>`; `send`/`reply` → `delivered: <n>`; `fetch` → `marked_read`; `search` → `total`. The home view (§4.6) answers listening + unread in one call. |
 | 5 | Definitive empty states | An empty result is a sentence field, never a bare `key: []` alone: `messages: 0 unread for <addr>`, `participants: 0 registered in <project>`, `hits: 0 for "<q>"`. `ok: true` — absence is the answer. |
 | 6 | Structured errors, idempotent no-ops, exit codes | `register` of an active address → `ok:true result:already`; `unregister` of an absent one → `ok:true result:absent`; `archive` of an archived project → `ok:true result:already`; `notify_start` on a running loop → `ok:true already:true`. Errors go on **stdout** as `ok:false error help[]` (exit 1 unchanged; usage errors exit 2 and name the valid flags). Unknown flags fail loud. No prompts in machine mode (`tombstone` requires `--yes`). Progress only on stderr. |
-| 7 | Ambient context | The Pi extension injects the home envelope at `session_start` **minus the `bin` and `description` lines** (self-identification is noise inside a session that already holds the tools) — ≤ 12 lines: verb/ok, project, address, listening, unread, context, `help[2]`, warnings. Opt-in by the identity env being set; nothing when unset. (Amended 2026-09-27 at CR-SAN-048 VERIFY: the original "≤ 6 lines" predates the P8/P10 home-view fields.) |
+| 7 | Ambient context | The Pi extension injects the home envelope at `session_start` **minus the `bin` and `description` lines** (self-identification is noise inside a session that already holds the tools) — ≤ 12 lines: verb/ok, project, address, listening, unread, context, `help[2]`, warnings. Opt-in by the identity env being set; nothing when unset (the §4.6 unexported-identity nudge is a warning, not this block). (Amended 2026-09-27 at CR-SAN-048 VERIFY: the original "≤ 6 lines" predates the P8/P10 home-view fields.) |
 | 8 | Content first | `sandesh` with no arguments (machine mode) and the `sandesh_status` tool print the same dashboard: `bin`, one-line description, address/listening/unread, `help[]`. |
 | 9 | Contextual disclosure | List and mutation results carry 1–3 `help[]` templates with `<id>`/`"<subject>"` placeholders (after `inbox` → fetch; after `send` → `thread <id>`; after an empty addressbook → register). Detail views and confirmations carry none. Truncated lists say how to see all. |
 | 10 | Consistent help | Every verb's `--help` is the concise per-verb reference (flags + defaults + 2 examples); tool descriptions are that reference. `--version`/`-v`/`-V` print the bare version fast (already true). |
@@ -168,6 +169,13 @@ the quoting rules are where the subset would drift).
   extension runs the home view once and injects it as compact context (`pi.sendUserMessage` is NOT used —
   the harness's system-context seam is; ≤6 lines: address, listening, `unread: n`, `help[2]`). Nothing is
   injected when the vars are unset. This replaces the 0.3.x "wake disabled" warning.
+- **Unexported-identity nudge (P7, v1.2).** Every tool reads its identity from the process environment
+  only; loading a project's `.env` into the environment is the shell's job (direnv, emitted by
+  `modelb-axi init`), never the extension's. When `$SANDESH_ADDRESS` or `$SANDESH_PROJECT` is unset at
+  `session_start` but `<cwd>/.env` assigns it, the extension emits ONE warning naming the unexported
+  key(s) and how to load them, and does nothing else: it does not read the values, does not export
+  them, does not walk up from `<cwd>`. Silent when both vars are set, when `.env` is absent/unreadable,
+  or when it assigns neither key. Turns a silent "no ambient view, wake not armed" into a one-line cause.
 - **Home view (P8).** Tool `sandesh_status()` (no args) = the same dashboard on demand: `bin`, description,
   `address`, `listening`, `unread`, `watcher: running|stopped`, `help[]`.
 - **Decoder.** The extension decodes only where it needs a field (the wake loop's `unread`/`exit`,
