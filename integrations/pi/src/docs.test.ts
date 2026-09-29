@@ -135,4 +135,8 @@ describe("integrations/pi/README.md — .env / direnv loading pointer (CR-SAN-05
   test("mentions .env", () => {
     expect(readme).toContain(".env");
   });
+
+  test("no longer describes the ambient block as '≤ 6-line' (corrected to '≤ 12-line', CR-SAN-048 amendment)", () => {
+    expect(readme).not.toContain("≤ 6-line");
+  });
 });
