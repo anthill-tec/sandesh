@@ -44,7 +44,10 @@ Verify: `sandesh --version`.
 | `$SANDESH_BIN`       | dev/test override: run exactly this binary (no PATH lookup, no `uvx` fallback).           |
 
 Individual tools accept an explicit `project_id` that falls back to `$SANDESH_PROJECT`.
-With both identity vars set, session start injects a ≤ 6-line **ambient status block** (your
+The extension reads these from the process environment only and never reads `.env` — load
+the project's `.env` at the shell (e.g. direnv: an `.envrc` containing `dotenv`, then
+`direnv allow`). If `./.env` assigns the identity but it is not exported, session start warns.
+With both identity vars set, session start injects a ≤ 12-line **ambient status block** (your
 address, listening state, unread count) so the agent knows its mailbox state before the
 first turn.
 

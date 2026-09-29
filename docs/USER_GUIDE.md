@@ -112,7 +112,7 @@ armed the wake loop automatically at session start. From `0.4.0`:
   `$SANDESH_ADDRESS` / `$SANDESH_PROJECT`). Set `SANDESH_AUTOSTART=1` to restore the
   0.3.x auto-arm at session start (both identity vars must then be set).
 - **Ambient status at session start:** with `$SANDESH_ADDRESS` and `$SANDESH_PROJECT`
-  set, a ≤ 6-line status block (address, listening, unread) is injected before your
+  set, a ≤ 12-line status block (address, listening, unread) is injected before your
   first turn, so you know your mailbox state without a tool call.
 - **Tool results are AXI envelopes** in TOON encoding — the same `--format toon`
   output described under [Machine output for agents](#machine-output-for-agents---format-toonjson);
@@ -120,6 +120,15 @@ armed the wake loop automatically at session start. From `0.4.0`:
 - **Inspect or stop the watcher** with `/sandesh-watcher status` and
   `/sandesh-watcher stop [address]` (tools: `sandesh_notify_status`,
   `sandesh_notify_stop`).
+
+**Your identity.** The extension reads `$SANDESH_ADDRESS` and `$SANDESH_PROJECT` from
+the environment only — it never reads a `.env` file. If your project keeps them in
+`./.env`, load it at the shell with [direnv](https://direnv.net): put an `.envrc`
+containing `dotenv` next to it, add the shell hook (`direnv hook fish | source` in your
+fish config, or `eval "$(direnv hook bash)"` in `.bashrc`), then run `direnv allow`
+once, and start pi from that directory. If the identity is in `./.env` but not exported,
+the extension warns at session start — until you fix that there is no ambient status
+and no wake.
 
 > Pi needs the `sandesh` CLI **≥ 0.4.0** available on the machine (installed, or run
 > on demand via `uvx`) — the extension shells out to it and refuses an older CLI at

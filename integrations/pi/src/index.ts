@@ -22,6 +22,8 @@
  */
 
 import { Type } from "typebox";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { encode } from "@toon-format/toon";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {
@@ -32,6 +34,7 @@ import type {
   SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import { decodeEnvelope } from "./toon";
+import { unexportedIdentityKeys, unexportedIdentityNotice } from "./identity";
 import { WakeSupervisor, type WatcherStatus } from "./wake";
 
 // ---------------------------------------------------------------------------
@@ -82,6 +85,23 @@ const AUTOSTART_ENV_NOTICE =
 /** Arming info (§S5): the wake is tool-started unless `SANDESH_AUTOSTART=1`. */
 const TOOL_STARTED_NOTICE =
   "Sandesh wake is tool-started: call sandesh_notify_start (or set SANDESH_AUTOSTART=1)";
+
+/**
+ * Unexported-identity nudge (CR-SAN-051 §S1): warn once when `<ctx.cwd>/.env`
+ * assigns an identity var that the process environment lacks. Read-only — never
+ * writes `process.env`, reads no other file, and never throws.
+ */
+function nudgeUnexportedIdentity(ctx: ExtensionContext): void {
+  let envText: string;
+  try {
+    envText = readFileSync(join(ctx.cwd, ".env"), "utf-8");
+  } catch {
+    // No/unreadable `.env` (ENOENT, EISDIR, missing cwd) is the normal case — nothing to nudge about.
+    return;
+  }
+  const keys = unexportedIdentityKeys(envText, process.env);
+  if (keys.length > 0) ctx.ui.notify(unexportedIdentityNotice(keys), "warning");
+}
 
 /**
  * Install-options notice surfaced when the `sandesh` CLI is not reachable.
@@ -1109,10 +1129,12 @@ export default function registerExtension(pi: ExtensionAPI): void {
     },
   });
 
-  // Session start: the CLI probe (AC7) + version gate + provision nudge, then
-  // the ambient home view (§S2b) and the wake arming (§S5). Nothing here throws.
+  // Session start: the unexported-identity nudge (CR-SAN-051 §S1), the CLI
+  // probe (AC7) + version gate + provision nudge, then the ambient home view
+  // (§S2b) and the wake arming (§S5). Nothing here throws.
   pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext): Promise<void> => {
     latestUi = ctx.ui;
+    nudgeUnexportedIdentity(ctx);
     let probeOk = false;
     // uvx-on-demand (§S1): probe the local `sandesh` first; if it rejects or
     // exits non-zero, fall back to `uvx --from sandesh-relay[migrate] sandesh`
