@@ -65,8 +65,8 @@ first turn.
 | `sandesh_unarchive`     | restore an archived project to active (`dry_run`).                               |
 | `sandesh_search`        | FTS5 full-text search over subjects/bodies (`limit`).                            |
 | `sandesh_status`        | home view: address, listening, unread — plus `watcher: running\|stopped`.        |
-| `sandesh_notify_start`  | start the supervised wake watcher for an address (idempotent, one per address). |
-| `sandesh_notify_status` | list the in-session watchers: address, running, last exit.                       |
+| `sandesh_notify_start`  | start the supervised wake watcher for an address (idempotent, one per address); returns the watcher table. |
+| `sandesh_notify_status` | list the in-session watchers: address, running, last exit by default; `fields` selects any of address, project, running, pid, startedAt, lastExit, lastIds, timeoutExits (both notify tools). |
 | `sandesh_notify_stop`   | stop one watcher (by address) or every watcher (no address).                     |
 
 ### Results are AXI envelopes (`--format toon`)

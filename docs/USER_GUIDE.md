@@ -99,8 +99,9 @@ The Sandesh messaging verbs (send, reply, fetch, inbox, thread, …) are exposed
 view) and the three watcher tools below.
 
 The key difference from the MCP route: the Pi extension **wakes the session itself
-(native wake)**. You never run `sandesh notify` by hand — the extension runs the
-watcher as a supervised child and re-invokes the session when mail addressed to you
+(native wake)**. You do not run `sandesh notify` by hand — the extension runs the
+watcher as a supervised child (start it with `sandesh_notify_start`, or set
+`SANDESH_AUTOSTART=1`) and re-invokes the session when mail addressed to you
 arrives. So your loop is: register → start the watcher → keep working → the
 extension wakes you on new mail → fetch → act → reply.
 

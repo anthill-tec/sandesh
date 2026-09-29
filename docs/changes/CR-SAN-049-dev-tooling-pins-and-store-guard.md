@@ -26,7 +26,7 @@ other running projects" after a VERIFY probe created a `Demo` project in the sha
   `[mcp]`/`[migrate]` unchanged). `publish-pypi.yml` installs `twine>=7.0` explicitly (no behaviour change,
   just the same floor). CLAUDE.md "How to run": dev venv = `pip install -e '.[mcp,migrate,dev]'`.
 - **§S2 — real-store guard + lifecycle.** New `tests/_store_guard.py` imported first by every test module
-  (one line: `import tests._store_guard  # noqa`) and by `tests/__init__.py`. At import it creates ONE
+  (one line: `import tests._store_guard  # noqa`) (`tests/` is a namespace package — no `__init__.py`). At import it creates ONE
   per-process `tempfile.TemporaryDirectory(prefix="sandesh-tests-")` under the SYSTEM temp root
   (`tempfile.gettempdir()` — `/tmp`, tmpfs on the dev box, so nothing survives a reboot; never `$HOME`, never
   the repo), registers `atexit` cleanup, and **re-points `XDG_DATA_HOME` to it** — unconditionally, unless the

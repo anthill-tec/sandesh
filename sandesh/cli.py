@@ -36,7 +36,16 @@ def _project(args):
     return p
 
 
-_CONNECTIONS = []      # every _ctx() connection; main() closes them on the way out
+_CONNECTIONS = []      # every _con()/_ctx() connection; main() closes them on the way out
+
+
+def _con():
+    """A tracked global-DB connection (the project-free half of _ctx()): closed
+    by main() when the verb finishes, so verbs that take no project (search,
+    projects) share the same seam instead of a local try/finally."""
+    con = sdb.connect()
+    _CONNECTIONS.append(con)
+    return con
 
 
 def _ctx(args):
@@ -45,9 +54,7 @@ def _ctx(args):
     it would otherwise surface as a ResourceWarning at an arbitrary GC point)."""
     project = _project(args)
     store = sdb.store_dir(project)
-    con = sdb.connect()
-    _CONNECTIONS.append(con)
-    return project, store, con
+    return project, store, _con()
 
 
 def _close_connections():
@@ -520,19 +527,22 @@ def _print_archived(args):
           f"read-only until unarchived; nothing deleted")
 
 
+def _print_archive_preview(args, watchers):
+    print(f"[dry-run] project {args.project!r} would become archived")
+    if watchers:
+        print(f"[dry-run] watchers to evict ({len(watchers)}):")
+        for addr in watchers:
+            print(f"  {addr}")
+    else:
+        print("[dry-run] watchers to evict: none")
+    print("[dry-run] nothing written")
+
+
 def cmd_archive(args):
     con = sdb.connect()
     try:
         if args.dry_run:
-            watchers = sdb.archive_preview(con, args.project, args.by)
-            print(f"[dry-run] project {args.project!r} would become archived")
-            if watchers:
-                print(f"[dry-run] watchers to evict ({len(watchers)}):")
-                for addr in watchers:
-                    print(f"  {addr}")
-            else:
-                print("[dry-run] watchers to evict: none")
-            print("[dry-run] nothing written")
+            _print_archive_preview(args, sdb.archive_preview(con, args.project, args.by))
             return 0
         sdb.archive(con, args.project, args.by, force=args.force)
     except (ValueError, PermissionError, RuntimeError) as exc:
@@ -548,13 +558,17 @@ def _print_unarchived(args):
     print(f"unarchived project {args.project!r} (by {args.by}) — active again")
 
 
+def _print_unarchive_preview(args):
+    print(f"[dry-run] project {args.project!r} would become active")
+    print("[dry-run] nothing written")
+
+
 def cmd_unarchive(args):
     con = sdb.connect()
     try:
         if args.dry_run:
             sdb.unarchive_preview(con, args.project, args.by)
-            print(f"[dry-run] project {args.project!r} would become active")
-            print("[dry-run] nothing written")
+            _print_unarchive_preview(args)
             return 0
         sdb.unarchive(con, args.project, args.by)
     except (ValueError, PermissionError, RuntimeError) as exc:
@@ -566,17 +580,20 @@ def cmd_unarchive(args):
     return 0
 
 
+def _print_tombstone_preview(args, counts):
+    print(f"[dry-run] project {args.project!r} would become tombstoned:")
+    print(f"  internal messages: {counts['internal_messages']} (rows purged)")
+    print(f"  body files: {counts['body_files']} (deleted from disk)")
+    print(f"  cross-project messages: {counts['cross_project_messages']} "
+          f"(rows survive; their bodies are lost)")
+    print("[dry-run] nothing written")
+
+
 def cmd_tombstone(args):
     con = sdb.connect()
     try:
         if args.dry_run:
-            counts = sdb.tombstone_preview(con, args.project, args.by)
-            print(f"[dry-run] project {args.project!r} would become tombstoned:")
-            print(f"  internal messages: {counts['internal_messages']} (rows purged)")
-            print(f"  body files: {counts['body_files']} (deleted from disk)")
-            print(f"  cross-project messages: {counts['cross_project_messages']} "
-                  f"(rows survive; their bodies are lost)")
-            print("[dry-run] nothing written")
+            _print_tombstone_preview(args, sdb.tombstone_preview(con, args.project, args.by))
             return 0
         if not args.yes:
             if not sys.stdin.isatty():
@@ -1053,9 +1070,25 @@ def _axi_lifecycle(args, target, op, done):
     return 0, fields
 
 
+def _axi_dry_run(args, target, preview):
+    """archive/unarchive/tombstone `--dry-run` in machine mode (CR-SAN-050 §S3):
+    `preview(con)` runs the library's read-only preview (its guards still
+    raise → error envelope), prints the human preview (stderr under
+    _run_machine) and returns the preview fields; the envelope is those plus
+    `dry_run: true`, `project` and the would-be `state`. Nothing is written."""
+    _, _, con = _ctx(args)
+    fields = {"dry_run": True, "project": args.project, "state": target}
+    fields.update(preview(con))
+    return 0, fields
+
+
 def axi_archive(args):
     if args.dry_run:
-        return cmd_archive(args) or 0, {}
+        def preview(con):
+            evicted = sdb.archive_preview(con, args.project, args.by)
+            _print_archive_preview(args, evicted)
+            return {"evicted": evicted}
+        return _axi_dry_run(args, "archived", preview)
 
     def op(con):
         evicted = sdb.archive_preview(con, args.project, args.by)
@@ -1066,7 +1099,11 @@ def axi_archive(args):
 
 def axi_unarchive(args):
     if args.dry_run:
-        return cmd_unarchive(args) or 0, {}
+        def preview(con):
+            sdb.unarchive_preview(con, args.project, args.by)
+            _print_unarchive_preview(args)
+            return {"evicted": []}
+        return _axi_dry_run(args, "active", preview)
 
     def op(con):
         sdb.unarchive(con, args.project, args.by)
@@ -1078,12 +1115,8 @@ def axi_unarchive(args):
 
 def axi_search(args):
     project = getattr(args, "project", None) or os.environ.get("SANDESH_PROJECT")
-    con = sdb.connect()
-    try:
-        result = sdb.search(con, args.to, args.query, limit=args.limit,
-                            offset=args.offset, sender_project=args.from_project)
-    finally:
-        con.close()
+    result = sdb.search(_con(), args.to, args.query, limit=args.limit,
+                        offset=args.offset, sender_project=args.from_project)
     _print_search(args, result)
     hits = [_pick(h, SEARCH_DEFAULT) for h in result["hits"]] or f'0 for "{args.query}"'
     help_ = [_tmpl(project, "thread --id <id>")] if result["hits"] else []
@@ -1105,11 +1138,7 @@ def axi_thread(args):
 
 
 def axi_projects(args):
-    con = sdb.connect()
-    try:
-        rows = _project_rows(con, getattr(args, "all", False))
-    finally:
-        con.close()
+    rows = _project_rows(_con(), getattr(args, "all", False))
     _print_projects(rows)
     projects = [{"project": r["project_id"], "state": r["state"],
                  "cross_project": bool(r["xproj_granted_at"])} for r in rows] or "0 set up"
@@ -1124,11 +1153,8 @@ def axi_setup(args):
 
 
 def _axi_xproj(args, op, done, granted):
-    con = sdb.connect()
-    try:
-        op(con, args.project, by=args.by)
-    finally:
-        con.close()
+    _, _, con = _ctx(args)
+    op(con, args.project, by=args.by)
     done(args)
     return 0, {"project": args.project, "cross_project": granted}
 
@@ -1143,12 +1169,21 @@ def axi_revoke(args):
 
 def axi_tombstone(args):
     """No prompts in machine mode (P6): without --yes (and not --dry-run) it is
-    a usage error; otherwise the human handler runs unchanged."""
+    a usage error; --dry-run returns the purge-count preview (§S3); otherwise
+    the human handler runs unchanged."""
     if not args.yes and not args.dry_run:
         raise _UsageError("tombstone in machine mode needs --yes "
                           "(no interactive confirmation)")
+    if args.dry_run:
+        def preview(con):
+            counts = sdb.tombstone_preview(con, args.project, args.by)
+            _print_tombstone_preview(args, counts)
+            return {"messages": counts["internal_messages"],
+                    "bodies": counts["body_files"],
+                    "cross_project": counts["cross_project_messages"]}
+        return _axi_dry_run(args, "tombstoned", preview)
     rc = cmd_tombstone(args) or 0
-    fields = {} if args.dry_run or rc else {"project": args.project, "state": "tombstoned"}
+    fields = {} if rc else {"project": args.project, "state": "tombstoned"}
     return rc, fields
 
 

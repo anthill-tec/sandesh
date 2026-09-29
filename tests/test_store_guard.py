@@ -190,11 +190,7 @@ try:
         loader.loadTestsFromTestCase(PassCase),
         loader.loadTestsFromTestCase(FailCase),
     ])
-    runner_result = unittest.main(
-        module=None, exit=False, argv=["ac4b"],
-        testRunner=unittest.TextTestRunner(stream=open(os.devnull, "w"), verbosity=0),
-        defaultTest=None,
-    ) if False else unittest.TextTestRunner(
+    runner_result = unittest.TextTestRunner(
         stream=open(os.devnull, "w"), verbosity=0,
     ).run(suite)
 

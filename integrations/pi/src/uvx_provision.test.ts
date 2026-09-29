@@ -35,7 +35,7 @@ import type {
   ExtensionHandler,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import registerExtension, { __resetWakeState } from "./index";
+import registerExtension, { resetExtensionState } from "./index";
 
 type SessionStartHandler = ExtensionHandler<SessionStartEvent>;
 type CapturedTool = ToolDefinition<any, any, any>;
@@ -165,7 +165,7 @@ function allExecCalls(
 const SAVED_ENV: Partial<Record<string, string>> = {};
 
 beforeEach(() => {
-  __resetWakeState();
+  resetExtensionState();
   SAVED_ENV.SANDESH_ADDRESS = process.env.SANDESH_ADDRESS;
   SAVED_ENV.SANDESH_PROJECT = process.env.SANDESH_PROJECT;
   SAVED_ENV.SANDESH_AUTOSTART = process.env.SANDESH_AUTOSTART; // CR-SAN-048 S5 arming gate

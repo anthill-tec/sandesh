@@ -1,0 +1,238 @@
+/**
+ * CR-SAN-050 §S5, AC5 — RED: sandesh_notify_status/sandesh_notify_start
+ * `fields` knob (048 SUGGESTION 1, P2 widening) mapping to the full
+ * `WatcherStatus` columns (address,project,running,pid,startedAt,lastExit,
+ * lastIds,timeoutExits); default stays {address,running,lastExit}. Also pins
+ * the `__resetWakeState` → `resetExtensionState` rename (048 SUGGESTION 3).
+ *
+ * This file drives the wiring exclusively through `registerExtension(fakePi)`'s
+ * captured tools (mirrors wake.test.ts's harness pattern) — it never imports
+ * `./wake` directly.
+ *
+ * RED reason: today neither `sandesh_notify_status` nor `sandesh_notify_start`
+ * accepts a `fields` param — their TypeBox `parameters` is `Type.Object({})` /
+ * `{address?, project?}` with no `fields` property, and both hardcode the
+ * 3-column `watcherRow` shape:
+ *  - passing `fields:[...]` is silently ignored (execute's param type doesn't
+ *    gate at runtime in this harness) → the decoded row still has exactly
+ *    {address,running,lastExit}, not the requested 8 keys → key-set
+ *    assertions fail.
+ *  - `sandesh_notify_start` still returns a single-element `watchers` array
+ *    (only the just-started entry), so a second start's `watchers[1]` is
+ *    `undefined` → property-access assertions on it fail.
+ *  - an unknown field name is never validated → the call still returns
+ *    `ok:true` (not the required `ok:false` + naming error) → that assertion
+ *    fails.
+ *  - `tool.parameters.properties.fields` is `undefined` on both tools.
+ * `__resetWakeState` is still the exported name in index.ts (not
+ * `resetExtensionState`), and `src/uvx_provision.test.ts` still imports it —
+ * so the rename assertions fail too.
+ */
+
+import { test, expect, describe, mock } from "bun:test";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type {
+  ExecResult,
+  ExtensionAPI,
+  ExtensionContext,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
+import registerExtension from "./index";
+import { decodeEnvelope } from "./toon";
+
+// ─── Fake pi harness (mirrors wake.test.ts's makeFakeExec/makeFakePi/makeFakeCtx) ──
+
+interface NotifyDeferred {
+  args: string[];
+  resolve: (r: ExecResult) => void;
+}
+
+function makeDeferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+  let resolveFn!: (v: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolveFn = res;
+  });
+  return { promise, resolve: resolveFn };
+}
+
+function makeFakeExec() {
+  const notifyDeferreds: NotifyDeferred[] = [];
+  const exec = mock((_cmd: string, args: string[], opts?: { signal?: AbortSignal }): Promise<ExecResult> => {
+    if (args.includes("--version")) {
+      return Promise.resolve({ stdout: "sandesh 0.4.0", stderr: "", code: 0, killed: false });
+    }
+    if (args.includes("notify")) {
+      const d = makeDeferred<ExecResult>();
+      notifyDeferreds.push({ args, resolve: d.resolve });
+      return d.promise;
+    }
+    return Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false });
+  });
+  return { exec, notifyDeferreds };
+}
+
+function makeFakePi() {
+  const capturedTools = new Map<string, ToolDefinition<any, any, any>>();
+  const { exec, notifyDeferreds } = makeFakeExec();
+  const fakePi = {
+    registerTool: mock((tool: ToolDefinition<any, any, any>) => {
+      capturedTools.set(tool.name, tool);
+    }),
+    registerCommand: mock((_name: string, _opts: unknown) => {}),
+    on: mock((_event: string, _handler: unknown) => {}),
+    exec,
+    sendUserMessage: mock((_text: string, _opts?: { deliverAs: string }) => {}),
+    sendMessage: mock((_msg: unknown, _opts?: unknown) => {}),
+  } as unknown as ExtensionAPI;
+  return { fakePi, capturedTools, notifyDeferreds };
+}
+
+function makeFakeCtx(): ExtensionContext {
+  return {
+    ui: { notify: mock((_msg: string, _type?: "info" | "warning" | "error") => {}) },
+  } as unknown as ExtensionContext;
+}
+
+function getTool(tools: Map<string, ToolDefinition<any, any, any>>, name: string): ToolDefinition<any, any, any> {
+  const t = tools.get(name);
+  if (!t) throw new Error(`Tool "${name}" not registered`);
+  return t;
+}
+
+async function callExecute(tool: ToolDefinition<any, any, any>, params: Record<string, unknown>, ctx: ExtensionContext) {
+  return tool.execute("test-call-id", params, undefined, undefined, ctx);
+}
+
+function text(result: { content: unknown[] }): string {
+  return (result.content[0] as { type: "text"; text: string }).text;
+}
+
+/** The full `WatcherStatus` column set, in the exact order AC5 lists them. */
+const ALL_FIELDS = ["address", "project", "running", "pid", "startedAt", "lastExit", "lastIds", "timeoutExits"];
+
+// ============================================================================
+// A — `fields` knob on sandesh_notify_status / sandesh_notify_start (AC5)
+// ============================================================================
+
+describe("sandesh_notify_status/start — fields knob (CR-SAN-050 §S5, AC5)", () => {
+  test("sandesh_notify_status({fields: <all 8>}) after one notify_start returns exactly those 8 keys, in order", async () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    registerExtension(fakePi);
+    const ctx = makeFakeCtx();
+    const startTool = getTool(capturedTools, "sandesh_notify_start");
+    const statusTool = getTool(capturedTools, "sandesh_notify_status");
+
+    await callExecute(startTool, { address: "Mainline - Demo", project: "Demo" }, ctx);
+    const result = await callExecute(statusTool, { fields: ALL_FIELDS }, ctx);
+    const env = decodeEnvelope(text(result));
+
+    expect(env.ok).toBe(true);
+    const watchers = env.fields.watchers as Array<Record<string, unknown>>;
+    expect(Array.isArray(watchers)).toBe(true);
+    expect(watchers.length).toBe(1);
+    const row = watchers[0];
+    expect(Object.keys(row)).toEqual(ALL_FIELDS);
+    expect(row.address).toBe("Mainline - Demo");
+    expect(row.project).toBe("Demo");
+    expect(row.running).toBe(true);
+    expect(Array.isArray(row.lastIds)).toBe(true);
+    expect(Array.isArray(row.timeoutExits)).toBe(true);
+    expect(typeof row.startedAt).toBe("number");
+    expect(row.pid).toBeNull();
+  });
+
+  test("sandesh_notify_status default (no fields) returns exactly address,running,lastExit", async () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    registerExtension(fakePi);
+    const ctx = makeFakeCtx();
+    const startTool = getTool(capturedTools, "sandesh_notify_start");
+    const statusTool = getTool(capturedTools, "sandesh_notify_status");
+
+    await callExecute(startTool, { address: "Mainline - Demo", project: "Demo" }, ctx);
+    const result = await callExecute(statusTool, {}, ctx);
+    const env = decodeEnvelope(text(result));
+    const watchers = env.fields.watchers as Array<Record<string, unknown>>;
+    expect(watchers.length).toBe(1);
+    expect(Object.keys(watchers[0])).toEqual(["address", "running", "lastExit"]);
+    expect(watchers[0].address).toBe("Mainline - Demo");
+    expect(watchers[0].running).toBe(true);
+    expect(watchers[0].lastExit).toBeNull();
+  });
+
+  test("sandesh_notify_start({fields: <all 8>}) honours the knob on watchers[1] (second watcher started)", async () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    registerExtension(fakePi);
+    const ctx = makeFakeCtx();
+    const startTool = getTool(capturedTools, "sandesh_notify_start");
+
+    await callExecute(startTool, { address: "Mainline - Demo", project: "Demo" }, ctx);
+    const second = await callExecute(
+      startTool,
+      { address: "Track 1 - Demo", project: "Demo", fields: ALL_FIELDS },
+      ctx,
+    );
+    const env = decodeEnvelope(text(second));
+    expect(env.ok).toBe(true);
+    const watchers = env.fields.watchers as Array<Record<string, unknown>>;
+    expect(watchers.length).toBe(2);
+    const row = watchers[1];
+    expect(Object.keys(row)).toEqual(ALL_FIELDS);
+    expect(row.address).toBe("Track 1 - Demo");
+    expect(row.project).toBe("Demo");
+    expect(row.running).toBe(true);
+    expect(row.pid).toBeNull();
+  });
+
+  test("an unknown field name returns ok:false with an error naming it and the valid set (not a throw)", async () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    registerExtension(fakePi);
+    const ctx = makeFakeCtx();
+    const statusTool = getTool(capturedTools, "sandesh_notify_status");
+
+    const result = await callExecute(statusTool, { fields: ["address", "bogus"] }, ctx);
+    const env = decodeEnvelope(text(result));
+
+    expect(env.ok).toBe(false);
+    expect(env.error).toBeDefined();
+    expect(env.error as string).toContain("bogus");
+    for (const f of ALL_FIELDS) {
+      expect(env.error as string).toContain(f);
+    }
+  });
+
+  test("sandesh_notify_status and sandesh_notify_start TypeBox parameters both declare a `fields` property", () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    registerExtension(fakePi);
+    const statusTool = getTool(capturedTools, "sandesh_notify_status");
+    const startTool = getTool(capturedTools, "sandesh_notify_start");
+
+    const statusProps = (statusTool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
+    const startProps = (startTool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
+    expect(Object.prototype.hasOwnProperty.call(statusProps, "fields")).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(startProps, "fields")).toBe(true);
+  });
+});
+
+// ============================================================================
+// B — `__resetWakeState` → `resetExtensionState` rename (048 SUGGESTION 3, AC5)
+// ============================================================================
+
+describe("__resetWakeState → resetExtensionState rename (CR-SAN-050 §S5, AC5)", () => {
+  test("resetExtensionState is exported from ./index as a function", async () => {
+    const mod: Record<string, unknown> = await import("./index");
+    expect(typeof mod.resetExtensionState).toBe("function");
+  });
+
+  test("no src/*.test.ts (other than this file) references __resetWakeState", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const offenders: string[] = [];
+    for (const name of readdirSync(here)) {
+      if (!name.endsWith(".test.ts") || name === "notify_fields.test.ts") continue;
+      const contents = readFileSync(join(here, name), "utf8");
+      if (contents.includes("__resetWakeState")) offenders.push(name);
+    }
+    expect(offenders).toEqual([]);
+  });
+});

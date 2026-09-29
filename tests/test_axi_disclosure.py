@@ -669,5 +669,75 @@ class HomeViewTest(_BaseFixture):
                         f"help[] must list the valid global flags incl. --format; got {help_!r}")
 
 
+# =========================================================================== #
+# AC3 (CR-SAN-050 §S3) — archive/unarchive/tombstone --dry-run envelope fields.
+# =========================================================================== #
+
+class DryRunEnvelopeTest(_BaseFixture):
+    """AC3 — `archive`/`unarchive --dry-run --format toon` decode with the
+    preview fields (`dry_run: true`, `state`, `evicted[N]`, `project`)
+    instead of `{}`; `tombstone --dry-run` additionally carries the purge
+    counts (`messages`, `bodies`, `cross_project`, all ints). Nothing is
+    written by any of the three — the project's tracker state is unchanged
+    after each dry-run call.
+
+    RED today: `cli.py`'s `axi_archive`/`axi_unarchive` short-circuit
+    `--dry-run` to `return cmd_archive(args) or 0, {}` / `return
+    cmd_unarchive(args) or 0, {}` — an EMPTY fields dict regardless of what
+    the human preview printed; `axi_tombstone` does the same
+    (`{} if args.dry_run or rc else {...}`).
+    """
+
+    def test_archive_dry_run_envelope_carries_preview_fields_and_writes_nothing(self):
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "archive", "--project", "Demo",
+             "--by", "Mainline - Demo", "--dry-run"])
+        self.assertEqual(rc, 0, f"err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertIs(axi.get("dry_run"), True,
+                      f"archive --dry-run envelope must carry dry_run:true; got {axi!r}")
+        self.assertEqual(axi.get("state"), "archived",
+                         f"archive --dry-run must report the would-be state; got {axi!r}")
+        self.assertIsInstance(axi.get("evicted"), list,
+                              f"archive --dry-run must carry an 'evicted' list; got {axi!r}")
+        self.assertEqual(axi.get("project"), "Demo")
+        self.assertEqual(
+            sdb.project_state(self.con, "Demo"), "active",
+            "archive --dry-run must write NOTHING — project state must still be 'active'")
+
+    def test_unarchive_dry_run_envelope_carries_preview_fields_and_writes_nothing(self):
+        sdb.archive(self.con, "Demo", "Mainline - Demo")
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "unarchive", "--project", "Demo",
+             "--by", "Mainline - Demo", "--dry-run"])
+        self.assertEqual(rc, 0, f"err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertIs(axi.get("dry_run"), True,
+                      f"unarchive --dry-run envelope must carry dry_run:true; got {axi!r}")
+        self.assertEqual(axi.get("state"), "active",
+                         f"unarchive --dry-run must report the would-be state; got {axi!r}")
+        self.assertEqual(
+            sdb.project_state(self.con, "Demo"), "archived",
+            "unarchive --dry-run must write NOTHING — project state must still be 'archived'")
+
+    def test_tombstone_dry_run_envelope_carries_dry_run_flag_and_int_purge_counts(self):
+        sdb.assign_admin(self.con, "TheAdmin")
+        sdb.archive(self.con, "Demo", "Mainline - Demo")
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "tombstone", "--project", "Demo",
+             "--by", "TheAdmin", "--dry-run"])
+        self.assertEqual(rc, 0, f"err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertIs(axi.get("dry_run"), True,
+                      f"tombstone --dry-run envelope must carry dry_run:true; got {axi!r}")
+        for key in ("messages", "bodies", "cross_project"):
+            self.assertIn(key, axi, f"tombstone --dry-run must carry a {key!r} purge count; got {axi!r}")
+            self.assertIsInstance(axi[key], int,
+                                  f"tombstone --dry-run's {key!r} count must be an int; got {axi[key]!r}")
+        self.assertEqual(
+            sdb.project_state(self.con, "Demo"), "archived",
+            "tombstone --dry-run must write NOTHING — project state must still be 'archived'")
+
+
 if __name__ == "__main__":
     unittest.main()
