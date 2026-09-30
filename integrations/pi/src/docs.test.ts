@@ -140,3 +140,33 @@ describe("integrations/pi/README.md — .env / direnv loading pointer (CR-SAN-05
     expect(readme).not.toContain("≤ 6-line");
   });
 });
+
+// ============================================================================
+// CR-SAN-052 §S3 — PRD-axi-toon §4.7 state-machine row for a throwing host dep (AC7)
+// ============================================================================
+
+const PRD_AXI_TOON_PATH = path.join(__dirname, "..", "..", "..", "docs", "research", "PRD-axi-toon.md");
+
+/** Slice out the "### 4.7 Wake supervision" section (up to the next heading). */
+function extractPrdSection47(markdown: string): string {
+  const start = markdown.indexOf("### 4.7 ");
+  if (start === -1) throw new Error("PRD-axi-toon.md is missing the '### 4.7' section");
+  const rest = markdown.slice(start + 1);
+  const next = rest.search(/\n#{2,3} /);
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
+describe("docs/research/PRD-axi-toon.md §4.7 — throwing-host-dep transition (CR-SAN-052 §S3, AC7)", () => {
+  const section = extractPrdSection47(fs.readFileSync(PRD_AXI_TOON_PATH, "utf-8"));
+  const rows = section
+    .split("\n")
+    .filter((line) => line.startsWith("|"))
+    .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()));
+
+  test("the state-machine table has a row whose Event cell contains 'throws' and whose Action cell contains 'no relaunch'", () => {
+    const match = rows.filter(
+      (cells) => cells.length === 2 && cells[0].includes("throws") && cells[1].includes("no relaunch"),
+    );
+    expect(match.length).toBe(1);
+  });
+});

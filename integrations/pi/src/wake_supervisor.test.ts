@@ -529,15 +529,20 @@ describe("start() argv — resolve()'s output is passed to exec verbatim", () =>
   });
 });
 
-// ─── AC1 (CR-SAN-052) — a synchronous exec throw on relaunch is an exit-1 result ─
+// ─── CR-SAN-052 shared fixtures ─────────────────────────────────────────────
 
-describe("AC1 (CR-SAN-052) — a synchronous exec throw on relaunch is an exit-1 result", () => {
-  const STALE_MESSAGE = "This extension ctx is stale after session replacement or reload.";
+const STALE_MESSAGE = "This extension ctx is stale after session replacement or reload.";
+
+/**
+ * Installs a process-level `unhandledRejection` listener for the enclosing
+ * describe block (beforeAll/afterAll) and resets the captured array per test.
+ * Call inside a `describe` body; returns the live capture array.
+ */
+function captureUnhandledRejections(): unknown[] {
   const unhandled: unknown[] = [];
   const onUnhandled = (reason: unknown): void => {
     unhandled.push(reason);
   };
-
   beforeAll(() => {
     process.on("unhandledRejection", onUnhandled);
   });
@@ -547,6 +552,13 @@ describe("AC1 (CR-SAN-052) — a synchronous exec throw on relaunch is an exit-1
   beforeEach(() => {
     unhandled.length = 0;
   });
+  return unhandled;
+}
+
+// ─── AC1 (CR-SAN-052) — a synchronous exec throw on relaunch is an exit-1 result ─
+
+describe("AC1 (CR-SAN-052) — a synchronous exec throw on relaunch is an exit-1 result", () => {
+  const unhandled = captureUnhandledRejections();
 
   function makeExecFailingOnSecondCall(secondCall: () => Promise<ExecResult>) {
     let calls = 0;
@@ -602,6 +614,145 @@ describe("AC1 (CR-SAN-052) — a synchronous exec throw on relaunch is an exit-1
     expect(text).toContain("exit 1");
     expect(text).toContain("no envelope");
     expect(sendUserMessageMock.mock.calls.length).toBe(0);
+    expect(unhandled).toEqual([]);
+  });
+});
+
+// ─── CR-SAN-052 §S2 — a throw escaping onExit halts that watcher quietly ────
+
+/** An exec that resolves the given canned results in order, then stays pending. */
+function makeScriptedExec(results: ExecResult[]) {
+  let calls = 0;
+  return mock((_cmd: string, _args: string[], _opts: { signal: AbortSignal }): Promise<ExecResult> => {
+    const r = results[calls];
+    calls += 1;
+    if (r === undefined) return new Promise<ExecResult>(() => {});
+    return Promise.resolve(r);
+  });
+}
+
+function mailExit(address: string, unread: number[]): ExecResult {
+  return {
+    code: 0,
+    stdout: notifyEnvelope({ exit: 0, address, project: "Demo", unread }),
+    stderr: "",
+    signalCode: null,
+  };
+}
+
+describe("AC2 (CR-SAN-052) — a throwing sendUserMessage halts that watcher", () => {
+  const unhandled = captureUnhandledRejections();
+
+  test("exit 0 with unread [7] and a stale sendUserMessage: one wake attempt, no relaunch, no notify, watcher stopped, nothing unhandled", async () => {
+    const exec = makeScriptedExec([mailExit("Mainline - Demo", [7])]);
+    const sendUserMessage = mock((_text: string, _opts: { deliverAs: "followUp" }): void => {
+      throw new Error(STALE_MESSAGE);
+    });
+    const { deps, notifyMock } = makeDeps({ exec, sendUserMessage });
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+    await flush();
+
+    expect(sendUserMessage.mock.calls.length).toBe(1);
+    expect(exec.mock.calls.length).toBe(1);
+    expect(notifyMock.mock.calls.length).toBe(0);
+    expect(sup.status()[0].running).toBe(false);
+    expect(unhandled).toEqual([]);
+  });
+});
+
+describe("AC3 (CR-SAN-052) — a throwing notify halts that watcher", () => {
+  const unhandled = captureUnhandledRejections();
+
+  test("exit 1 with a stale notify: one notify attempt, no relaunch, watcher stopped, nothing unhandled", async () => {
+    const exec = makeScriptedExec([
+      {
+        code: 1,
+        stdout: notifyEnvelope({ exit: 1, address: "Mainline - Demo", project: "Demo", error: "boom", ok: false }),
+        stderr: "",
+        signalCode: null,
+      },
+    ]);
+    const notify = mock((_text: string, _level: "info" | "warning" | "error"): void => {
+      throw new Error(STALE_MESSAGE);
+    });
+    const { deps } = makeDeps({ exec, notify });
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+    await flush();
+
+    expect(notify.mock.calls.length).toBe(1);
+    expect(exec.mock.calls.length).toBe(1);
+    expect(sup.status()[0].running).toBe(false);
+    expect(unhandled).toEqual([]);
+  });
+});
+
+describe("AC4 (CR-SAN-052) — a throwing resolve on relaunch halts that watcher", () => {
+  const unhandled = captureUnhandledRejections();
+
+  test("exit 2 then a stale resolve on the second call: no second spawn, watcher stopped, nothing unhandled", async () => {
+    const exec = makeScriptedExec([
+      {
+        code: 2,
+        stdout: notifyEnvelope({ exit: 2, address: "Mainline - Demo", project: "Demo" }),
+        stderr: "",
+        signalCode: null,
+      },
+    ]);
+    let resolveCalls = 0;
+    const resolve = (args: string[]): [string, string[]] => {
+      resolveCalls += 1;
+      if (resolveCalls === 1) return ["sandesh", args];
+      throw new Error(STALE_MESSAGE);
+    };
+    const { deps } = makeDeps({ exec, resolve });
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+    await flush();
+
+    expect(resolveCalls).toBe(2);
+    expect(exec.mock.calls.length).toBe(1);
+    expect(sup.status()[0].running).toBe(false);
+    expect(unhandled).toEqual([]);
+  });
+
+  test("a resolve that throws on the FIRST launch still propagates out of start() (existing behaviour pinned)", () => {
+    const exec = makeScriptedExec([]);
+    const resolve = (_args: string[]): [string, string[]] => {
+      throw new Error(STALE_MESSAGE);
+    };
+    const { deps } = makeDeps({ exec, resolve });
+    const sup = new WakeSupervisor(deps);
+
+    expect(() => sup.start("Mainline - Demo", "Demo")).toThrow(STALE_MESSAGE);
+    expect(exec.mock.calls.length).toBe(0);
+  });
+});
+
+describe("AC5 (CR-SAN-052) — a halted watcher does not affect other addresses", () => {
+  const unhandled = captureUnhandledRejections();
+
+  test("the first address halts on a stale sendUserMessage while the second keeps running; stop() counts only the live one", async () => {
+    const first = "Mainline - Demo";
+    const second = "Track 1 - Demo";
+    const exec = mock((_cmd: string, args: string[], _opts: { signal: AbortSignal }): Promise<ExecResult> => {
+      if (args.includes(first)) return Promise.resolve(mailExit(first, [7]));
+      return new Promise<ExecResult>(() => {}); // the second address's child stays pending
+    });
+    const sendUserMessage = mock((_text: string, _opts: { deliverAs: "followUp" }): void => {
+      throw new Error(STALE_MESSAGE);
+    });
+    const { deps } = makeDeps({ exec, sendUserMessage });
+    const sup = new WakeSupervisor(deps);
+    sup.start(first, "Demo");
+    sup.start(second, "Demo");
+    await flush();
+
+    const status = sup.status();
+    expect(status.find((w) => w.address === first)?.running).toBe(false);
+    expect(status.find((w) => w.address === second)?.running).toBe(true);
+    expect(sup.stop()).toEqual({ stopped: 1 });
     expect(unhandled).toEqual([]);
   });
 });
