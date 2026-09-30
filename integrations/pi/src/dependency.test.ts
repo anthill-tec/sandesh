@@ -133,8 +133,11 @@ describe("npm pack + npm install — @toon-format/toon lands under node_modules 
   test(
     "npm pack --pack-destination <tmp> produces a tarball containing @toon-format/toon after install",
     () => {
+      // Under `npm publish --dry-run` (prepublishOnly rehearsal) npm exports npm_config_dry_run=true to
+      // lifecycle scripts; the nested `npm pack` would inherit it and write no tarball — drop the key.
+      const { npm_config_dry_run: _dryRun, ...inherited } = process.env;
       const isolatedEnv = {
-        ...process.env,
+        ...inherited,
         HOME: tmpDir,
         npm_config_cache: path.join(tmpDir, "npm-cache"),
       };
