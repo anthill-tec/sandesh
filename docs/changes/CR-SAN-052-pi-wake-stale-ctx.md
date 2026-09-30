@@ -37,9 +37,11 @@ reporting a terminal exit).
   exec promise already is: `onExit(entry, gen, { code: 1, stdout: "", stderr: String(err) })`. The
   existing exit-1 path then applies unchanged — `running:false`, `lastExit:1`, one `notify(…, "error")`
   whose text contains `exit 1` and `no envelope`, no relaunch, no `sendUserMessage`.
-- `start()` is unchanged: a throw at the very first launch (before any exit) still propagates to the
-  caller (the tool handler already converts it to an `ok:false` result); only the relaunch inside the
-  detached chain is affected.
+- `start()` is unchanged. The guard sits in the shared `launch()`, so a synchronous `exec` throw at the
+  very first launch takes the same exit-1 path (one error notify, `running:false`) instead of
+  propagating out of `start()` — one code path, no first-launch special case (scope reconciled
+  2026-09-30 at C1 GREEN; unobservable in production, where `start()` only runs from a live ctx). A
+  `resolve` throw at the first launch still propagates (AC4).
 
 **Surfaces (verified 2026-09-30):** `integrations/pi/src/wake.ts` `launch()` (l.139–159), `onExit()`
 (l.161–215); `WakeDeps.exec` (l.28) returns `Promise<WakeExecResult>`.
