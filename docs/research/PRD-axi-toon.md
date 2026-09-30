@@ -197,7 +197,7 @@ State machine per address, owned by the extension:
 | exit **1 / 3 / 4** or a signal | stop the loop; surface the code + reason (from the envelope's `error`) |
 | `stop(address?)` | abort the child (SIGTERM, then SIGKILL after a grace), clear state; no address = all |
 | `status()` | per address: running, pid, started, last exit, last wake ids, exit-2 count |
-| a host dep **throws** (`exec` / `sendUserMessage` / `notify` / `resolve` — the captured `pi` is stale after a session replacement or reload) | halt that watcher only: mark it stopped, abort its child, **no relaunch**, no rethrow, no further host call; the process survives (an escaped throw in the detached chain would be an unhandled rejection) |
+| a host dep **throws** (`sendUserMessage` / `notify` / `resolve` — the captured `pi` is stale after a session replacement or reload; a throwing `exec` is first reported as exit 1 with its one error notify) | halt that watcher only: mark it stopped, abort its child, **no relaunch**, no rethrow, no further host call; the process survives (an escaped throw in the detached chain would be an unhandled rejection) |
 
 - **Tools:** `sandesh_notify_start(address?, project?)`, `sandesh_notify_status()`,
   `sandesh_notify_stop(address?)`; `address`/`project` default to `$SANDESH_ADDRESS` /

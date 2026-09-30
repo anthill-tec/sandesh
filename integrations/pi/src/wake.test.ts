@@ -20,7 +20,7 @@
  * a not-yet-existing-SUT-symbol RED (Mode 1).
  */
 
-import { test, expect, describe, mock } from "bun:test";
+import { test, expect, describe, mock, beforeAll, afterAll, beforeEach } from "bun:test";
 import { encode } from "@toon-format/toon";
 import type {
   ExecResult,
@@ -486,5 +486,74 @@ describe("E — sandesh_status appends watcher: running|stopped without breaking
     } finally {
       restoreEnv();
     }
+  });
+});
+
+// ============================================================================
+// F — a stale extension ctx on relaunch halts the watcher (CR-SAN-052 AC6)
+// ============================================================================
+
+describe("F — stale pi.exec on relaunch through sandesh_notify_start (CR-SAN-052 AC6)", () => {
+  const STALE_MESSAGE = "This extension ctx is stale after session replacement or reload.";
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+
+  beforeAll(() => {
+    process.on("unhandledRejection", onUnhandled);
+  });
+  afterAll(() => {
+    process.off("unhandledRejection", onUnhandled);
+  });
+  beforeEach(() => {
+    unhandled.length = 0;
+  });
+
+  test("exit-2 first spawn then a synchronously throwing pi.exec: start is ok:true already:false, then the watcher is running:false lastExit:1 with nothing unhandled", async () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    let notifySpawns = 0;
+    const scriptedExec = mock((_cmd: string, args: string[], _opts?: { signal?: AbortSignal }): Promise<ExecResult> => {
+      if (!args.includes("notify")) {
+        return Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false });
+      }
+      notifySpawns += 1;
+      if (notifySpawns === 1) {
+        return Promise.resolve({
+          stdout: notifyEnvelope({ exit: 2, address: "Mainline - Demo", project: "Demo" }),
+          stderr: "",
+          code: 2,
+          killed: false,
+        });
+      }
+      throw new Error(STALE_MESSAGE);
+    });
+    (fakePi as unknown as { exec: typeof scriptedExec }).exec = scriptedExec;
+    registerExtension(fakePi);
+    const { fakeCtx } = makeFakeCtx();
+
+    const startResult = await callExecute(
+      getTool(capturedTools, "sandesh_notify_start"),
+      { address: "Mainline - Demo", project: "Demo" },
+      fakeCtx,
+    );
+    const startEnv = decodeEnvelope(text(startResult));
+    expect(startEnv.ok).toBe(true);
+    expect(startEnv.fields.already).toBe(false);
+
+    await flush();
+
+    expect(notifySpawns).toBe(2); // first spawn + the throwing relaunch attempt, nothing more
+    expect(unhandled).toEqual([]);
+    const statusResult = await callExecute(getTool(capturedTools, "sandesh_notify_status"), {}, fakeCtx);
+    const watchers = decodeEnvelope(text(statusResult)).fields.watchers as Array<{
+      address: string;
+      running: boolean;
+      lastExit: number | null;
+    }>;
+    expect(watchers.length).toBe(1);
+    expect(watchers[0].address).toBe("Mainline - Demo");
+    expect(watchers[0].running).toBe(false);
+    expect(watchers[0].lastExit).toBe(1);
   });
 });

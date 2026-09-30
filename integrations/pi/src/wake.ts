@@ -10,6 +10,9 @@
  *   - 1/3/4   → error / tombstoned / evicted. Stop + one error notify.
  *   - signal  → (code null) stop + one error notify naming the signal.
  * Undecodable stdout is treated as exit 1 with error "no envelope".
+ * A host dep that throws out of the exit handling (stale extension ctx after
+ * session replacement/reload — CR-SAN-052 §S2) ⇒ halt that watcher only: no
+ * relaunch, no further host call, nothing rethrown.
  *
  * All host effects (exec, messaging, notify, clock, sleep, CLI resolution) are
  * constructor-injected via `WakeDeps` so the state machine is unit-testable.
@@ -139,7 +142,6 @@ export class WakeSupervisor {
   private launch(entry: Entry): void {
     entry.generation += 1;
     const gen = entry.generation;
-    entry.controller = new AbortController();
     entry.running = true;
     entry.pid = undefined;
     const [cmd, args] = this.deps.resolve([
@@ -151,11 +153,37 @@ export class WakeSupervisor {
       "--to",
       entry.address,
     ]);
-    // Fire-and-forget: the child's exit drives the next transition.
-    this.deps.exec(cmd, args, { signal: entry.controller.signal }).then(
-      (r) => this.onExit(entry, gen, r),
-      (err: unknown) => this.onExit(entry, gen, { code: 1, stdout: "", stderr: String(err) }),
-    );
+    // Swap the controller only once `resolve` has succeeded: if it throws on a
+    // relaunch (stale ctx), `entry.controller` still owns the signal the
+    // previous child received, so the `halt` below aborts THAT child.
+    entry.controller = new AbortController();
+    // Fire-and-forget: the child's exit drives the next transition. A
+    // synchronous `exec` throw (a stale extension ctx after session
+    // replacement/reload) is routed to the same exit-1 path as a rejection.
+    let pending: Promise<WakeExecResult>;
+    try {
+      pending = this.deps.exec(cmd, args, { signal: entry.controller.signal });
+    } catch (err) {
+      pending = Promise.reject(err);
+    }
+    pending
+      .then(
+        (r) => this.onExit(entry, gen, r),
+        (err: unknown) => this.onExit(entry, gen, { code: 1, stdout: "", stderr: String(err) }),
+      )
+      // Last line of defence: anything `onExit` throws or rejects with (a
+      // throwing host dep on a stale ctx) ends only THIS watcher.
+      .catch(() => this.halt(entry));
+  }
+
+  /**
+   * Terminal transition for a watcher whose exit handling threw: mark it
+   * stopped, abort its signal, never relaunch, make no further host call.
+   */
+  private halt(entry: Entry): void {
+    entry.stopped = true;
+    entry.running = false;
+    entry.controller.abort();
   }
 
   private async onExit(entry: Entry, gen: number, r: WakeExecResult): Promise<void> {
