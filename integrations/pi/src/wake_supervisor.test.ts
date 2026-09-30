@@ -657,6 +657,7 @@ describe("AC2 (CR-SAN-052) — a throwing sendUserMessage halts that watcher", (
     expect(exec.mock.calls.length).toBe(1);
     expect(notifyMock.mock.calls.length).toBe(0);
     expect(sup.status()[0].running).toBe(false);
+    expect(exec.mock.calls[0][2].signal.aborted).toBe(true);
     expect(unhandled).toEqual([]);
   });
 });
@@ -714,6 +715,7 @@ describe("AC4 (CR-SAN-052) — a throwing resolve on relaunch halts that watcher
     expect(resolveCalls).toBe(2);
     expect(exec.mock.calls.length).toBe(1);
     expect(sup.status()[0].running).toBe(false);
+    expect(exec.mock.calls[0][2].signal.aborted).toBe(true);
     expect(unhandled).toEqual([]);
   });
 

@@ -142,7 +142,6 @@ export class WakeSupervisor {
   private launch(entry: Entry): void {
     entry.generation += 1;
     const gen = entry.generation;
-    entry.controller = new AbortController();
     entry.running = true;
     entry.pid = undefined;
     const [cmd, args] = this.deps.resolve([
@@ -154,6 +153,10 @@ export class WakeSupervisor {
       "--to",
       entry.address,
     ]);
+    // Swap the controller only once `resolve` has succeeded: if it throws on a
+    // relaunch (stale ctx), `entry.controller` still owns the signal the
+    // previous child received, so the `halt` below aborts THAT child.
+    entry.controller = new AbortController();
     // Fire-and-forget: the child's exit drives the next transition. A
     // synchronous `exec` throw (a stale extension ctx after session
     // replacement/reload) is routed to the same exit-1 path as a rejection.
