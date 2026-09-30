@@ -579,6 +579,45 @@ class RemainingVerbsEnvelopeTest(_BaseFixture):
         self.assertIn("--yes", axi.get("error", ""),
                       f"error must name --yes; got {axi.get('error')!r}")
 
+    def test_tombstone_yes_on_an_active_project_surfaces_the_refusal_reason_exit_1(self):
+        sdb.assign_admin(self.con, "TheAdmin")
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "tombstone", "--project", "Demo", "--by", "TheAdmin", "--yes"])
+        self.assertEqual(rc, 1, f"out={out!r} err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertIs(axi["ok"], False)
+        self.assertIn("archive it first", axi["error"])
+        self.assertEqual(sdb.project_state(self.con, "Demo"), "active")
+
+    def test_tombstone_yes_by_a_non_admin_surfaces_the_refusal_reason_exit_1(self):
+        sdb.assign_admin(self.con, "TheAdmin")
+        sdb.archive(self.con, "Demo", "Mainline - Demo")
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "tombstone", "--project", "Demo", "--by", "Nobody", "--yes"])
+        self.assertEqual(rc, 1, f"out={out!r} err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertIs(axi["ok"], False)
+        self.assertIn("only the Sandesh admin may tombstone a project", axi["error"])
+        self.assertEqual(sdb.project_state(self.con, "Demo"), "archived")
+
+    def test_tombstone_yes_succeeds_then_a_second_call_is_result_already_exit_0(self):
+        sdb.assign_admin(self.con, "TheAdmin")
+        sdb.archive(self.con, "Demo", "Mainline - Demo")
+        argv = ["--format", "toon", "tombstone", "--project", "Demo", "--by", "TheAdmin", "--yes"]
+        rc, out, err = self.run_cli(argv)
+        self.assertEqual(rc, 0, f"out={out!r} err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertIs(axi["ok"], True)
+        self.assertEqual(axi["state"], "tombstoned")
+        self.assertNotIn("result", axi)
+        self.assertEqual(sdb.project_state(self.con, "Demo"), "tombstoned")
+        rc, out, err = self.run_cli(argv)
+        self.assertEqual(rc, 0, f"out={out!r} err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertIs(axi["ok"], True)
+        self.assertEqual(axi["result"], "already")
+        self.assertEqual(axi["state"], "tombstoned")
+
 
 # =========================================================================== #
 # Item 4 — AC14 home view (P8/P10).

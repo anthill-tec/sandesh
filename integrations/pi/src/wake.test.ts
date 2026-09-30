@@ -487,6 +487,27 @@ describe("E — sandesh_status appends watcher: running|stopped without breaking
       restoreEnv();
     }
   });
+
+  test("with SANDESH_ADDRESS set but EMPTY, a watcher started with explicit params makes sandesh_status() report watcher === 'running'", async () => {
+    saveEnv();
+    process.env.SANDESH_ADDRESS = "";
+    process.env.SANDESH_PROJECT = "Demo";
+    try {
+      const { fakePi, capturedTools } = makeFakePi();
+      registerExtension(fakePi);
+      const { fakeCtx } = makeFakeCtx();
+      const startTool = getTool(capturedTools, "sandesh_notify_start");
+      const statusTool = getTool(capturedTools, "sandesh_status");
+
+      const started = decodeEnvelope(text(await callExecute(startTool, { address: "Mainline - Demo", project: "Demo" }, fakeCtx)));
+      expect(started.ok).toBe(true);
+      const env = decodeEnvelope(text(await callExecute(statusTool, {}, fakeCtx)));
+      expect(env.verb).toBe("status");
+      expect(env.fields.watcher).toBe("running");
+    } finally {
+      restoreEnv();
+    }
+  });
 });
 
 // ============================================================================

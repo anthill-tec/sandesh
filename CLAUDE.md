@@ -315,8 +315,10 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
   crashing. Non-lock `OperationalError`s still propagate. `busy_timeout` is a per-connection
   pragma (NOT schema) — no migration.
 - **`--format` is presentation-only and shares the `--project` idiom (CR-SAN-047).**
-  `--format {human,toon,json}` sits on the same `common` parent with `default=argparse.SUPPRESS`
-  so it works before *or* after the verb (resolved `args.format` → `$SANDESH_FORMAT` → `human`);
+  `--format {human,toon,json}` lives on a `fmt_common` parent (`default=argparse.SUPPRESS`) that
+  the `common` parent inherits and that the ten project-free/own-`--project` verbs (search, grant,
+  revoke, archive, unarchive, tombstone, migrate, consolidate, reindex, init) take directly, so it
+  works before *or* after EVERY verb (resolved `args.format` → `$SANDESH_FORMAT` → `human`);
   removing SUPPRESS breaks one position, exactly as for `--project`. Machine-mode **usage
   errors** (unknown flag/verb, bad `--fields`, missing subcommand) are handled by a
   **pre-scan** of argv + `$SANDESH_FORMAT` *before* argparse runs, and `_Parser.error` is

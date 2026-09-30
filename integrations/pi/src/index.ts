@@ -488,7 +488,7 @@ function watcherLines(watchers: WatcherStatus[]): string {
  * watcher for `$SANDESH_ADDRESS` is running (any watcher, when the env is unset).
  */
 function watcherState(sup: WakeSupervisor): "running" | "stopped" {
-  const self = process.env.SANDESH_ADDRESS;
+  const self = process.env.SANDESH_ADDRESS || undefined;
   const running = sup.status().some((w) => w.running && (self === undefined || w.address === self));
   return running ? "running" : "stopped";
 }

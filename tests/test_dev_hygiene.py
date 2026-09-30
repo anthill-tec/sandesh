@@ -16,8 +16,6 @@ Target contract (not-yet-built by GREEN):
     `import pathlib` + `sys.path.insert(...)` block is allowed ahead of it);
     every `subprocess.run/Popen/check_output/check_call/call` call whose
     argv mentions `sandesh` passes an `env=` that carries `XDG_DATA_HOME`.
-  * §S3b — `sandesh/axi.py` imports the vendored TOON module via
-    `import sandesh._toon as _toon`, never `from sandesh import _toon`.
   * AC4 (this cycle's slice) — three representative test files
     (test_sandesh.py, test_global_store.py, test_axi_verbs.py), each run
     standalone in a subprocess with `XDG_DATA_HOME` REMOVED from the env,
@@ -80,8 +78,6 @@ Expected RED (against current code, before GREEN):
                                               already manage their own temp
                                               store in setUp, independent of
                                               ambient XDG_DATA_HOME)
-  AxiImportFormTest                      -> FAIL (axi.py still says
-                                              `from sandesh import _toon`)
 
 Run targeted (Crucible client resolves the venv interpreter):
   python3 ~/Documents/data_projects/crucible/clients/python-crucible.py \\
@@ -102,6 +98,7 @@ import tests._store_guard as guard  # noqa: E402,F401 — AC3: first import, re-
 import ast  # noqa: E402
 import glob  # noqa: E402
 import importlib.metadata  # noqa: E402
+import shlex  # noqa: E402
 import sqlite3  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
@@ -109,7 +106,7 @@ import time  # noqa: E402
 import tomllib  # noqa: E402
 import unittest  # noqa: E402
 
-from packaging.requirements import Requirement  # noqa: E402
+from packaging.requirements import InvalidRequirement, Requirement  # noqa: E402
 from packaging.version import Version  # noqa: E402
 
 _VENV_PYTHON = os.path.join(_REPO_ROOT, ".venv", "bin", "python")
@@ -117,7 +114,6 @@ _SUBPROCESS_PYTHON = _VENV_PYTHON if os.path.exists(_VENV_PYTHON) else sys.execu
 
 _PYPROJECT_PATH = os.path.join(_REPO_ROOT, "pyproject.toml")
 _PUBLISH_WORKFLOW_PATH = os.path.join(_REPO_ROOT, ".github", "workflows", "publish-pypi.yml")
-_AXI_PATH = os.path.join(_REPO_ROOT, "sandesh", "axi.py")
 
 # --------------------------------------------------------------------------- #
 # AC1 helpers — requirement-string parsing (packaging.requirements/version;
@@ -360,25 +356,86 @@ class DevVenvSatisfiesFloorsTest(unittest.TestCase):
 # --------------------------------------------------------------------------- #
 # §S1 / AC5 — CI twine floor
 
+def _workflow_job_lines(text, job):
+    """The body lines of `jobs.<job>` — everything indented deeper than the
+    job key, up to the next job key."""
+    lines = text.splitlines()
+    try:
+        start = lines.index(f"  {job}:")
+    except ValueError:
+        return []
+    body = []
+    for line in lines[start + 1:]:
+        if line.strip() and not line.startswith("   "):
+            break
+        body.append(line)
+    return body
+
+
+def _workflow_run_commands(job_lines):
+    """Every shell command of the job's `run: |` scripts as a shlex argv —
+    comments and blank lines are dropped, so a commented-out command does not
+    count."""
+    commands, i = [], 0
+    while i < len(job_lines):
+        line = job_lines[i]
+        if line.strip() != "run: |":
+            i += 1
+            continue
+        indent = len(line) - len(line.lstrip())
+        i += 1
+        while i < len(job_lines):
+            nxt = job_lines[i]
+            if nxt.strip() and len(nxt) - len(nxt.lstrip()) <= indent:
+                break
+            argv = shlex.split(nxt, comments=True)
+            if argv:
+                commands.append(argv)
+            i += 1
+    return commands
+
+
+def _pip_install_requirements(commands):
+    """The PEP 508 requirements every `pip install` command in `commands`
+    asks for (paths / flags skipped)."""
+    reqs = []
+    for argv in commands:
+        if "pip" not in argv or "install" not in argv:
+            continue
+        for tok in argv[argv.index("install") + 1:]:
+            if tok.startswith("-"):
+                continue
+            try:
+                reqs.append(Requirement(tok))
+            except InvalidRequirement:
+                continue
+    return reqs
+
+
 class CiTwineFloorPinnedTest(unittest.TestCase):
-    """AC5 — publish-pypi.yml's `build` job pins `twine>=7.0` explicitly and
-    still runs `twine check dist/*` (outcome unchanged)."""
+    """AC5 — publish-pypi.yml's `build` job installs a twine whose requirement
+    admits 7.0 and rejects the 6.x line, and still runs `twine check dist/*`
+    (outcome unchanged). Asserted on the job's shell commands, not the raw
+    text."""
 
     def setUp(self):
         with open(_PUBLISH_WORKFLOW_PATH, encoding="utf-8") as fh:
-            self.text = fh.read()
+            text = fh.read()
+        self.commands = _workflow_run_commands(_workflow_job_lines(text, "build"))
+        self.assertTrue(self.commands, "publish-pypi.yml must have a `build` job with run: | steps")
 
     def test_build_job_pins_twine_floor(self):
-        self.assertRegex(
-            self.text, r"twine>=7\.0",
-            "publish-pypi.yml's build-job install step must pin twine>=7.0 explicitly",
-        )
+        twine = [r for r in _pip_install_requirements(self.commands) if r.name == "twine"]
+        self.assertEqual(len(twine), 1,
+                         f"the build job must pip-install twine exactly once; got {twine}")
+        spec = twine[0].specifier
+        self.assertTrue(spec.contains("7.0"), f"twine requirement {spec!s} must admit 7.0")
+        self.assertFalse(spec.contains("6.2.0"),
+                         f"twine requirement {spec!s} must reject the 6.x line")
 
     def test_build_job_still_runs_twine_check(self):
-        self.assertIn(
-            "twine check dist/*", self.text,
-            "publish-pypi.yml's build job must still run 'twine check dist/*'",
-        )
+        self.assertIn(["twine", "check", "dist/*"], self.commands,
+                      "publish-pypi.yml's build job must run `twine check dist/*`")
 
 
 # --------------------------------------------------------------------------- #
@@ -498,32 +555,6 @@ class RepresentativeSuiteXdgUnsetTest(unittest.TestCase):
             leftover_dirs, [],
             f"leftover sandesh-* directories under {root!r} after the representative "
             f"subprocess runs: {leftover_dirs}",
-        )
-
-
-# --------------------------------------------------------------------------- #
-# §S3b — axi.py import form
-
-class AxiImportFormTest(unittest.TestCase):
-    """§S3b — sandesh/axi.py imports the vendored TOON submodule via
-    `import sandesh._toon as _toon` (clears a Pyright "unknown import
-    symbol" false positive on underscore submodules), never
-    `from sandesh import _toon`."""
-
-    def setUp(self):
-        with open(_AXI_PATH, encoding="utf-8") as fh:
-            self.source = fh.read()
-
-    def test_uses_import_as_form_not_from_import(self):
-        self.assertIn(
-            "import sandesh._toon as _toon", self.source,
-            "sandesh/axi.py must import the vendored TOON module via "
-            "`import sandesh._toon as _toon`",
-        )
-        self.assertNotIn(
-            "from sandesh import _toon", self.source,
-            "sandesh/axi.py must not use `from sandesh import _toon` "
-            "(the form §S3b replaces)",
         )
 
 

@@ -60,10 +60,12 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -460,43 +462,43 @@ class HumanIsDefaultSanityTest(_DemoFixture):
 
 
 # --------------------------------------------------------------------------- #
-# AC2 pin (CR-SAN-050 \u00a7S2) \u2014 the con.close() call-count regression pin.
+# AC2 (CR-SAN-050 §S2) — search/projects/grant reuse the main()-closed
+# connection seam: exactly one connection per run, closed once the verb is done.
 # --------------------------------------------------------------------------- #
 
-_CLI_PATH = os.path.join(_REPO_ROOT, "sandesh", "cli.py")
+class ConnectionSeamTest(_DemoFixture):
 
+    def _run_spied(self, argv):
+        opened = []
+        real_connect = sdb.connect
 
-class ConCloseCallCountPinTest(unittest.TestCase):
-    """AC2 (CR-SAN-050 \u00a7S2) \u2014 `axi_search`/`axi_projects`/`_axi_xproj` (the
-    latter backs `axi_grant`/`axi_revoke`) each currently open their own
-    `con = sdb.connect()` ... `finally: con.close()` block instead of reusing
-    the `_ctx()`-tracked connection seam (`_ctx()` appends to `_CONNECTIONS`,
-    closed once by `main()`'s `_close_connections()`) already used by every
-    other `axi_*` handler. \u00a7S2 replaces those three literal `con.close()`
-    call sites with the shared seam, with no behaviour change.
+        def spy(*a, **kw):
+            con = real_connect(*a, **kw)
+            opened.append(con)
+            return con
 
-    `grep -c "con.close()" sandesh/cli.py` on this branch at the RED commit
-    (a8d084c) is 15 \u2014 verified via `grep -c "con.close()" sandesh/cli.py` from
-    the repo root just before writing this test. \u00a7S2 removes exactly 3 of
-    those 15 (one each from `cmd_search`... no \u2014 from `axi_search`,
-    `axi_projects`, and `_axi_xproj`), so the post-GREEN count must be
-    <= 15 - 3 = 12. EXPECTED_MAX is hardcoded to that computed value (not
-    derived from a live grep) so this test pins the TARGET, not whatever the
-    code happens to produce.
+        with mock.patch.object(sdb, "connect", spy):
+            rc, out, err = self.run_cli(argv)
+        return rc, out, err, opened
 
-    RED today: the literal count is still 15 (> 12).
-    """
-
-    def test_con_close_literal_call_count_is_at_most_baseline_minus_three(self):
-        with open(_CLI_PATH, encoding="utf-8") as fh:
-            source = fh.read()
-        count = source.count("con.close()")
-        EXPECTED_MAX = 12  # baseline 15 (this branch, RED commit) minus the 3 \u00a7S2 removes
-        self.assertLessEqual(
-            count, EXPECTED_MAX,
-            f"sandesh/cli.py must have at most {EXPECTED_MAX} literal 'con.close()' "
-            f"calls (baseline 15 minus the 3 \u00a7S2 removes via the _ctx()-tracked seam "
-            f"in axi_search/axi_projects/_axi_xproj); found {count}")
+    def test_search_projects_grant_open_one_connection_each_and_main_closes_it(self):
+        sdb.assign_admin(self.con, "TheAdmin")
+        cases = (
+            ["--format", "toon", "search", "ping", "--to", "Mainline - Demo"],
+            ["--format", "toon", "projects"],
+            ["--format", "toon", "grant", "--cross-project", "--project", "Demo",
+             "--by", "TheAdmin"],
+        )
+        for argv in cases:
+            with self.subTest(verb=argv[2]):
+                rc, out, err, opened = self._run_spied(argv)
+                self.assertEqual(rc, 0, f"err={err!r}")
+                self.assertEqual(_toon.decode(out)["axi"]["verb"], argv[2])
+                self.assertEqual(len(opened), 1,
+                                 f"{argv[2]} must open exactly one connection; opened {len(opened)}")
+                with self.assertRaises(sqlite3.ProgrammingError,
+                                       msg=f"{argv[2]}: main() must close the connection"):
+                    opened[0].execute("SELECT 1")
 
 
 if __name__ == "__main__":

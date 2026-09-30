@@ -961,11 +961,10 @@ def notifier_reap_if_stale(con, recipient):
     return False
 
 
-def unregister(con, recipient, requester, project=None):
-    """Remove a participant. Auth: within a project, Mainline may remove anyone and
-    anyone may remove self; a foreign project's address may NOT be removed.
-    Live notifier → tombstone it, return ('tombstoned', pid); else reap stale, soft-delete,
-    return ('unregistered', None)."""
+def unregister_guards(con, recipient, requester, project=None):
+    """The checks unregister() runs before touching anything — requester format
+    (+ project match), Mainline-or-self, recipient in the requester's project.
+    Raises ValueError/PermissionError; returns the requester's project."""
     orch_req, req_proj = validate_address(requester, project)
     if recipient != requester and orch_req != "Mainline":
         raise PermissionError("only Mainline may remove another participant")
@@ -973,6 +972,15 @@ def unregister(con, recipient, requester, project=None):
         raise PermissionError(
             f"cannot unregister {recipient!r}: it is not in project {req_proj!r} "
             f"(cross-project removal is not allowed)")
+    return req_proj
+
+
+def unregister(con, recipient, requester, project=None):
+    """Remove a participant. Auth: within a project, Mainline may remove anyone and
+    anyone may remove self; a foreign project's address may NOT be removed.
+    Live notifier → tombstone it, return ('tombstoned', pid); else reap stale, soft-delete,
+    return ('unregistered', None)."""
+    unregister_guards(con, recipient, requester, project)
     live = notifier_live(con, recipient)
     if live is not None:
         notifier_tombstone(con, recipient)

@@ -617,9 +617,13 @@ def cmd_tombstone(args):
         sys.exit(1)
     finally:
         con.close()
+    _print_tombstoned(args)
+    return 0
+
+
+def _print_tombstoned(args):
     print(f"tombstoned project {args.project!r} (by {args.by}) — internal history "
           f"purged, body folder deleted; cross-project envelopes survive")
-    return 0
 
 
 def cmd_consolidate(args):
@@ -1040,6 +1044,7 @@ def axi_register(args):
 def axi_unregister(args):
     project, _, con = _ctx(args)
     requester = _require_own_addr(args, "as_", "--as '<your address>'")
+    sdb.unregister_guards(con, args.address, requester, project=project)
     kind = next((b["kind"] for b in sdb.addressbook(con, project)
                  if b["address"] == args.address), None)
     fields = {"address": args.address, "project": project, "kind": kind, "result": "absent"}
@@ -1169,8 +1174,9 @@ def axi_revoke(args):
 
 def axi_tombstone(args):
     """No prompts in machine mode (P6): without --yes (and not --dry-run) it is
-    a usage error; --dry-run returns the purge-count preview (§S3); otherwise
-    the human handler runs unchanged."""
+    a usage error; --dry-run returns the purge-count preview (§S3); with --yes
+    the library call runs directly so a refusal's reason reaches the envelope
+    (an already-tombstoned project is `result: already`)."""
     if not args.yes and not args.dry_run:
         raise _UsageError("tombstone in machine mode needs --yes "
                           "(no interactive confirmation)")
@@ -1182,9 +1188,16 @@ def axi_tombstone(args):
                     "bodies": counts["body_files"],
                     "cross_project": counts["cross_project_messages"]}
         return _axi_dry_run(args, "tombstoned", preview)
-    rc = cmd_tombstone(args) or 0
-    fields = {} if rc else {"project": args.project, "state": "tombstoned"}
-    return rc, fields
+    fields = {"project": args.project, "state": "tombstoned"}
+    try:
+        sdb.tombstone_project(_con(), args.project, args.by, force=args.force)
+    except ValueError as exc:
+        if "already tombstoned" not in str(exc):
+            raise
+        fields["result"] = "already"
+        return 0, fields
+    _print_tombstoned(args)
+    return 0, fields
 
 
 _STEP_LINE = re.compile(r"^([A-Za-z][\w .-]*?): (.+)$")
@@ -1244,14 +1257,17 @@ _EMITS_OWN_ENVELOPE = frozenset({"notify"})
 def build_parser(axi_format="human", axi_context=None):
     # --project is shared so it works BOTH before and after the subcommand:
     #   sandesh --project X setup    AND    sandesh setup --project X
-    common = _Parser(add_help=False)
+    # Same SUPPRESS idiom for --format (CR-SAN-047 §S3), on its own parent so the
+    # verbs that take no routing --project (or define their own) still accept
+    # --format after the verb.
+    fmt_common = _Parser(add_help=False)
+    fmt_common.add_argument("--format", choices=list(axi.FORMATS), default=argparse.SUPPRESS,
+                            help="output format (overrides $SANDESH_FORMAT; default human)")
+    common = _Parser(add_help=False, parents=[fmt_common])
     # SUPPRESS: an absent --project in one position must not clobber a value given in
     # the other (so it works both before AND after the subcommand).
     common.add_argument("--project", default=argparse.SUPPRESS,
                         help="project id (overrides $SANDESH_PROJECT)")
-    # Same SUPPRESS idiom for --format (CR-SAN-047 §S3).
-    common.add_argument("--format", choices=list(axi.FORMATS), default=argparse.SUPPRESS,
-                        help="output format (overrides $SANDESH_FORMAT; default human)")
 
     # _Parser (and, via argparse's default parser_class=type(parent), every
     # subparser) turns usage errors into an AXI envelope when the pre-scanned
@@ -1405,7 +1421,7 @@ def build_parser(axi_format="human", axi_context=None):
     # parent (`sandesh migrate --project X` is an argparse error). The
     # pre-subcommand `sandesh --project X migrate` form still parses via the
     # top-level parser; migrate simply ignores the value.
-    p = sub.add_parser("migrate",
+    p = sub.add_parser("migrate", parents=[fmt_common],
                        help="apply/inspect schema migrations on the global DB "
                             "(needs the [migrate] extra)")
     p.add_argument("--status", action="store_true", help="report applied vs pending (no writes)")
@@ -1427,7 +1443,7 @@ def build_parser(axi_format="human", axi_context=None):
     # global DB. Global like `migrate` — no --project needed (the
     # pre-subcommand `sandesh --project X consolidate` form still parses;
     # the value is simply ignored).
-    p = sub.add_parser("consolidate",
+    p = sub.add_parser("consolidate", parents=[fmt_common],
                        help="import legacy per-project stores into the global DB "
                             "(one-time; legacy files become sandesh.db.pre-global)")
     p.set_defaults(fn=cmd_consolidate)
@@ -1435,7 +1451,7 @@ def build_parser(axi_format="human", axi_context=None):
     # CR-SAN-027 §S3: full-text search over the caller's OWN mail. Parentless
     # like migrate/consolidate — the engine targets the single global DB, so
     # `search --project X` is an argparse error (no per-project routing).
-    p = sub.add_parser("search",
+    p = sub.add_parser("search", parents=[fmt_common],
                        help="full-text search over your own mail (FTS5 syntax: "
                            "\"quoted phrases\", AND/OR/NOT)")
     p.add_argument("query", help="the FTS5 query")
@@ -1448,7 +1464,7 @@ def build_parser(axi_format="human", axi_context=None):
 
     # CR-SAN-027 §S2: rebuild the whole FTS index from the message rows + body
     # files. Parentless and arg-free — global DB, plumbing only.
-    p = sub.add_parser("reindex",
+    p = sub.add_parser("reindex", parents=[fmt_common],
                        help="rebuild the full-text search index from messages + bodies")
     p.set_defaults(fn=cmd_reindex)
 
@@ -1457,7 +1473,7 @@ def build_parser(axi_format="human", axi_context=None):
     # --project is the TARGET project of the grant, not routing context (avoids
     # the dual-position SUPPRESS trap). There is NO `sandesh admin` subcommand —
     # admin assignment happens only in install.sh via $SANDESH_ADMIN (PRD O3).
-    p = sub.add_parser("grant",
+    p = sub.add_parser("grant", parents=[fmt_common],
                        help="grant cross-project sending to a project (Sandesh admin only)")
     p.add_argument("--cross-project", dest="cross_project", action="store_true",
                    required=True, help="the cross-project access grant (required)")
@@ -1465,7 +1481,7 @@ def build_parser(axi_format="human", axi_context=None):
     p.add_argument("--by", required=True, help="your admin name (must match the stored admin)")
     p.set_defaults(fn=cmd_grant)
 
-    p = sub.add_parser("revoke",
+    p = sub.add_parser("revoke", parents=[fmt_common],
                        help="revoke a project's cross-project grant (Sandesh admin only)")
     p.add_argument("--cross-project", dest="cross_project", action="store_true",
                    required=True, help="the cross-project access grant (required)")
@@ -1479,7 +1495,7 @@ def build_parser(axi_format="human", axi_context=None):
     # destructive tombstone takes the install-assigned super-admin (--by) and
     # an interactive confirm (bypass with --yes). All three accept --dry-run
     # (report only, writes nothing).
-    p = sub.add_parser("archive",
+    p = sub.add_parser("archive", parents=[fmt_common],
                        help="archive a project — read-only, reversible "
                             "(its own Mainline only)")
     p.add_argument("--project", required=True, help="the project to archive")
@@ -1491,7 +1507,7 @@ def build_parser(axi_format="human", axi_context=None):
                    help="report watchers to evict + would-be state; write nothing")
     p.set_defaults(fn=cmd_archive)
 
-    p = sub.add_parser("unarchive",
+    p = sub.add_parser("unarchive", parents=[fmt_common],
                        help="reactivate an archived project (its own Mainline only)")
     p.add_argument("--project", required=True, help="the project to reactivate")
     p.add_argument("--by", required=True,
@@ -1500,7 +1516,7 @@ def build_parser(axi_format="human", axi_context=None):
                    help="report would-be state; write nothing")
     p.set_defaults(fn=cmd_unarchive)
 
-    p = sub.add_parser("tombstone",
+    p = sub.add_parser("tombstone", parents=[fmt_common],
                        help="permanently retire an ARCHIVED project — purges its "
                             "internal history + body folder (Sandesh admin only)")
     p.add_argument("--project", required=True, help="the project to tombstone")
@@ -1518,7 +1534,7 @@ def build_parser(axi_format="human", axi_context=None):
     # reindex → admin). Parentless like migrate/consolidate/reindex — it
     # provisions the single global DB, so it takes no --project. CLI-only
     # (never an MCP tool — AC6).
-    p = sub.add_parser("init",
+    p = sub.add_parser("init", parents=[fmt_common],
                        help="provision the global store "
                             "(migrate + consolidate + reindex + admin)")
     p.add_argument("--admin", help="assign the Sandesh admin name "

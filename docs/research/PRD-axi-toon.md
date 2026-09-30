@@ -20,6 +20,7 @@ start/status/stop surface. CRs derived from this PRD cite it via `**Design refer
 | 1.1 | 2026-09-26 | Mainline - Sandesh | Owner ruling: the extension is the orchestrator's interface — adopt the ten AXI principles (axi.md) as the standard for the whole agent surface, shaped once in the CLI (§4.0); minimal schemas, truncation, aggregates, empty states, idempotent no-ops, structured errors as results, ambient context, home view, `help[]`. |
 | 1.2 | 2026-09-29 | Mainline - Sandesh | Owner ruling: the identity environment is loaded at the shell boundary (direnv, owned by Model B's `modelb-axi init`); the extension never parses `.env`. P7 gains the unexported-identity nudge (§4.6). |
 | 1.3 | 2026-09-30 | Mainline - Sandesh | Owner ruling: the wake state machine (§4.7) gains a terminal transition for a throwing host dep (stale ctx after session replacement/reload) — halt that watcher quietly, never crash the process (CR-SAN-052). |
+| 1.4 | 2026-09-30 | Mainline - Sandesh | Release-review fix (0.4.0 F3): `stop()` no longer forgets the child it aborted — a `start()` for the same address defers its spawn until that child has exited, so the new watcher cannot lose the CLI dedup to the old one; exit 5 is retried once after 30 s before it is treated as a foreign owner (§4.7). |
 
 ---
 
@@ -193,9 +194,9 @@ State machine per address, owned by the extension:
 | `start(address, project)` | refuse if a loop for that address exists (report it); else spawn `sandesh --project P --format toon notify --to A`; record start time |
 | exit **0** (`unread[N]`) | if the id set equals the previous wake's set → **no wake**, relaunch after **30 s**; else `sendUserMessage("Unread Sandesh mail for <A>: ids …", {deliverAs:"followUp"})`, remember the set, relaunch **immediately** |
 | exit **2** (timeout) | silent relaunch; if this is the **third** exit-2 within 60 s → surface (`ctx.ui.notify` warning) and keep relaunching |
-| exit **5** (dedup) | "already running" — stop this loop silently, do not surface, do not relaunch |
+| exit **5** (dedup) | "already running" — another watcher owns the address, possibly a previous child of this address still winding down: relaunch **once** after **30 s** (silent, still `running`); a second exit 5 in a row stops this loop silently, do not surface |
 | exit **1 / 3 / 4** or a signal | stop the loop; surface the code + reason (from the envelope's `error`) |
-| `stop(address?)` | abort the child (SIGTERM, then SIGKILL after a grace), clear state; no address = all |
+| `stop(address?)` | abort the child (SIGTERM, then SIGKILL after a grace); the entry reports `running:false` at once but remembers the child until it exits — a `start()` for the same address in that window is accepted (`running:true`) and spawns only after that exit, never racing the old child for the address; no address = all |
 | `status()` | per address: running, pid, started, last exit, last wake ids, exit-2 count |
 | a host dep **throws** (`sendUserMessage` / `notify` / `resolve` — the captured `pi` is stale after a session replacement or reload; a throwing `exec` is first reported as exit 1 with its one error notify) | halt that watcher only: mark it stopped, abort its child, **no relaunch**, no rethrow, no further host call; the process survives (an escaped throw in the detached chain would be an unhandled rejection) |
 
