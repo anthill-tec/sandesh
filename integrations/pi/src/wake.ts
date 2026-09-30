@@ -10,6 +10,9 @@
  *   - 1/3/4   → error / tombstoned / evicted. Stop + one error notify.
  *   - signal  → (code null) stop + one error notify naming the signal.
  * Undecodable stdout is treated as exit 1 with error "no envelope".
+ * A host dep that throws out of the exit handling (stale extension ctx after
+ * session replacement/reload — CR-SAN-052 §S2) ⇒ halt that watcher only: no
+ * relaunch, no further host call, nothing rethrown.
  *
  * All host effects (exec, messaging, notify, clock, sleep, CLI resolution) are
  * constructor-injected via `WakeDeps` so the state machine is unit-testable.
@@ -160,10 +163,24 @@ export class WakeSupervisor {
     } catch (err) {
       pending = Promise.reject(err);
     }
-    pending.then(
-      (r) => this.onExit(entry, gen, r),
-      (err: unknown) => this.onExit(entry, gen, { code: 1, stdout: "", stderr: String(err) }),
-    );
+    pending
+      .then(
+        (r) => this.onExit(entry, gen, r),
+        (err: unknown) => this.onExit(entry, gen, { code: 1, stdout: "", stderr: String(err) }),
+      )
+      // Last line of defence: anything `onExit` throws or rejects with (a
+      // throwing host dep on a stale ctx) ends only THIS watcher.
+      .catch(() => this.halt(entry));
+  }
+
+  /**
+   * Terminal transition for a watcher whose exit handling threw: mark it
+   * stopped, abort its signal, never relaunch, make no further host call.
+   */
+  private halt(entry: Entry): void {
+    entry.stopped = true;
+    entry.running = false;
+    entry.controller.abort();
   }
 
   private async onExit(entry: Entry, gen: number, r: WakeExecResult): Promise<void> {
