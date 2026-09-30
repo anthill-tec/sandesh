@@ -151,8 +151,16 @@ export class WakeSupervisor {
       "--to",
       entry.address,
     ]);
-    // Fire-and-forget: the child's exit drives the next transition.
-    this.deps.exec(cmd, args, { signal: entry.controller.signal }).then(
+    // Fire-and-forget: the child's exit drives the next transition. A
+    // synchronous `exec` throw (a stale extension ctx after session
+    // replacement/reload) is routed to the same exit-1 path as a rejection.
+    let pending: Promise<WakeExecResult>;
+    try {
+      pending = this.deps.exec(cmd, args, { signal: entry.controller.signal });
+    } catch (err) {
+      pending = Promise.reject(err);
+    }
+    pending.then(
       (r) => this.onExit(entry, gen, r),
       (err: unknown) => this.onExit(entry, gen, { code: 1, stdout: "", stderr: String(err) }),
     );
