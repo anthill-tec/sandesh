@@ -19,6 +19,7 @@ start/status/stop surface. CRs derived from this PRD cite it via `**Design refer
 | 1.0 | 2026-09-26 | Mainline - Sandesh | Initial contract from the Model B thread; six design decisions D1–D6 fixed by the owner's delegation. |
 | 1.1 | 2026-09-26 | Mainline - Sandesh | Owner ruling: the extension is the orchestrator's interface — adopt the ten AXI principles (axi.md) as the standard for the whole agent surface, shaped once in the CLI (§4.0); minimal schemas, truncation, aggregates, empty states, idempotent no-ops, structured errors as results, ambient context, home view, `help[]`. |
 | 1.2 | 2026-09-29 | Mainline - Sandesh | Owner ruling: the identity environment is loaded at the shell boundary (direnv, owned by Model B's `modelb-axi init`); the extension never parses `.env`. P7 gains the unexported-identity nudge (§4.6). |
+| 1.3 | 2026-09-30 | Mainline - Sandesh | Owner ruling: the wake state machine (§4.7) gains a terminal transition for a throwing host dep (stale ctx after session replacement/reload) — halt that watcher quietly, never crash the process (CR-SAN-052). |
 
 ---
 
@@ -196,6 +197,7 @@ State machine per address, owned by the extension:
 | exit **1 / 3 / 4** or a signal | stop the loop; surface the code + reason (from the envelope's `error`) |
 | `stop(address?)` | abort the child (SIGTERM, then SIGKILL after a grace), clear state; no address = all |
 | `status()` | per address: running, pid, started, last exit, last wake ids, exit-2 count |
+| a host dep **throws** (`exec` / `sendUserMessage` / `notify` / `resolve` — the captured `pi` is stale after a session replacement or reload) | halt that watcher only: mark it stopped, abort its child, **no relaunch**, no rethrow, no further host call; the process survives (an escaped throw in the detached chain would be an unhandled rejection) |
 
 - **Tools:** `sandesh_notify_start(address?, project?)`, `sandesh_notify_status()`,
   `sandesh_notify_stop(address?)`; `address`/`project` default to `$SANDESH_ADDRESS` /
