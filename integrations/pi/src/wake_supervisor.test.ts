@@ -22,7 +22,7 @@
  * — both portions may legitimately appear together when stdout is also empty.
  */
 
-import { test, expect, describe, mock } from "bun:test";
+import { test, expect, describe, mock, beforeAll, afterAll, beforeEach } from "bun:test";
 import { encode } from "@toon-format/toon";
 import { WakeSupervisor, type WakeDeps, type WatcherStatus } from "./wake";
 
@@ -526,5 +526,82 @@ describe("start() argv — resolve()'s output is passed to exec verbatim", () =>
       "--to",
       "Mainline - Demo",
     ]);
+  });
+});
+
+// ─── AC1 (CR-SAN-052) — a synchronous exec throw on relaunch is an exit-1 result ─
+
+describe("AC1 (CR-SAN-052) — a synchronous exec throw on relaunch is an exit-1 result", () => {
+  const STALE_MESSAGE = "This extension ctx is stale after session replacement or reload.";
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+
+  beforeAll(() => {
+    process.on("unhandledRejection", onUnhandled);
+  });
+  afterAll(() => {
+    process.off("unhandledRejection", onUnhandled);
+  });
+  beforeEach(() => {
+    unhandled.length = 0;
+  });
+
+  function makeExecFailingOnSecondCall(secondCall: () => Promise<ExecResult>) {
+    let calls = 0;
+    const exec = mock((_cmd: string, _args: string[], _opts: { signal: AbortSignal }): Promise<ExecResult> => {
+      calls += 1;
+      if (calls === 1) {
+        return Promise.resolve({
+          code: 2,
+          stdout: notifyEnvelope({ exit: 2, address: "Mainline - Demo", project: "Demo" }),
+          stderr: "",
+          signalCode: null,
+        });
+      }
+      return secondCall();
+    });
+    return exec;
+  }
+
+  test("exec throwing synchronously on the relaunch after exit 2 stops the watcher with a single 'exit 1 / no envelope' error notify", async () => {
+    const exec = makeExecFailingOnSecondCall(() => {
+      throw new Error(STALE_MESSAGE);
+    });
+    const { deps, sendUserMessageMock, notifyMock } = makeDeps({ exec });
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+    await flush();
+
+    expect(exec.mock.calls.length).toBe(2);
+    expect(sup.status()[0].running).toBe(false);
+    expect(sup.status()[0].lastExit).toBe(1);
+    expect(notifyMock.mock.calls.length).toBe(1);
+    const [text, level] = notifyMock.mock.calls[0] as [string, string];
+    expect(level).toBe("error");
+    expect(text).toContain("exit 1");
+    expect(text).toContain("no envelope");
+    expect(sendUserMessageMock.mock.calls.length).toBe(0);
+    expect(unhandled).toEqual([]);
+  });
+
+  test("exec returning a rejected promise on the relaunch after exit 2 stops the watcher with a single 'exit 1 / no envelope' error notify", async () => {
+    const exec = makeExecFailingOnSecondCall(() => Promise.reject(new Error(STALE_MESSAGE)));
+    const { deps, sendUserMessageMock, notifyMock } = makeDeps({ exec });
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+    await flush();
+
+    expect(exec.mock.calls.length).toBe(2);
+    expect(sup.status()[0].running).toBe(false);
+    expect(sup.status()[0].lastExit).toBe(1);
+    expect(notifyMock.mock.calls.length).toBe(1);
+    const [text, level] = notifyMock.mock.calls[0] as [string, string];
+    expect(level).toBe("error");
+    expect(text).toContain("exit 1");
+    expect(text).toContain("no envelope");
+    expect(sendUserMessageMock.mock.calls.length).toBe(0);
+    expect(unhandled).toEqual([]);
   });
 });
