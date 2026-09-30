@@ -98,11 +98,15 @@ pre-0.4.0 auto-arm at session start (both identity vars must then be set). Super
 - **Exit 0 (mail)** → one follow-up turn naming the ids, then an immediate relaunch.
 - **Same ids again** (nothing fetched yet) → no repeat message; relaunch delayed 30 s.
 - **Exit 2 (timeout)** → silent relaunch; 3 timeouts within 60 s surface one warning.
-- **Exit 5 (already running elsewhere)** → the loop stops quietly.
+- **Exit 5 (already running elsewhere)** → one quiet retry after 30 s (the other
+  owner may be a previous watcher still winding down; the entry stays `running`); a
+  second exit 5 in a row stops the loop quietly.
 - **Exit 1 / 3 (tombstoned) / 4 (evicted) / killed by signal** → the loop stops and a
   notice carries the code and the envelope's `error`.
 - **One watcher per address:** a second `start` for the same address returns
-  `already: true` and spawns nothing; different addresses run concurrently.
+  `already: true` and spawns nothing; different addresses run concurrently. After a
+  `stop`, a `start` for the same address is accepted at once but spawns its child only
+  when the stopped one has exited, so it never loses the address to it.
 - `session_shutdown` stops every watcher.
 
 Inspect or stop from the prompt with `/sandesh-watcher status` and
