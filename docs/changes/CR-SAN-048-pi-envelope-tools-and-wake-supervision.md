@@ -48,7 +48,7 @@ de-duplication, no timeout cap, and no start/status/stop surface (`integrations/
   `lastIds` ⇒ no wake, relaunch after 30 s; different ⇒ `pi.sendUserMessage("Unread Sandesh mail for
   <A>: <ids>. Call sandesh_fetch for it.", {deliverAs:"followUp"})`, remember ids, relaunch now;
   **2** → relaunch silently, push timestamp; third within 60 s ⇒ `ctx.ui.notify(warning)` once per
-  burst; **5** ⇒ stop silently ("already running"); **1/3/4/signal** ⇒ stop + `ctx.ui.notify` with
+  burst; **5** ⇒ relaunch once after 30 s, silently (a second consecutive 5 stops the loop silently); **1/3/4/signal** ⇒ stop + `ctx.ui.notify` with
   code + `error`. `stop(address?)` aborts the child's AbortSignal (Pi's `exec` sends SIGTERM, then SIGKILL after its 5 s grace) and clears; no address = all.
   `status()` returns the table. Clock and sleep injectable (`__setWakeClock`, `__setWakeSleepFn`).
 - **§S4 — tools + command.** `sandesh_notify_start(address?, project?)` (defaults from
@@ -94,7 +94,7 @@ de-duplication, no timeout cap, and no start/status/stop surface (`integrations/
   the relaunch is delayed 30 s (injected clock); a third with `[14]` → message + immediate relaunch.
 - **AC5** — Exit 2: relaunched silently; the third exit 2 within 60 s → exactly one `ctx.ui.notify`
   warning; a fourth outside the window → none.
-- **AC6** — Exit 5 → loop stops, no message, no notify, no relaunch. Exit 1, 3, 4 and a signal (code
+- **AC6** — Exit 5 → no message, no notify; the loop relaunches once after 30 s (injected clock) and stays `running`; a second consecutive exit 5 stops the loop silently. Exit 1, 3, 4 and a signal (code
   `null`, `signalCode: "SIGTERM"`) → loop stops and one `ctx.ui.notify` carries the code and the
   envelope's `error`.
 - **AC7b** — `sandesh_notify_status(project?)` and addressless `sandesh_notify_stop(project?)` require an explicit
