@@ -411,16 +411,15 @@ function envelopeText(verb: string, fields: Record<string, unknown>, context: En
   return encode({ axi: { verb, ok: true, ...fields, context: ctx, warnings: [] } });
 }
 
-/**
- * The `context.project` for the notify_status/notify_stop envelopes (PRD §4.1:
- * always present when known): the watcher's project — the one addressed when
- * given, else the first known watcher — falling back to `$SANDESH_PROJECT`.
- * Returns undefined only when neither exists (the key is then omitted).
- */
 function notifyContextProject(sup: WakeSupervisor, address?: string): string | undefined {
   const watchers = sup.status();
-  const watcher = address !== undefined ? watchers.find((w) => w.address === address) : watchers[0];
-  return watcher?.project || process.env.SANDESH_PROJECT || undefined;
+  if (address !== undefined) {
+    return watchers.find((w) => w.address === address)?.project || process.env.SANDESH_PROJECT || undefined;
+  }
+  if (watchers.length === 0) return process.env.SANDESH_PROJECT || undefined;
+  const project = watchers[0].project;
+  if (watchers.some((watcher) => watcher.project !== project)) return undefined;
+  return project || process.env.SANDESH_PROJECT || undefined;
 }
 
 /**

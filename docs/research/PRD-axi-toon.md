@@ -93,7 +93,7 @@ axi:
   ok: true|false
   <verb-specific result fields, flat>
   context:
-    project: <id>          # always
+    project: <id>          # CLI envelopes; Pi watcher aggregates omit if ambiguous
     address: <addr>        # where the verb acts for one
   help[N]: <next-step hints>          # optional
   warnings[N]: <strings>              # ALWAYS present; `warnings: []` when clean
@@ -147,8 +147,10 @@ the quoting rules are where the subset would drift).
 | `notify` (final envelope) | `exit: <code>`, `address`, `project`, `unread[N]: <ids>` (`unread: []` unless exit 0) |
 | every other verb (`setup`, `thread`, `search`, `projects`, `archive`, `unarchive`, `init`, `migrate`, …) | the generic envelope (`verb`, `ok`, `context`, `warnings`) plus that verb's natural result as flat fields; exact fields are fixed in the implementing CR's spec, never invented at emit time |
 
-`context.project` on all; `context.address` on the recipient/sender-keyed verbs (`register`,
-`unregister`, `inbox`, `fetch`, `notify`, `send`, `reply`).
+`context.project` is present on project-scoped CLI envelopes and on Pi envelopes when one
+project is unambiguous; aggregate watcher results spanning projects omit it. `context.address`
+is present on the recipient/sender-keyed CLI verbs (`register`, `unregister`, `inbox`, `fetch`,
+`notify`, `send`, `reply`).
 
 ### 4.5 `notify` in machine mode — G2
 
@@ -205,7 +207,7 @@ State machine per address, owned by the extension:
 - **Tools:** `sandesh_notify_start(address?, project?)`, `sandesh_notify_status()`,
   `sandesh_notify_stop(address?)`; `address`/`project` default to `$SANDESH_ADDRESS` /
   `$SANDESH_PROJECT`. Results are AXI envelopes with the P2 minimal default `watchers[N]{address,running,lastExit}`
-  (`context.project` always present); a `fields` knob widening to the full status set is deferred. `start` on a running address → `ok:true already:true` (P6); `stop` on nothing → `ok:true stopped: 0`.
+  (`context.project` is present when unambiguous; aggregate `notify_status` or addressless `notify_stop` omits it when watchers span projects, and uses `$SANDESH_PROJECT` only when there are no watchers); a `fields` knob widening to the full status set is deferred. `start` on a running address → `ok:true already:true` (P6); `stop` on nothing → `ok:true stopped: 0`.
   A `/sandesh-watcher status|stop` slash command mirrors status/stop.
 - **Arming (D4):** `session_start` **no longer arms by default**. Setting
   `SANDESH_AUTOSTART=1` (with both identity vars) restores the 0.3.x auto-arm for users who

@@ -54,8 +54,9 @@ de-duplication, no timeout cap, and no start/status/stop surface (`integrations/
 - **§S4 — tools + command.** `sandesh_notify_start(address?, project?)` (defaults from
   `$SANDESH_ADDRESS`/`$SANDESH_PROJECT`; error naming both if unresolved), `sandesh_notify_status()`,
   `sandesh_notify_stop(address?)` — results are TOON envelopes built in-extension
-  (`verb: notify_start|notify_status|notify_stop`, same shape as PRD §4.1 incl. `context.project` ALWAYS;
-  P2 default columns `watchers[N]{address,running,lastExit}` — the full status set via a `fields` knob is
+  (`verb: notify_start|notify_status|notify_stop`, same shape as PRD §4.1; `context.project` is included
+  when unambiguous and omitted for aggregate watcher results spanning projects; P2 default columns
+  `watchers[N]{address,running,lastExit}` — the full status set via a `fields` knob is
   deferred to the register). Slash command `/sandesh-watcher
   status|stop [address]`.
 - **§S5 — arming (D4).** `session_start`: probe/nudge unchanged; the wake loop is armed **only** when
@@ -97,8 +98,9 @@ de-duplication, no timeout cap, and no start/status/stop surface (`integrations/
 - **AC6** — Exit 5 → loop stops, no message, no notify, no relaunch. Exit 1, 3, 4 and a signal (code
   `null`, `signalCode: "SIGTERM"`) → loop stops and one `ctx.ui.notify` carries the code and the
   envelope's `error`.
-- **AC7b** — `sandesh_notify_status()` and `sandesh_notify_stop()` envelopes carry `context.project` (from the
-  watcher's project, else `$SANDESH_PROJECT`); a rejected `exec` promise is handled as an undecodable exit 1
+- **AC7b** — `sandesh_notify_status()` and `sandesh_notify_stop()` carry `context.project` when the watcher
+  project is unambiguous; aggregate results spanning projects omit it, while empty watcher lists may use
+  `$SANDESH_PROJECT`. A rejected `exec` promise is handled as an undecodable exit 1
   (one error notify, no relaunch) — tested in `wake_supervisor.test.ts`.
 - **AC7** — One per address: `sandesh_notify_start` twice for the same address → second returns
   `ok: true` with `already: true` and spawns nothing; two different addresses run concurrently;

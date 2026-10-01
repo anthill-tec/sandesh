@@ -345,6 +345,52 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
     expect(watchers[0].running).toBe(true);
   });
 
+  test("aggregate notify status and stop omit project context when watchers span projects", async () => {
+    saveEnv();
+    process.env.SANDESH_PROJECT = "Ambient";
+    try {
+      const { fakePi, capturedTools, notifyDeferreds } = makeFakePi();
+      registerExtension(fakePi);
+      const { fakeCtx } = makeFakeCtx();
+      const startTool = getTool(capturedTools, "sandesh_notify_start");
+      const statusTool = getTool(capturedTools, "sandesh_notify_status");
+      const stopTool = getTool(capturedTools, "sandesh_notify_stop");
+
+      await callExecute(startTool, { address: "Mainline - Alpha", project: "Alpha" }, fakeCtx);
+      await callExecute(startTool, { address: "Mainline - Beta", project: "Beta" }, fakeCtx);
+
+      const status = decodeEnvelope(text(await callExecute(statusTool, { fields: ["project"] }, fakeCtx)));
+      expect(status.context.project).toBeUndefined();
+      expect((status.fields.watchers as Array<{ project: string }>).map((w) => w.project).sort())
+        .toEqual(["Alpha", "Beta"]);
+
+      const stop = decodeEnvelope(text(await callExecute(stopTool, {}, fakeCtx)));
+      expect(stop.context.project).toBeUndefined();
+      expect(stop.fields.stopped).toBe(2);
+      expect(notifyDeferreds.every((deferred) => deferred.signal?.aborted)).toBe(true);
+    } finally {
+      restoreEnv();
+    }
+  });
+
+  test("aggregate status and stop retain context for watchers in one project", async () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    registerExtension(fakePi);
+    const { fakeCtx } = makeFakeCtx();
+    const startTool = getTool(capturedTools, "sandesh_notify_start");
+    const statusTool = getTool(capturedTools, "sandesh_notify_status");
+    const stopTool = getTool(capturedTools, "sandesh_notify_stop");
+
+    await callExecute(startTool, { address: "Mainline - Demo", project: "Demo" }, fakeCtx);
+    await callExecute(startTool, { address: "Track 1 - Demo", project: "Demo" }, fakeCtx);
+
+    const status = decodeEnvelope(text(await callExecute(statusTool, {}, fakeCtx)));
+    expect(status.context.project).toBe("Demo");
+    const stop = decodeEnvelope(text(await callExecute(stopTool, {}, fakeCtx)));
+    expect(stop.context.project).toBe("Demo");
+    expect(stop.fields.stopped).toBe(2);
+  });
+
   test("sandesh_notify_stop({address}) aborts the running child's signal and reports stopped:1", async () => {
     const { fakePi, capturedTools, notifyDeferreds } = makeFakePi();
     registerExtension(fakePi);
