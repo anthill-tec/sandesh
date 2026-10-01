@@ -1156,6 +1156,12 @@ def axi_thread(args):
     if not chain:
         raise ValueError(f"no such message #{args.id}")
     _print_thread(chain)
+    caller = os.environ.get("SANDESH_ADDRESS") or os.environ.get("WF_TRACK")
+    if caller:
+        try:
+            sdb.validate_address(caller, project)
+        except ValueError:
+            caller = None
     rows, bodies, cut = [], {}, False
     for message in chain:
         if _is_hole(message):
@@ -1164,7 +1170,11 @@ def axi_thread(args):
                            "subject": message["subject"], "created": message["created_at"],
                            "re": message["in_reply_to"]}, cols))
         path = message["body_path"]
-        if not path:
+        if not path or not caller:
+            continue
+        if caller != message["from_addr"] and not con.execute(
+                "SELECT 1 FROM message_recipient WHERE message_id=? AND recipient=?",
+                (message["id"], caller)).fetchone():
             continue
         if not os.path.isabs(path):
             path = os.path.join(store, path)

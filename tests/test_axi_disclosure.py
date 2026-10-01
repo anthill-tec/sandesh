@@ -248,7 +248,8 @@ class TruncationTest(_BaseFixture):
 
     def test_thread_default_truncates_body_and_suggests_full(self):
         rc, out, err = self.run_cli(
-            ["--format", "toon", "thread", "--project", "Demo", "--id", str(self.mid_long)])
+            ["--format", "toon", "thread", "--project", "Demo", "--id", str(self.mid_long)],
+            env={"SANDESH_ADDRESS": "Track 1 - Demo"})
         self.assertEqual(rc, 0, f"thread must exit 0; err={err!r}")
         axi = _toon.decode(out)["axi"]
         self.assertEqual(
@@ -260,11 +261,49 @@ class TruncationTest(_BaseFixture):
     def test_thread_full_flag_returns_complete_body_without_truncation_help(self):
         rc, out, err = self.run_cli(
             ["--format", "toon", "thread", "--project", "Demo",
-             "--id", str(self.mid_long), "--full"])
+             "--id", str(self.mid_long), "--full"],
+            env={"SANDESH_ADDRESS": "Track 1 - Demo"})
         self.assertEqual(rc, 0, f"'thread --full' must be accepted; err={err!r}")
         axi = _toon.decode(out)["axi"]
         self.assertEqual(axi["bodies"].get(str(self.mid_long)), self.body_2000)
         self.assertNotIn("help", axi)
+
+    def test_thread_redacts_body_without_caller_identity_but_keeps_metadata(self):
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "thread", "--project", "Demo", "--id", str(self.mid_long)])
+        self.assertEqual(rc, 0, f"thread metadata must remain readable; err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertTrue(any(row["id"] == self.mid_long for row in axi["chain"]))
+        self.assertNotIn(str(self.mid_long), axi["bodies"])
+
+    def test_thread_redacts_body_for_unrelated_same_project_caller(self):
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "thread", "--project", "Demo", "--id", str(self.mid_long)],
+            env={"SANDESH_ADDRESS": "Track 2 - Demo"})
+        self.assertEqual(rc, 0, f"thread metadata must remain readable; err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertNotIn(str(self.mid_long), axi["bodies"])
+
+    def test_thread_allows_recipient_and_redacts_on_project_mismatch(self):
+        sdb.setup("Other")
+        sdb.register(self.con, "Mainline - Other", kind="mainline", project="Other")
+        sdb.assign_admin(self.con, "TestAdmin")
+        sdb.grant_xproj(self.con, "Demo", by="TestAdmin")
+        mid = sdb.send(self.con, self.store, "Track 1 - Demo",
+                       to=["Mainline - Other"], subject="cross-project",
+                       body_text="recipient body", project="Demo")
+
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "thread", "--project", "Other", "--id", str(mid)],
+            env={"SANDESH_ADDRESS": "Mainline - Other"})
+        self.assertEqual(rc, 0, f"recipient must be allowed to read; err={err!r}")
+        self.assertEqual(_toon.decode(out)["axi"]["bodies"][str(mid)], "recipient body")
+
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "thread", "--project", "Demo", "--id", str(mid)],
+            env={"SANDESH_ADDRESS": "Mainline - Other"})
+        self.assertEqual(rc, 0, f"thread metadata must remain readable; err={err!r}")
+        self.assertNotIn(str(mid), _toon.decode(out)["axi"]["bodies"])
 
 
 # =========================================================================== #
@@ -453,7 +492,7 @@ class RemainingVerbsEnvelopeTest(_BaseFixture):
         mid_b = sdb.reply(self.con, self.store, mid_a, "Track 2 - Demo", project="Demo")
         rc, out, err = self.run_cli([
             "--format", "toon", "thread", "--project", "Demo", "--id", str(mid_b), "--full",
-        ])
+        ], env={"SANDESH_ADDRESS": "Track 1 - Demo"})
         self.assertEqual(rc, 0, f"thread --full must exit 0; err={err!r}")
         axi = _toon.decode(out)["axi"]
         self.assertEqual(axi["bodies"], {str(mid_a): "root body"})

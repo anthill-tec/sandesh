@@ -1,0 +1,56 @@
+{
+  "overlays": [
+    {
+      "id": "ov_file:https:/kunchenguid.github.io/no-mistakes/reference/global-config_1790852942412",
+      "target": "file:https:/kunchenguid.github.io/no-mistakes/reference/global-config",
+      "operation": {
+        "type": "exclude",
+        "reason": "evicted via dashboard"
+      },
+      "scope": "project",
+      "before_hash": "",
+      "author": "user",
+      "created_at": "2026-10-01T11:09:02.412717176Z",
+      "stale": false
+    },
+    {
+      "id": "ov_file:$ rg --line-number --color=never -C2 -M400 --max-columns-preview 'thread|body|a…_1790852967571",
+      "target": "file:$ rg --line-number --color=never -C2 -M400 --max-columns-preview 'thread|body|a…",
+      "operation": {
+        "type": "exclude",
+        "reason": "evicted via dashboard"
+      },
+      "scope": "project",
+      "before_hash": "",
+      "author": "user",
+      "created_at": "2026-10-01T11:09:27.571370337Z",
+      "stale": false
+    },
+    {
+      "id": "ov_file:/home/antonyj/Documents/data_projects/sandesh/integrations/pi/src/env_nudge.test.ts_1790852968453",
+      "target": "file:/home/antonyj/Documents/data_projects/sandesh/integrations/pi/src/env_nudge.test.ts",
+      "operation": {
+        "type": "exclude",
+        "reason": "evicted via dashboard"
+      },
+      "scope": "project",
+      "before_hash": "",
+      "author": "user",
+      "created_at": "2026-10-01T11:09:28.453820329Z",
+      "stale": false
+    },
+    {
+      "id": "ov_file:$ rg --line-number --color=never -M400 --max-columns-preview 'rust-orchestratio…_1790852969552",
+      "target": "file:$ rg --line-number --color=never -M400 --max-columns-preview 'rust-orchestratio…",
+      "operation": {
+        "type": "exclude",
+        "reason": "evicted via dashboard"
+      },
+      "scope": "project",
+      "before_hash": "",
+      "author": "user",
+      "created_at": "2026-10-01T11:09:29.552087956Z",
+      "stale": false
+    }
+  ]
+}
