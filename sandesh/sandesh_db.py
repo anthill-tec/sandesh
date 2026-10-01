@@ -43,6 +43,7 @@ import random
 import sqlite3
 import sys
 import time
+import urllib.parse
 
 DB_FILE = "sandesh.db"
 MESSAGES_DIR = "messages"
@@ -248,6 +249,19 @@ def connect():
         from . import migrate
         migrate.apply()
 
+    return con
+
+
+def connect_readonly():
+    """Open the global DB read-only without creating, migrating or altering it;
+    None when the store does not exist yet. For pure-read callers (`status`)."""
+    path = db_path()
+    if not os.path.exists(path):
+        return None
+    uri = "file:" + urllib.parse.quote(os.path.abspath(path)) + "?mode=ro"
+    con = sqlite3.connect(uri, uri=True)
+    con.row_factory = sqlite3.Row
+    con.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     return con
 
 

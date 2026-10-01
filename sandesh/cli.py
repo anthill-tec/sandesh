@@ -851,12 +851,14 @@ def _status_identity(args):
 
 
 def _status_fields(project, address):
-    con = sdb.connect()
-    try:
-        listening = sdb.notifier_live(con, address) is not None
-        unread = len(sdb.inbox(con, address, unread_only=True))
-    finally:
-        con.close()
+    con = sdb.connect_readonly()
+    listening, unread = False, 0
+    if con is not None:
+        try:
+            listening = sdb.notifier_live(con, address) is not None
+            unread = len(sdb.inbox(con, address, unread_only=True))
+        finally:
+            con.close()
     return {"bin": _bin_path(), "description": DESCRIPTION, "project": project,
             "address": address, "listening": listening, "unread": unread}
 

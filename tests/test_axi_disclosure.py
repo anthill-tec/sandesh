@@ -782,6 +782,29 @@ class HomeViewTest(_BaseFixture):
         axi = _toon.decode(out)["axi"]
         self.assertEqual(axi["unread"], 1)
 
+    def test_status_on_absent_store_reports_zeros_without_creating_it(self):
+        empty = tempfile.mkdtemp(prefix="sandesh-axi-status-absent-")
+        self.addCleanup(shutil.rmtree, empty, ignore_errors=True)
+        os.environ["XDG_DATA_HOME"] = empty
+        rc, out, err = self.run_cli(["--format", "toon", "status"], env={
+            "SANDESH_PROJECT": "Demo", "SANDESH_ADDRESS": "Mainline - Demo",
+        })
+        self.assertEqual(rc, 0, f"out={out!r} err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertEqual(axi["unread"], 0)
+        self.assertIs(axi["listening"], False)
+        self.assertEqual(os.listdir(empty), [], "status must not create the store")
+
+    def test_status_on_schema_behind_store_does_not_migrate_it(self):
+        self.con.execute("CREATE TABLE _yoyo_migration (migration_id TEXT)")
+        self.con.commit()
+        rc, out, err = self.run_cli(["--format", "toon", "status"], env={
+            "SANDESH_PROJECT": "Demo", "SANDESH_ADDRESS": "Mainline - Demo",
+        })
+        self.assertEqual(rc, 0, f"out={out!r} err={err!r}")
+        applied = self.con.execute("SELECT COUNT(*) FROM _yoyo_migration").fetchone()[0]
+        self.assertEqual(applied, 0, "status must not auto-apply migrations")
+
     def test_status_rejects_an_address_from_a_different_project(self):
         env = {"SANDESH_ADDRESS": "Mainline - Demo"}
         rc_human, _, err_human = self.run_cli(
