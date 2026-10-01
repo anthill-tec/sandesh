@@ -453,6 +453,97 @@ class PublishTestpypiTest(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Release rehearsal versioning - TestPyPI gets the EXACT release version from
+# release/X.Y.Z (user decision 2026-10-01); main stays tag-derived and may never
+# upload a dev version; every other ref keeps the documented X.Y.Z.devN.
+# ---------------------------------------------------------------------------
+
+def _job_section(raw: str, job: str, next_job: str | None) -> str:
+    start = _char_index(rf"^  {job}\s*:", raw, re.M)
+    end = _char_index(rf"^  {next_job}\s*:", raw, re.M) if next_job else -1
+    return raw[start:end] if end > start else raw[start:]
+
+
+def _sanity_script(raw: str) -> str:
+    job = _job_section(raw, "publish-testpypi", None)
+    m = re.search(r"Version sanity.*?run: \|\n(.*?)\n      - uses: pypa", job, re.S)
+    if m is None:
+        return ""
+    return "\n".join(line[10:] for line in m.group(1).splitlines())
+
+
+class ReleaseRehearsalVersionTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.raw = _read_workflow()
+        cls.build = _job_section(cls.raw, "build", "create-release")
+        cls.testpypi = _job_section(cls.raw, "publish-testpypi", None)
+
+    def _pin_step(self):
+        start = _char_index(r"name: Pin release version", self.build)
+        self.assertGreater(start, -1, "build job must have the 'Pin release version' step")
+        return self.build[start:_char_index(r"name: Build sdist", self.build)]
+
+    def test_pin_step_only_on_release_branch_dispatch(self):
+        step = self._pin_step()
+        self.assertIn("github.event_name == 'workflow_dispatch'", step)
+        self.assertIn("startsWith(github.ref, 'refs/heads/release/')", step)
+        self.assertIn("SETUPTOOLS_SCM_PRETEND_VERSION=", step)
+        self.assertIn("integrations/pi/package.json", step,
+                      "the pinned version must be checked against the set-version manifest")
+
+    def test_pin_step_precedes_build(self):
+        self.assertLess(_char_index(r"name: Pin release version", self.build),
+                        _char_index(r"name: Build sdist", self.build))
+
+    def test_ref_name_reaches_shell_via_env_not_inline_expression(self):
+        step = self._pin_step()
+        self.assertNotIn("${{", step[step.index("run: |"):],
+                         "no ${{ }} interpolation inside run (script injection)")
+
+    def test_testpypi_checks_the_uploaded_artifact_not_a_rebuild(self):
+        self.assertNotIn("python -m build", self.testpypi)
+        self.assertLess(_char_index(r"download-artifact", self.testpypi),
+                        _char_index(r"name: Version sanity", self.testpypi))
+
+    def _run_sanity(self, version, ref):
+        import subprocess
+        import tempfile
+        script = _sanity_script(self.raw)
+        self.assertTrue(script, "could not extract the version-sanity script")
+        with tempfile.TemporaryDirectory() as tmp:
+            os.mkdir(os.path.join(tmp, "dist"))
+            if version:
+                open(os.path.join(tmp, "dist", f"sandesh_relay-{version}.tar.gz"), "w").close()
+            env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                   "XDG_DATA_HOME": tmp,
+                   "REF": ref, "REF_NAME": ref.removeprefix("refs/heads/")}
+            return subprocess.run(["bash", "-c", script], cwd=tmp, env=env,
+                                  capture_output=True, text=True).returncode
+
+    def test_sanity_release_branch_requires_exact_version(self):
+        self.assertEqual(self._run_sanity("0.4.0", "refs/heads/release/0.4.0"), 0)
+        self.assertNotEqual(self._run_sanity("0.3.7.dev92", "refs/heads/release/0.4.0"), 0)
+        self.assertNotEqual(self._run_sanity("0.4.1", "refs/heads/release/0.4.0"), 0)
+
+    def test_sanity_main_refuses_dev_versions(self):
+        self.assertEqual(self._run_sanity("0.4.0", "refs/heads/main"), 0)
+        self.assertNotEqual(self._run_sanity("0.4.1.dev3", "refs/heads/main"), 0)
+
+    def test_sanity_other_refs_keep_dev_versions(self):
+        self.assertEqual(self._run_sanity("0.4.1.dev3", "refs/heads/develop"), 0)
+
+    def test_sanity_rejects_local_segment_and_missing_artifact(self):
+        self.assertNotEqual(self._run_sanity("0.4.1.dev3+g1a2b", "refs/heads/develop"), 0)
+        self.assertNotEqual(self._run_sanity(None, "refs/heads/develop"), 0)
+
+    def test_real_pypi_publish_stays_release_event_only(self):
+        job = _job_section(self.raw, "publish-pypi", "publish-testpypi")
+        self.assertIn("if: github.event_name == 'release'", job)
+        self.assertIn("git merge-base --is-ancestor", job)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 

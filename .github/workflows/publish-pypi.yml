@@ -21,6 +21,28 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+      # Release rehearsal: a workflow_dispatch on release/X.Y.Z builds the
+      # EXACT release version (from the branch name), not X.Y.Z.devN. main is
+      # tag-derived (checked in publish-testpypi); other refs keep devN.
+      - name: Pin release version (dispatch on release/X.Y.Z only)
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          startsWith(github.ref, 'refs/heads/release/')
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          V="${REF_NAME#release/}"
+          if ! echo "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$REF_NAME' is not release/X.Y.Z"
+            exit 1
+          fi
+          PKG=$(jq -r .version integrations/pi/package.json)
+          if [ "$PKG" != "$V" ]; then
+            echo "::error::pi package.json is $PKG, not $V; run set-version"
+            exit 1
+          fi
+          echo "SETUPTOOLS_SCM_PRETEND_VERSION=$V" >> "$GITHUB_ENV"
+          echo "pinned rehearsal version: $V"
       - name: Build sdist + wheel
         run: |
           python -m pip install --upgrade build "twine>=7.0"
@@ -100,25 +122,42 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0          # hatch-vcs needs tags to derive the version
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-      - name: Version sanity — reject PEP 440 local segment ('+')
-        run: |
-          python -m pip install --upgrade build
-          VER=$(python -m build --sdist --no-isolation 2>/dev/null >/dev/null; ls dist/*.tar.gz 2>/dev/null | sed -E 's#.*/[a-z_-]+-(.+)\.tar\.gz#\1#' | head -1)
-          echo "derived version: $VER"
-          if echo "$VER" | grep -q '+'; then
-            echo "::error::version '$VER' contains a '+' local segment — TestPyPI rejects PEP 440 local versions"
-            exit 1
-          fi
       - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist/
+      # Check the artifact that is actually uploaded (no rebuild).
+      - name: Version sanity - no '+' local segment; exact on release/main
+        env:
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          SDIST=$(find dist -maxdepth 1 -name '*.tar.gz' | head -1)
+          VER=$(basename "$SDIST" .tar.gz | sed -E 's/^[a-z_]+-//')
+          echo "artifact version: $VER"
+          if [ -z "$SDIST" ] || [ -z "$VER" ]; then
+            echo "::error::no sdist in the dist artifact"
+            exit 1
+          fi
+          if echo "$VER" | grep -q '+'; then
+            echo "::error::'$VER' has a '+' local segment;" \
+                 "TestPyPI rejects PEP 440 local versions"
+            exit 1
+          fi
+          case "$REF" in
+            refs/heads/release/*)
+              if [ "$VER" != "${REF_NAME#release/}" ]; then
+                echo "::error::rehearsal must be ${REF_NAME#release/}," \
+                     "artifact is $VER"
+                exit 1
+              fi ;;
+            refs/heads/main)
+              if echo "$VER" | grep -q 'dev'; then
+                echo "::error::main needs its vX.Y.Z tag at HEAD;" \
+                     "refusing dev version $VER"
+                exit 1
+              fi ;;
+          esac
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/

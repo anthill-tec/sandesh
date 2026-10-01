@@ -95,12 +95,27 @@ scripts/release.sh checkpoint            # on a hotfix/* or release/* branch
 3. Verify: `uv tool install --index-url https://test.pypi.org/simple/ 'sandesh-relay[mcp]'`
    (deps from real PyPI may need `--extra-index-url https://pypi.org/simple/`).
 
-> **Versioning on an untagged branch.** `pyproject.toml` sets
-> `[tool.hatch.version] raw-options = { local_scheme = "no-local-version" }`, so an untagged
-> `hotfix/*`/`release/*` build derives a clean **`X.Y.Z.devN`** (PEP 440 dev release) instead of a
+> **Versioning of the rehearsal.** The version a checkpoint uploads depends on the ref:
+>
+> | Dispatched on | TestPyPI version | Enforced by |
+> |---|---|---|
+> | `release/X.Y.Z` | **exactly `X.Y.Z`**, pinned from the branch name (`SETUPTOOLS_SCM_PRETEND_VERSION`) | `build` refuses unless `integrations/pi/package.json` is `X.Y.Z` (run `set-version` first); `publish-testpypi` refuses any other artifact version |
+> | `main` (production) | the `vX.Y.Z` tag at HEAD, tag-derived | `publish-testpypi` refuses a `.dev` version |
+> | anything else (`hotfix/*`, `develop`, …) | a clean **`X.Y.Z.devN`** | `no-local-version` (below) |
+>
+> TestPyPI never accepts a re-upload of a version, so a `release/X.Y.Z` rehearsal can upload
+> `X.Y.Z` **once**; a re-rehearsal after a fix fails the upload, which is expected.
+>
+> `pyproject.toml` sets `[tool.hatch.version] raw-options = { local_scheme = "no-local-version" }`,
+> so an untagged, unpinned build derives a clean **`X.Y.Z.devN`** (PEP 440 dev release) instead of a
 > `…devN+g<sha>` *local* version. PyPI/TestPyPI **reject** local versions, so this is what makes a
-> pre-finish checkpoint uploadable — **no rc tag required.** (Each checkpoint at a new commit gets a
-> higher `devN`, keeping the version unique.)
+> non-release-branch checkpoint uploadable — **no rc tag required.** (Each checkpoint at a new
+> commit gets a higher `devN`, keeping the version unique.)
+>
+> **Real publishes happen only from `main`.** `publish-pypi` and `publish-npm` run only on a
+> published GitHub Release, and each guard refuses unless the ref is a clean `vX.Y.Z` tag whose
+> commit is an ancestor of `origin/main`. A release branch can reach TestPyPI and the npm
+> `dry-run`, never PyPI or npmjs.
 
 ---
 
