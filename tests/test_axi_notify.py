@@ -60,6 +60,7 @@ import json
 import os
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -347,6 +348,81 @@ class NotifyStartupMigrationEnvelopeTest(unittest.TestCase):
         self.assertIs(axi["ok"], False)
         self.assertEqual(axi["error"], "store schema is behind")
         self.assertTrue(axi.get("help"))
+
+
+class NotifyMachineSingleEnvelopeTest(_NotifyFastPathFixture):
+
+    def test_unresolved_project_emits_one_error_envelope(self):
+        os.environ.pop("SANDESH_PROJECT", None)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = cli.main(["--format", "toon", "notify", "--to", self.ADDR])
+        self.assertEqual(rc, 1)
+        axi = self._decode_one_envelope(out.getvalue())
+        self.assertEqual(axi["verb"], "notify")
+        self.assertIs(axi["ok"], False)
+        self.assertIn("project", axi["error"])
+
+    def test_connect_failure_emits_one_error_envelope(self):
+        rc, out, err = self._run(
+            timeout=60, fmt="toon",
+            sdb_overrides={"connect": mock.Mock(side_effect=sqlite3.OperationalError("unable to open database file"))},
+        )
+        self.assertEqual(rc, 1)
+        axi = self._decode_one_envelope(out)
+        self.assertEqual(axi["exit"], 1)
+        self.assertIs(axi["ok"], False)
+        self.assertIn("unable to open database file", axi["error"])
+        self.assertTrue(axi.get("help"))
+
+    def test_non_lock_error_during_poll_emits_one_error_envelope(self):
+        rc, out, err = self._run(
+            timeout=60, fmt="toon",
+            sdb_overrides={
+                "notifier_acquire": lambda *a: (True, "acquired"),
+                "notifier_check": mock.Mock(side_effect=sqlite3.OperationalError("no such table: notifier")),
+            },
+        )
+        self.assertEqual(rc, 1)
+        axi = self._decode_one_envelope(out)
+        self.assertIs(axi["ok"], False)
+        self.assertIn("no such table", axi["error"])
+
+    def test_human_mode_still_propagates_a_connect_failure(self):
+        with self.assertRaises(sqlite3.OperationalError):
+            self._run(
+                timeout=60,
+                sdb_overrides={"connect": mock.Mock(side_effect=sqlite3.OperationalError("boom"))},
+            )
+
+    def test_signal_handlers_are_installed_before_the_store_is_opened(self):
+        installed = []
+
+        def connect():
+            self.assertEqual(sorted(installed), sorted([signal.SIGTERM, signal.SIGINT]))
+            raise sqlite3.OperationalError("boom")
+
+        out_buf = io.StringIO()
+        with mock.patch.object(notify.signal, "signal", lambda signum, _h: installed.append(signum)), \
+                mock.patch.object(notify.sdb, "connect", connect), \
+                redirect_stdout(out_buf), redirect_stderr(io.StringIO()):
+            rc = notify.run(self.PROJ, self.ADDR, 60, fmt="toon")
+        self.assertEqual(rc, 1)
+        self.assertEqual(out_buf.getvalue().count("axi:"), 1)
+
+
+class OrdinaryMachineVerbSqliteErrorTest(unittest.TestCase):
+
+    def test_sqlite_error_maps_to_one_error_envelope(self):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sdb, "connect", side_effect=sqlite3.OperationalError("disk I/O error")), \
+                redirect_stdout(out), redirect_stderr(err):
+            rc = cli.main(["--format", "toon", "projects"])
+        self.assertEqual(rc, 1)
+        self.assertEqual(out.getvalue().count("axi:"), 1)
+        axi = _toon.decode(out.getvalue())["axi"]
+        self.assertIs(axi["ok"], False)
+        self.assertIn("disk I/O error", axi["error"])
 
 
 class NotifyHumanGoldenPinTest(_NotifyFastPathFixture):

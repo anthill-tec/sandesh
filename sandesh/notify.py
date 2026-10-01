@@ -102,82 +102,91 @@ def run(project_id, address, timeout=DEFAULT_TIMEOUT_SECS, fmt="human"):
         done(code, error=f"terminated by {signal.Signals(signum).name} ({code})")
         sys.exit(code)  # atexit (notifier_release) still runs after the envelope
 
-    con = sdb.connect()
-    try:
-        sdb.validate_address(address, project_id)
-    except ValueError as exc:
-        sys.stderr.write(f"[notify] ERROR: {exc}\n")
-        return done(1, error=str(exc))
-    if not sdb.is_active(con, address):
-        error = (f"{address!r} is not registered in {project_id!r} — "
-                 f"`sandesh register --project {project_id} --address {address!r}` first.")
-        sys.stderr.write(f"[notify] ERROR: {error}\n")
-        return done(1, error=error)
-
-    token, pid, host = uuid.uuid4().hex, os.getpid(), socket.gethostname()
-    interval = sdb.poll_interval()
-    deadline = time.monotonic() + timeout
-
-    # CR-SAN-043: be resilient to transient DB lock contention. A 'database is locked'
-    # (SQLITE_BUSY surviving PRAGMA busy_timeout under heavy co-tenant load) is retried on
-    # the poll cadence — bounded by the watch deadline — instead of crashing the watcher
-    # (exit 1) and flapping `listening`. Non-lock errors still propagate unchanged.
-    while True:
-        try:
-            ok, reason = sdb.notifier_acquire(con, address, pid, token, host)
-            break
-        except sqlite3.OperationalError as exc:
-            if not sdb.is_locked_error(exc):
-                raise
-            if time.monotonic() >= deadline:
-                say("[notify] timed out waiting for the DB write lock to acquire.")
-                return done(2)
-            say(f"[notify] DB busy ({exc}); staying up, retrying acquire in {interval}s")
-            time.sleep(interval)
-    if not ok:
-        say(f"[notify] {reason} — not starting (dedup).")
-        return done(5, warnings=[reason])
-
-    atexit.register(lambda: sdb.notifier_release(con, address, token))  # token-guarded
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
 
-    say(f"[notify] watching {address} in {project_id}  (pid {pid}, interval {interval}s, timeout {timeout}s)")
-    polls = 0
-    while True:
+    def watch():
+        con = sdb.connect()
         try:
-            state = sdb.notifier_check(con, address, token)
-            if state == "tombstoned":
-                error = "tombstoned — shutting down (evicted)."
-                say(f"[notify] {error}")
-                return done(3, error=error)
-            if state == "evicted":
-                error = f"evicted — another notifier took over {address!r}."
-                say(f"[notify] {error}")
-                return done(4, error=error)
-            sdb.notifier_heartbeat(con, address, token)
-            ids = sdb.unread_to(con, address)
-        except sqlite3.OperationalError as exc:
-            if not sdb.is_locked_error(exc):
-                raise
-            if time.monotonic() >= deadline:
-                say(f"[notify] {time.strftime('%H:%M:%S')} timed out (DB busy, {polls} polls).")
-                return done(2)
-            say(f"[notify] DB busy ({exc}); staying up, recheck in {interval}s")
-            time.sleep(interval)
-            continue
+            sdb.validate_address(address, project_id)
+        except ValueError as exc:
+            sys.stderr.write(f"[notify] ERROR: {exc}\n")
+            return done(1, error=str(exc))
+        if not sdb.is_active(con, address):
+            error = (f"{address!r} is not registered in {project_id!r} — "
+                     f"`sandesh register --project {project_id} --address {address!r}` first.")
+            sys.stderr.write(f"[notify] ERROR: {error}\n")
+            return done(1, error=error)
 
-        polls += 1
-        stamp = time.strftime("%H:%M:%S")
-        if ids:
-            say(f"[notify] {stamp} ✉ {len(ids)} unread 'to' message(s): {ids}")
-            say(f"[notify] WAKE — fetch with: sandesh fetch --project {project_id} --to {address!r}")
-            return done(0, unread=ids)
-        if time.monotonic() >= deadline:
-            say(f"[notify] {stamp} timed out ({polls} polls).")
-            return done(2)
-        say(f"[notify] {stamp} no 'to' mail — next check in {interval}s")
-        time.sleep(interval)
+        token, pid, host = uuid.uuid4().hex, os.getpid(), socket.gethostname()
+        interval = sdb.poll_interval()
+        deadline = time.monotonic() + timeout
+
+        # CR-SAN-043: be resilient to transient DB lock contention. A 'database is locked'
+        # (SQLITE_BUSY surviving PRAGMA busy_timeout under heavy co-tenant load) is retried on
+        # the poll cadence — bounded by the watch deadline — instead of crashing the watcher
+        # (exit 1) and flapping `listening`. Non-lock errors still propagate unchanged.
+        while True:
+            try:
+                ok, reason = sdb.notifier_acquire(con, address, pid, token, host)
+                break
+            except sqlite3.OperationalError as exc:
+                if not sdb.is_locked_error(exc):
+                    raise
+                if time.monotonic() >= deadline:
+                    say("[notify] timed out waiting for the DB write lock to acquire.")
+                    return done(2)
+                say(f"[notify] DB busy ({exc}); staying up, retrying acquire in {interval}s")
+                time.sleep(interval)
+        if not ok:
+            say(f"[notify] {reason} — not starting (dedup).")
+            return done(5, warnings=[reason])
+
+        atexit.register(lambda: sdb.notifier_release(con, address, token))  # token-guarded
+
+        say(f"[notify] watching {address} in {project_id}  (pid {pid}, interval {interval}s, timeout {timeout}s)")
+        polls = 0
+        while True:
+            try:
+                state = sdb.notifier_check(con, address, token)
+                if state == "tombstoned":
+                    error = "tombstoned — shutting down (evicted)."
+                    say(f"[notify] {error}")
+                    return done(3, error=error)
+                if state == "evicted":
+                    error = f"evicted — another notifier took over {address!r}."
+                    say(f"[notify] {error}")
+                    return done(4, error=error)
+                sdb.notifier_heartbeat(con, address, token)
+                ids = sdb.unread_to(con, address)
+            except sqlite3.OperationalError as exc:
+                if not sdb.is_locked_error(exc):
+                    raise
+                if time.monotonic() >= deadline:
+                    say(f"[notify] {time.strftime('%H:%M:%S')} timed out (DB busy, {polls} polls).")
+                    return done(2)
+                say(f"[notify] DB busy ({exc}); staying up, recheck in {interval}s")
+                time.sleep(interval)
+                continue
+
+            polls += 1
+            stamp = time.strftime("%H:%M:%S")
+            if ids:
+                say(f"[notify] {stamp} ✉ {len(ids)} unread 'to' message(s): {ids}")
+                say(f"[notify] WAKE — fetch with: sandesh fetch --project {project_id} --to {address!r}")
+                return done(0, unread=ids)
+            if time.monotonic() >= deadline:
+                say(f"[notify] {stamp} timed out ({polls} polls).")
+                return done(2)
+            say(f"[notify] {stamp} no 'to' mail — next check in {interval}s")
+            time.sleep(interval)
+
+    try:
+        return watch()
+    except Exception as exc:
+        if not machine:
+            raise
+        return done(1, error=str(exc))
 
 
 def main(argv=None):

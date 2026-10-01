@@ -20,6 +20,7 @@ import contextlib
 import io
 import os
 import re
+import sqlite3
 import sys
 
 from sandesh import __version__
@@ -216,8 +217,11 @@ def _run_machine(args, fmt):
         # envelope. Startup failures before the watcher owns output are emitted here.
         try:
             return fn(args)[0]
-        except sdb.MigrationRequired as exc:
-            axi.emit(axi.error_envelope(verb, exc, context), fmt)
+        except SystemExit as exc:
+            if not isinstance(exc.code, str):
+                raise
+            msg = exc.code[len(_ERR_PREFIX):] if exc.code.startswith(_ERR_PREFIX) else exc.code
+            axi.emit(axi.error_envelope(verb, ValueError(msg), context), fmt)
             return 1
     rc, error, fields, help_, exited = 0, None, {}, [], False
     try:
@@ -234,7 +238,7 @@ def _run_machine(args, fmt):
         rc, error, fields = exc.rc, str(exc), exc.fields
     except sdb.MigrationRequired as exc:
         rc, error = 1, str(exc)
-    except (ValueError, PermissionError, FileNotFoundError, RuntimeError) as exc:
+    except (ValueError, PermissionError, FileNotFoundError, RuntimeError, sqlite3.Error) as exc:
         rc, error = 1, str(exc)
     except SystemExit as exc:
         code, exited = exc.code, True
