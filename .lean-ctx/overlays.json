@@ -207,6 +207,32 @@
       "author": "user",
       "created_at": "2026-10-01T11:41:07.815636757Z",
       "stale": false
+    },
+    {
+      "id": "ov_file:$ rg --line-number --color=never -C1 --glob '*.py' -M400 --max-columns-preview …_1790855427925",
+      "target": "file:$ rg --line-number --color=never -C1 --glob '*.py' -M400 --max-columns-preview …",
+      "operation": {
+        "type": "exclude",
+        "reason": "evicted via dashboard"
+      },
+      "scope": "project",
+      "before_hash": "",
+      "author": "user",
+      "created_at": "2026-10-01T11:50:27.925267085Z",
+      "stale": false
+    },
+    {
+      "id": "ov_file:$ rg --line-number --color=never -C4 -M400 --max-columns-preview 'notify_status…_1790855429108",
+      "target": "file:$ rg --line-number --color=never -C4 -M400 --max-columns-preview 'notify_status…",
+      "operation": {
+        "type": "exclude",
+        "reason": "evicted via dashboard"
+      },
+      "scope": "project",
+      "before_hash": "",
+      "author": "user",
+      "created_at": "2026-10-01T11:50:29.108301026Z",
+      "stale": false
     }
   ]
 }
