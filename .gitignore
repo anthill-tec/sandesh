@@ -14,4 +14,5 @@ coverage.lcov
 .codacy/
 # Kiro IDE steering / lean-ctx agent tooling (local, not part of the deliverable)
 .kiro/
+.lean-ctx/
 crucible.toml
