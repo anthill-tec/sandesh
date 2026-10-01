@@ -304,6 +304,8 @@ describe("AC7b — missing CLI (non-zero code) → notice surfaced, no throw", (
       msg.includes("install.sh") ||
       msg.includes("PATH");
     expect(mentionsInstallOption).toBe(true);
+    expect(msg).toContain("uv tool install sandesh-relay");
+    expect(msg).toContain("pipx install sandesh-relay");
   });
 
   test("non-zero exit code → notice is warning or error severity (not silent info)", async () => {

@@ -109,8 +109,8 @@ function nudgeUnexportedIdentity(ctx: ExtensionContext): void {
  * install.sh) and mentions PATH (§S4 / AC7).
  */
 const MISSING_CLI_NOTICE =
-  "sandesh CLI not found on PATH. Install it with `uv tool install sandesh` or " +
-  "`pipx install sandesh` (or run the repo's install.sh), then ensure it is on your PATH.";
+  "sandesh CLI not found on PATH. Install it with `uv tool install sandesh-relay` or " +
+  "`pipx install sandesh-relay` (or run the repo's install.sh), then ensure it is on your PATH.";
 
 /**
  * Minimum `sandesh` CLI version this extension requires (CR-SAN-032 §S3 / AC3).
@@ -124,7 +124,7 @@ const MIN_CLI_VERSION: readonly [number, number, number] = [0, 4, 0];
  */
 const OUTDATED_CLI_NOTICE =
   "sandesh CLI is too old for this extension: version 0.4.0 or newer is required. " +
-  "Upgrade it with `uv tool install sandesh` or `pipx upgrade sandesh` " +
+  "Upgrade it with `uv tool upgrade sandesh-relay` or `pipx upgrade sandesh-relay` " +
   "(or re-run the repo's install.sh).";
 
 /**
