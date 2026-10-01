@@ -70,7 +70,8 @@ One `build` job feeds the event-gated jobs below:
 | `publish-testpypi` | **`workflow_dispatch`** only | **TestPyPI** (env `testpypi`, OIDC) |
 
 `build` checks out with `fetch-depth: 0` so hatch-vcs sees the tag → the artifact version is the
-tag's `X.Y.Z`.
+tag's `X.Y.Z` (a `release/X.Y.Z` rehearsal dispatch instead pins `X.Y.Z` from the branch name —
+see *Versioning of the rehearsal* below).
 
 **Publish branch guard.** Before any upload, `publish-pypi` (and `publish-npm`) assert the ref is a
 `^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$` tag **and** that its commit is reachable from `origin/main`
