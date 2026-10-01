@@ -173,7 +173,7 @@ rows and stop actions. `context.address` is present on the recipient/sender-keye
   are `ok:true`.
 - **Ambient context (P7).** On `session_start`, when `$SANDESH_ADDRESS` + `$SANDESH_PROJECT` are set, the
   extension runs the home view once and injects it as compact context (`pi.sendUserMessage` is NOT used —
-  the harness's system-context seam is; ≤6 lines: address, listening, `unread: n`, `help[2]`). Nothing is
+  the harness's system-context seam is; ≤ 12 lines: the home envelope minus `bin` and `description` — verb/ok, project, address, listening, `unread: n`, context, `help[2]`, warnings). Nothing is
   injected when the vars are unset. This replaces the 0.3.x "wake disabled" warning.
 - **Unexported-identity nudge (P7, v1.2).** Every tool reads its identity from the process environment
   only; loading a project's `.env` into the environment is the shell's job (direnv, emitted by
