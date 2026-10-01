@@ -261,6 +261,21 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
     ]);
   });
 
+  test("sandesh_notify_start rejects a running address under another project with an error envelope", async () => {
+    const { fakePi, capturedTools, notifyDeferreds } = makeFakePi();
+    registerExtension(fakePi);
+    const { fakeCtx } = makeFakeCtx();
+    const tool = getTool(capturedTools, "sandesh_notify_start");
+
+    await callExecute(tool, { address: "Mainline - Alpha", project: "Alpha" }, fakeCtx);
+    const result = await callExecute(tool, { address: "Mainline - Alpha", project: "Beta" }, fakeCtx);
+    const env = decodeEnvelope(text(result));
+
+    expect(env.ok).toBe(false);
+    expect(String(env.error)).toContain("does not belong to project 'Beta'");
+    expect(notifyDeferreds.length).toBe(1);
+  });
+
   test("sandesh_notify_start returns watcher rows only for its project", async () => {
     const { fakePi, capturedTools } = makeFakePi();
     registerExtension(fakePi);

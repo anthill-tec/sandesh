@@ -100,6 +100,9 @@ export class WakeSupervisor {
   constructor(private readonly deps: WakeDeps) {}
 
   start(address: string, project: string): StartResult {
+    if (!address.endsWith(` - ${project}`)) {
+      throw new Error(`address '${address}' does not belong to project '${project}'`);
+    }
     const existing = this.entries.get(address);
     if (existing !== undefined && existing.running) {
       return { already: true, status: snapshot(existing) };

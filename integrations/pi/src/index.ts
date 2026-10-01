@@ -1086,7 +1086,14 @@ export default function registerExtension(pi: ExtensionAPI): void {
       if (!address || !project) {
         return textResult(envelopeText("notify_start", { ok: false, error: NOTIFY_START_UNRESOLVED }));
       }
-      const r = sup.start(address, project);
+      let r: ReturnType<WakeSupervisor["start"]>;
+      try {
+        r = sup.start(address, project);
+      } catch (err) {
+        return textResult(
+          envelopeText("notify_start", { ok: false, error: err instanceof Error ? err.message : String(err) }),
+        );
+      }
       return textResult(
         envelopeText(
           "notify_start",
@@ -1269,8 +1276,13 @@ export default function registerExtension(pi: ExtensionAPI): void {
     // Arming (§S5 / D4): only SANDESH_AUTOSTART=1 with both identity vars
     // starts the watcher — through the same start the tool uses.
     if (process.env.SANDESH_AUTOSTART === "1") {
-      if (self && project) sup.start(self, project);
-      else ctx.ui.notify(AUTOSTART_ENV_NOTICE, "warning");
+      if (self && project) {
+        try {
+          sup.start(self, project);
+        } catch (err) {
+          ctx.ui.notify(err instanceof Error ? err.message : String(err), "warning");
+        }
+      } else ctx.ui.notify(AUTOSTART_ENV_NOTICE, "warning");
     } else if (identified) {
       ctx.ui.notify(TOOL_STARTED_NOTICE, "info");
     }

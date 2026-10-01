@@ -482,6 +482,18 @@ describe("AC7 — one loop per address, concurrent addresses, stop/status", () =
     expect(execCalls.length).toBe(1); // nothing spawned by the second call
   });
 
+  test("start() for a running address under another project throws and leaves the watcher untouched", () => {
+    const { deps, execCalls } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Alpha", "Alpha");
+
+    expect(() => sup.start("Mainline - Alpha", "Beta")).toThrow("does not belong to project 'Beta'");
+    expect(execCalls.length).toBe(1);
+    expect(sup.status().map((w) => [w.address, w.project, w.running])).toEqual([
+      ["Mainline - Alpha", "Alpha", true],
+    ]);
+  });
+
   test("two different addresses run concurrently; status() reports both as running", () => {
     const { deps, execCalls } = makeDeps();
     const sup = new WakeSupervisor(deps);
