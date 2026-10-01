@@ -32,8 +32,7 @@ other running projects" after a VERIFY probe created a `Demo` project in the sha
   the repo), registers `atexit` cleanup, and **re-points `XDG_DATA_HOME` to it** — unconditionally, unless the
   incoming value already resolves under the system temp root (a harness-supplied temp store is respected).
   The dev shell exports `XDG_DATA_HOME=~/.local/share` globally, so "set to the real store" is the NORMAL
-  case and must be overridden, not refused. The only bypass is `SANDESH_TESTS_ALLOW_REAL_STORE=1` (never set;
-  exists so the intent is explicit). Test classes that need their own store use the shared
+  case and must be overridden, not refused. Test classes that need their own store use the shared
   `tests/_store_guard.TempStore` mixin: `setUp` → `self._tmp = tempfile.TemporaryDirectory(prefix=
   "sandesh-<test>-")` + `os.environ["XDG_DATA_HOME"] = self._tmp.name`; `tearDown` → close connections,
   restore the previous env value, `self._tmp.cleanup()` — so no test rolls its own. `sandesh_db.db_path()`
@@ -55,8 +54,8 @@ other running projects" after a VERIFY probe created a `Demo` project in the sha
   `XDG_DATA_HOME` unset → after import it is a path under `tempfile.gettempdir()`; with it set to
   `~/.local/share` → after import it is a DIFFERENT path under the temp root (re-pointed) and
   `sandesh_db.db_path()` resolves under that temp path; with it set to an existing dir under the temp root →
-  unchanged (respected); with `SANDESH_TESTS_ALLOW_REAL_STORE=1` → unchanged (bypass). The guard's temp dir
-  is removed at interpreter exit (assert after the subprocess ends).
+  unchanged (respected). The guard's temp dir is removed at interpreter exit (assert after the subprocess
+  ends).
 - **AC3** — Every `tests/test_*.py` imports `tests._store_guard` before any `sandesh` import. Subprocesses
   that run Sandesh use an explicit temporary `XDG_DATA_HOME`; guard-specific tests cover unset input.
 - **AC4** — Representative test files run standalone with `XDG_DATA_HOME` pointed at an isolated

@@ -150,7 +150,6 @@ class RepresentativeSuitesIsolatedStoreTest(unittest.TestCase):
         cls._isolated_xdg = tempfile.TemporaryDirectory(prefix="isolated-sandesh-hygiene-")
         env = dict(os.environ)
         env["XDG_DATA_HOME"] = cls._isolated_xdg.name
-        env.pop("SANDESH_TESTS_ALLOW_REAL_STORE", None)
         cls._results = {}
         for relative_path in _REPRESENTATIVE_FILES:
             path = os.path.join(_REPO_ROOT, relative_path)

@@ -333,9 +333,8 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
 - **The global store is shared by every project on the machine — tests/probes/agents MUST
   never write it (CR-SAN-049).** `tests/_store_guard.py` (imported first by every test module,
   with a self-contained bootstrap line) re-points `XDG_DATA_HOME` to a per-process tmpfs dir
-  (`/tmp/sandesh-tests-*`, atexit-cleaned) unless the incoming value is already temp-rooted;
-  `SANDESH_TESTS_ALLOW_REAL_STORE=1` is the explicit (never-used) bypass. Per-test stores: use
-  the `TempStore` mixin (setUp/tearDown, `self.connect()` tracked and closed). Subprocess tests
+  (`/tmp/sandesh-tests-*`, atexit-cleaned) unless the incoming value is already temp-rooted.
+  Per-test stores: use the `TempStore` mixin (setUp/tearDown, `self.connect()` tracked and closed). Subprocess tests
   spawning `sandesh` pass `env={..., "XDG_DATA_HOME": <temp>}` explicitly;
   `tests/test_dev_hygiene.py` scans for both rules. A manual probe must set the env INSIDE the
   subprocess env / `os.environ`, never as a shell prefix (tool wrappers can drop it — that is

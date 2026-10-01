@@ -6,8 +6,7 @@ Target contract — the not-yet-existing `tests/_store_guard.py`:
     prefix="sandesh-tests-")` under `tempfile.gettempdir()`, registers an
     `atexit` cleanup, and re-points `os.environ["XDG_DATA_HOME"]` to it —
     UNLESS the incoming value already resolves under the system temp root
-    (respected) or `SANDESH_TESTS_ALLOW_REAL_STORE=1` is set (bypass,
-    unchanged). Exposes `GUARD_TMP` (the per-process dir path) and
+    (respected). Exposes `GUARD_TMP` (the per-process dir path) and
     `temp_root()` (== `os.path.realpath(tempfile.gettempdir())`).
   * Exposes `TempStore`, a `unittest.TestCase` mixin: `setUp` creates its own
     `tempfile.TemporaryDirectory(prefix="sandesh-<something>-")` under the
@@ -292,30 +291,6 @@ class Ac2TempRootedValueRespectedTest(unittest.TestCase):
             data["guard_tmp"], self.existing,
             "GUARD_TMP is the guard's OWN dir, distinct from the respected XDG value",
         )
-
-
-class Ac2BypassEnvVarTest(unittest.TestCase):
-    """AC2 'bypass' case: SANDESH_TESTS_ALLOW_REAL_STORE=1 -> XDG_DATA_HOME is
-    left completely untouched, even when it points at a real-store-like
-    (non-temp) path."""
-
-    def setUp(self):
-        self.standin = tempfile.mkdtemp(prefix="sandesh-guard-test-bypass-", dir=_REPO_ROOT)
-
-    def tearDown(self):
-        shutil.rmtree(self.standin, ignore_errors=True)
-
-    def test_bypass_var_leaves_real_store_like_path_untouched(self):
-        env = _minimal_env(xdg=self.standin, extra={"SANDESH_TESTS_ALLOW_REAL_STORE": "1"})
-        proc = _run_snippet(_SNIPPET_REPORT_XDG_AND_DBPATH, env)
-        data = _parse_json_stdout(proc)
-
-        self.assertEqual(
-            data["xdg_after"], self.standin,
-            "SANDESH_TESTS_ALLOW_REAL_STORE=1 must bypass the guard entirely",
-        )
-        self.assertTrue(data["db_path"].startswith(self.standin))
-        self.assertEqual(os.listdir(self.standin), [])
 
 
 class ImportOrderGuardTest(unittest.TestCase):
