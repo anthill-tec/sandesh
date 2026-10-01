@@ -34,6 +34,7 @@ function makeFakePi() {
     // C0 only exercises registerTool; all other members are unused.
     exec: mock(async () => ({ stdout: "", stderr: "", code: 0, killed: false })),
     on: mock(() => {}),
+    registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
   } as unknown as ExtensionAPI;
 
   return { fakePi, capturedTools, registerTool };
@@ -44,13 +45,13 @@ function makeFakePi() {
 // ---------------------------------------------------------------------------
 
 describe("registerExtension — registration surface (AC1/AC2)", () => {
-  test("calls registerTool exactly 12 times", () => {
+  test("calls registerTool exactly 16 times", () => {
     const { fakePi, registerTool } = makeFakePi();
     registerExtension(fakePi);
-    expect(registerTool.mock.calls.length).toBe(12);
+    expect(registerTool.mock.calls.length).toBe(16); // CR-SAN-048 AC1: 12 verbs + sandesh_status + 3 notify
   });
 
-  test("registers exactly the 12 specified tool names", () => {
+  test("registers exactly the 16 specified tool names", () => {
     const { fakePi, capturedTools } = makeFakePi();
     registerExtension(fakePi);
     const names = capturedTools.map((t) => t.name).sort();
@@ -59,11 +60,15 @@ describe("registerExtension — registration surface (AC1/AC2)", () => {
       "sandesh_archive",
       "sandesh_fetch",
       "sandesh_inbox",
+      "sandesh_notify_start", // CR-SAN-048
+      "sandesh_notify_status", // CR-SAN-048
+      "sandesh_notify_stop", // CR-SAN-048
       "sandesh_register",
       "sandesh_reply",
       "sandesh_search",
       "sandesh_send",
       "sandesh_setup",
+      "sandesh_status", // CR-SAN-048
       "sandesh_thread",
       "sandesh_unarchive",
       "sandesh_unregister",
@@ -215,7 +220,7 @@ describe("registerExtension — promptSnippet + promptGuidelines (AC4)", () => {
   test("every tool has a non-empty promptSnippet string", () => {
     const { fakePi, capturedTools } = makeFakePi();
     registerExtension(fakePi);
-    expect(capturedTools.length).toBe(12);
+    expect(capturedTools.length).toBe(16); // CR-SAN-048 AC1
     for (const tool of capturedTools) {
       expect(
         typeof tool.promptSnippet,

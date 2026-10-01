@@ -1,0 +1,3 @@
+ADDRESS                KIND      STATUS    LISTENING  REGISTERED
+Mainline - Demo        mainline  active    ○ offline  <TS>
+Track 1 - Demo         track     active    ○ offline  <TS>

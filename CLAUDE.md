@@ -35,8 +35,10 @@ but nothing is Claude-specific anymore — it's a general agent-messaging primit
 ## Project Classification: Standalone Python CLI tool (+ planned MCP server)
 
 - Pure stdlib (`sqlite3`, `argparse`, `os`, `signal`, `uuid`, `socket`). No venv needed.
-- **Source of truth = this repo.** It is *installed* (copied) to the XDG data dir; edits
-  here require a re-`./install.sh` to take effect on the installed binary.
+- **Source of truth = this repo.** The local install is a **`uv tool` install of the
+  published PyPI release** (`sandesh-relay`) — update it with `uv tool upgrade sandesh-relay`
+  after a release, NOT `./install.sh` (legacy from-source path). Repo edits reach the
+  installed binary only through a PyPI release.
 - Provenance note: an earlier, pre-standalone copy lived in the user's Claude dotfiles
   at `~/.claude/scripts/sandesh/` (it imported a Claude-specific `schedule_db`). That
   copy is **superseded** by this repo and should be removed from the dotfiles to avoid
@@ -70,29 +72,37 @@ but nothing is Claude-specific anymore — it's a general agent-messaging primit
 sandesh/                         (this repo — source of truth)
 ├── sandesh/            the Python package (dist name: sandesh-relay; version from git tags via hatch-vcs)
 │   ├── sandesh_db.py   the library: schema + all operations (no CLI, no I/O loop)
-│   ├── cli.py          argparse CLI over the library (one binary, all subcommands)
-│   ├── notify.py       the blocking mailbox watcher (run() + a thin main)
+│   ├── cli.py          argparse CLI over the library (one binary, all subcommands; machine-mode
+│   │                   `--format toon|json` shaping — --fields/--limit/--full, help[], home view)
+│   ├── axi.py          the AXI envelope builder + toon/json serialisers + emit() (presentation only)
+│   ├── _toon.py        VENDORED TOON codec (verbatim copy of the fleet's toon.py; never edit — re-vendor)
+│   ├── _toon_provenance.py   TOON_SOURCE_SHA256 pin of the vendored codec (checked by tests/test_toon_vendor.py)
+│   ├── notify.py       the blocking mailbox watcher (run() + a thin main; final AXI envelope in machine mode)
 │   ├── mcp_server.py   the MCP adapter (12 tools; optional [mcp] extra)
 │   ├── migrate.py      the yoyo-backed migration engine (optional [migrate] extra)
 │   ├── migrations/     0001-baseline … 0005-message-fts (+ rollbacks)
 │   ├── schema/current-schema.json   committed snapshot (CI gate: == migrate --dump-schema)
 │   └── data/usage-scenarios.md      the sandesh://usage MCP resource content
-├── integrations/pi/    the Pi extension (bun/TS; npm @anthill-tec/sandesh-pi; 12 tools + native wake)
+├── integrations/pi/    the Pi extension (bun/TS; npm @anthill-tec/sandesh-pi; 16 tools + native wake)
 ├── install.sh          builds a venv at $XDG_DATA_HOME/sandesh/.venv, pip-installs [mcp,migrate],
 │                       symlinks launchers, then migrate --all → consolidate → reindex → admin assign
-├── tests/              41 test files (run against a temp store; no install needed)
+├── tests/              65 test files (run against a temp store; no install needed)
+│   ├── _store_guard.py the real-store guard (imported FIRST by every test module) + the TempStore mixin (CR-SAN-049)
+│   ├── test_dev_hygiene.py  scans every test for the guard-first import + XDG_DATA_HOME in every subprocess env
+│   └── golden/         pre-CR-SAN-047 human-mode stdout goldens (byte-identical human mode gate)
 ├── README.md / RELEASING.md / pyproject.toml
 └── CLAUDE.md           (this file)
 
-Installed (by install.sh) + runtime data:
-~/.local/share/sandesh/          ($XDG_DATA_HOME/sandesh)
-├── .venv/                       the installed package + entry points
+Installed (uv tool, from the PyPI release) + runtime data:
+~/.local/share/uv/tools/sandesh-relay/   the installed package (uv-managed venv;
+                                 entry points `sandesh`, `sandesh-mcp`)
+~/.local/share/sandesh/          ($XDG_DATA_HOME/sandesh — runtime data, install-method-independent)
 ├── sandesh.db                   the ONE global DB (WAL) — all projects; address, message,
 │                                message_recipient, notifier, project, admin (+ message_fts index)
 └── projects/<project_id>/
     ├── messages/msg-<id>.md     message bodies (full absolute paths stored in the DB)
     └── sandesh.db.pre-global    legacy per-project DB, kept as backup after consolidation
-~/.local/bin/sandesh             symlink → ~/.local/share/sandesh/.venv/bin/sandesh (PATH entry)
+~/.local/bin/sandesh             uv-managed shim (PATH entry; likewise sandesh-mcp)
 ```
 
 ---
@@ -215,10 +225,15 @@ liveness table is crash-safe rather than relying on a shutdown hook.
 
 ```bash
 # tests (no install needed — run against a temp store; per-file, discovery is broken)
-PYTHONPATH=. .venv/bin/python tests/<test_file>.py    # dev venv has [mcp,migrate]
+.venv/bin/python tests/<test_file>.py    # PYTHONPATH=. optional — each test carries its own bootstrap
+# dev venv: pip install -e '.[mcp,migrate,dev]'   ([dev] = twine>=7 / packaging>=26.3 / build /
+#                                                  xmlrunner / coverage — the same floors CI uses)
 
-# install / re-install (venv at ~/.local/share/sandesh/.venv + migrate/consolidate/reindex)
-SANDESH_ADMIN=<name> ./install.sh
+# install / update the local tool from the published PyPI release (uv tool)
+uv tool install 'sandesh-relay[mcp,migrate]'   # first install
+uv tool upgrade sandesh-relay                  # update after each release
+# LEGACY from-source path (venv + migrate/consolidate/reindex + admin assign):
+# SANDESH_ADMIN=<name> ./install.sh
 
 # use (installed launcher; ~/.local/bin must be on PATH, else call by full path)
 sandesh setup --project Demo
@@ -299,6 +314,31 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
   poll loop, retrying on the poll cadence (bounded by the deadline → exit 2) instead of
   crashing. Non-lock `OperationalError`s still propagate. `busy_timeout` is a per-connection
   pragma (NOT schema) — no migration.
+- **`--format` is presentation-only and shares the `--project` idiom (CR-SAN-047).**
+  `--format {human,toon,json}` lives on a `fmt_common` parent (`default=argparse.SUPPRESS`) that
+  the `common` parent inherits and that the ten project-free/own-`--project` verbs (search, grant,
+  revoke, archive, unarchive, tombstone, migrate, consolidate, reindex, init) take directly, so it
+  works before *or* after EVERY verb (resolved `args.format` → `$SANDESH_FORMAT` → `human`);
+  removing SUPPRESS breaks one position, exactly as for `--project`. Machine-mode **usage
+  errors** (unknown flag/verb, bad `--fields`, missing subcommand) are handled by a
+  **pre-scan** of argv + `$SANDESH_FORMAT` *before* argparse runs, and `_Parser.error` is
+  overridden so argparse errors become `ok:false error help[]` envelopes on stdout (exit 2) —
+  human mode keeps argparse's usage on stderr. **`sandesh_db` stays pure**: ALL AXI shaping
+  (envelope, `--fields`/`--limit` slicing, 500-char body truncation + `--full`, `help[]`
+  templates, the home view, idempotent `result: already|absent`) lives in `cli.py`/`axi.py`;
+  `notify.py` only emits its final envelope. The TOON codec is **VENDORED** (`_toon.py`, a
+  verbatim copy of the fleet's `toon.py`, provenance-pinned by `_toon_provenance.py` +
+  `tests/test_toon_vendor.py` hashing the file minus its header) — **never edit it**; to
+  pick up an upstream change, re-vendor the whole file and re-pin `TOON_SOURCE_SHA256`.
+- **The global store is shared by every project on the machine — tests/probes/agents MUST
+  never write it (CR-SAN-049).** `tests/_store_guard.py` (imported first by every test module,
+  with a self-contained bootstrap line) re-points `XDG_DATA_HOME` to a per-process tmpfs dir
+  (`/tmp/sandesh-tests-*`, atexit-cleaned) unless the incoming value is already temp-rooted.
+  Per-test stores: use the `TempStore` mixin (setUp/tearDown, `self.connect()` tracked and closed). Subprocess tests
+  spawning `sandesh` pass `env={..., "XDG_DATA_HOME": <temp>}` explicitly;
+  `tests/test_dev_hygiene.py` scans for both rules. A manual probe must set the env INSIDE the
+  subprocess env / `os.environ`, never as a shell prefix (tool wrappers can drop it — that is
+  how a stray `Demo` project once landed in the real store).
 
 ---
 
@@ -311,8 +351,8 @@ archive, unarchive (Wave 6 — tombstone/grant/revoke/admin are NEVER exposed), 
 can be derived (and accepted-but-unused on the recipient-keyed tools). Errors map
 `ValueError`/`PermissionError` → `ToolError`. **The wake is NOT in MCP** — `notify` stays a
 background process (the agent's host re-invokes it; see the wake section above). The Pi
-extension (`integrations/pi/`) mirrors the same 12-tool surface over the CLI, with a native
-wake loop (`sendUserMessage(…, {deliverAs:"followUp"})`) and a ≥0.2.0 CLI session gate.
+extension (`integrations/pi/`) exposes 16 tools over the CLI, with a native
+wake loop (`sendUserMessage(…, {deliverAs:"followUp"})`) and a minimum-CLI-version session gate (`MIN_CLI_VERSION` in `integrations/pi/src/index.ts`).
 
 ---
 

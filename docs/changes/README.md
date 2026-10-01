@@ -1,6 +1,9 @@
 # CR Queue — Sandesh
 
-Single source of truth for change requests. Pick the next `PENDING` CR by phase + dependencies.
+> **Deprecated for state tracking (2026-09-29).** Crucible is the single source of truth for CR
+> planning, ordering, dependencies, release/wave membership and status — ask it (`next`, `status`,
+> `queue`), not this file. The table below is a frozen historical record through CR-SAN-046; new CRs
+> are not added here. Specs remain in this folder (`CR-SAN-NNN-*.md`) for scope and ACs.
 
 | CR | Title | Phase | Status | Depends on | Shipped |
 |---|---|---|---|---|---|

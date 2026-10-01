@@ -26,10 +26,13 @@ Run:
       --agent CR-SAN-040-C1-RED
 """
 
+import os, sys; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root — CR-SAN-049 guard bootstrap
+import tests._store_guard  # noqa: F401 — real-store guard (CR-SAN-049): must be the first non-bootstrap import
 import io
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -71,12 +74,16 @@ def _venv_python() -> str:
 def _run_notify_help() -> str:
     """Run 'sandesh notify --help' via the project venv and return stdout + stderr."""
     venv_python = _venv_python()
-    result = subprocess.run(
-        [venv_python, "-m", "sandesh.cli", "notify", "--help"],
-        capture_output=True,
-        text=True,
-        cwd=_REPO_ROOT,
-    )
+    # "--help" never touches the store, but "python -m sandesh.cli" must still be spawned
+    # with a temp XDG_DATA_HOME (CR-SAN-049 §S3 subprocess discipline).
+    with tempfile.TemporaryDirectory(prefix="sandesh-user-guide-") as xdg:
+        result = subprocess.run(
+            [venv_python, "-m", "sandesh.cli", "notify", "--help"],
+            capture_output=True,
+            text=True,
+            cwd=_REPO_ROOT,
+            env={**os.environ, "XDG_DATA_HOME": xdg},
+        )
     return result.stdout + result.stderr
 
 

@@ -75,6 +75,7 @@ function makeFakePi(probeResult: ExecResult | "reject") {
   });
 
   const fakePi = {
+    registerCommand: mock(() => {}), // CR-SAN-048: the extension registers /sandesh-watcher
     registerTool: mock((tool: CapturedTool) => {
       capturedTools.set(tool.name, tool);
     }),
@@ -109,8 +110,9 @@ const fakeSessionStartEvent: SessionStartEvent = {
 // AC7d — verbs always registered regardless of probe outcome (must pass count check)
 // ---------------------------------------------------------------------------
 
-describe("AC7d — 12 tools registered regardless of probe outcome", () => {
-  test("all 12 tools registered when sandesh is present (code 0)", () => {
+describe("AC7d — 16 tools registered regardless of probe outcome", () => {
+  // CR-SAN-048 AC1: 12 verbs + sandesh_status + 3 notify tools = 16.
+  test("all 16 tools registered when sandesh is present (code 0)", () => {
     const { fakePi, capturedTools } = makeFakePi({
       stdout: "sandesh 1.0.0",
       stderr: "",
@@ -118,10 +120,10 @@ describe("AC7d — 12 tools registered regardless of probe outcome", () => {
       killed: false,
     });
     registerExtension(fakePi);
-    expect(capturedTools.size).toBe(12);
+    expect(capturedTools.size).toBe(16);
   });
 
-  test("all 12 tools registered when sandesh is missing (non-zero code)", () => {
+  test("all 16 tools registered when sandesh is missing (non-zero code)", () => {
     const { fakePi, capturedTools } = makeFakePi({
       stdout: "",
       stderr: "sandesh: command not found",
@@ -129,13 +131,13 @@ describe("AC7d — 12 tools registered regardless of probe outcome", () => {
       killed: false,
     });
     registerExtension(fakePi);
-    expect(capturedTools.size).toBe(12);
+    expect(capturedTools.size).toBe(16);
   });
 
-  test("all 12 tools registered when probe rejects (exec throws)", () => {
+  test("all 16 tools registered when probe rejects (exec throws)", () => {
     const { fakePi, capturedTools } = makeFakePi("reject");
     registerExtension(fakePi);
-    expect(capturedTools.size).toBe(12);
+    expect(capturedTools.size).toBe(16);
   });
 
   test("registered tool names include all 9 expected names", () => {
@@ -302,6 +304,8 @@ describe("AC7b — missing CLI (non-zero code) → notice surfaced, no throw", (
       msg.includes("install.sh") ||
       msg.includes("PATH");
     expect(mentionsInstallOption).toBe(true);
+    expect(msg).toContain("uv tool install sandesh-relay");
+    expect(msg).toContain("pipx install sandesh-relay");
   });
 
   test("non-zero exit code → notice is warning or error severity (not silent info)", async () => {

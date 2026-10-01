@@ -25,6 +25,8 @@ Expected RED:
       --tests tests.test_project_id_validation --agent CR-SAN-045-C1-RED
 """
 import os
+import os, sys; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root — CR-SAN-049 guard bootstrap
+import tests._store_guard  # noqa: F401 — real-store guard (CR-SAN-049): must be the first non-bootstrap import
 import shutil
 import sys
 import tempfile
