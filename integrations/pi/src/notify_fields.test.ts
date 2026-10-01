@@ -171,6 +171,7 @@ describe("sandesh_notify_status/start — fields knob (CR-SAN-050 §S5, AC5)", (
     expect(env.error as string).toContain("bogus");
     for (const f of ALL_FIELDS) {
       expect(env.error as string).toContain(f);
+      expect(env.help?.join(" ")).toContain(f);
     }
   });
 

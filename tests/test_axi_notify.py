@@ -274,6 +274,7 @@ class NotifyExit3And4Test(_NotifyFastPathFixture):
         self.assertTrue(axi["error"], "error must be non-empty")
         self.assertIn("tombstoned", axi["error"].lower())
         self.assertTrue(axi.get("help"))
+        self.assertTrue(all("do not restart" in h.lower() for h in axi["help"]), axi["help"])
         self.assertEqual(axi["unread"], [])
 
     def test_toon_exit4_evicted_ok_false_error_names_evicted(self):
@@ -291,6 +292,7 @@ class NotifyExit3And4Test(_NotifyFastPathFixture):
         self.assertTrue(axi["error"], "error must be non-empty")
         self.assertIn("evicted", axi["error"].lower())
         self.assertTrue(axi.get("help"))
+        self.assertTrue(all("do not restart" in h.lower() for h in axi["help"]), axi["help"])
         self.assertEqual(axi["unread"], [])
 
 
@@ -312,6 +314,7 @@ class NotifyExit1Test(_NotifyFastPathFixture):
         self.assertIs(axi["ok"], False)
         self.assertEqual(axi["error"], "bad address format")
         self.assertTrue(axi.get("help"))
+        self.assertFalse(any("do not restart" in h.lower() for h in axi["help"]), axi["help"])
         self.assertEqual(axi["unread"], [])
 
     def test_toon_exit1_is_active_false_error_names_not_registered(self):

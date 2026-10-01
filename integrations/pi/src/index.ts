@@ -411,6 +411,16 @@ function envelopeText(verb: string, fields: Record<string, unknown>, context: En
   return encode({ axi: { verb, ok: true, ...fields, context: ctx, warnings: [] } });
 }
 
+/** An `ok:false` in-extension envelope carrying its recovery `help[]`. */
+function errorEnvelopeText(
+  verb: string,
+  error: string,
+  help: string[],
+  context: EnvelopeContext = {},
+): string {
+  return envelopeText(verb, { ok: false, error, help }, context);
+}
+
 function notifyContextProject(
   sup: WakeSupervisor,
   address?: string,
@@ -497,6 +507,8 @@ function resolveWatcherFields(
   }
   return { ok: true, fields: fields.filter(isWatcherField) };
 }
+
+const FIELDS_HELP = `Pass \`fields\` from: ${WATCHER_FIELDS.join(", ")} — or omit it.`;
 
 /** One `watchers[]` row with the chosen columns; an absent `pid` renders `null`. */
 function watcherRow(w: WatcherStatus, fields: readonly WatcherField[]): Record<string, unknown> {
@@ -1079,19 +1091,25 @@ export default function registerExtension(pi: ExtensionAPI): void {
       latestUi = ctx.ui;
       const fields = resolveWatcherFields(params.fields);
       if (!fields.ok) {
-        return textResult(envelopeText("notify_start", { ok: false, error: fields.error }));
+        return textResult(errorEnvelopeText("notify_start", fields.error, [FIELDS_HELP]));
       }
       const address = params.address ?? process.env.SANDESH_ADDRESS;
       const project = params.project ?? process.env.SANDESH_PROJECT;
       if (!address || !project) {
-        return textResult(envelopeText("notify_start", { ok: false, error: NOTIFY_START_UNRESOLVED }));
+        return textResult(
+          errorEnvelopeText("notify_start", NOTIFY_START_UNRESOLVED, [
+            "Pass `address` and `project`, or set $SANDESH_ADDRESS and $SANDESH_PROJECT, then retry sandesh_notify_start.",
+          ]),
+        );
       }
       let r: ReturnType<WakeSupervisor["start"]>;
       try {
         r = sup.start(address, project);
       } catch (err) {
         return textResult(
-          envelopeText("notify_start", { ok: false, error: err instanceof Error ? err.message : String(err) }),
+          errorEnvelopeText("notify_start", err instanceof Error ? err.message : String(err), [
+            "Pass an `address` whose project part matches `project`, then retry sandesh_notify_start.",
+          ]),
         );
       }
       return textResult(
@@ -1121,10 +1139,16 @@ export default function registerExtension(pi: ExtensionAPI): void {
       latestUi = ctx.ui;
       const allWatchers = sup.status();
       const error = aggregateProjectError(allWatchers, params.project, "sandesh_notify_status");
-      if (error) return textResult(envelopeText("notify_status", { ok: false, error }));
+      if (error) {
+        return textResult(
+          errorEnvelopeText("notify_status", error, [
+            "Pass `project` to scope the watcher list, then retry sandesh_notify_status.",
+          ]),
+        );
+      }
       const fields = resolveWatcherFields(params.fields);
       if (!fields.ok) {
-        return textResult(envelopeText("notify_status", { ok: false, error: fields.error }));
+        return textResult(errorEnvelopeText("notify_status", fields.error, [FIELDS_HELP]));
       }
       return textResult(
         envelopeText(
@@ -1153,7 +1177,13 @@ export default function registerExtension(pi: ExtensionAPI): void {
       const watchers = sup.status();
       if (params.address === undefined) {
         const error = aggregateProjectError(watchers, params.project, "sandesh_notify_stop");
-        if (error) return textResult(envelopeText("notify_stop", { ok: false, error }));
+        if (error) {
+          return textResult(
+            errorEnvelopeText("notify_stop", error, [
+              "Pass `project` (or an `address`) to scope the stop, then retry sandesh_notify_stop.",
+            ]),
+          );
+        }
       }
       const project = notifyContextProject(sup, params.address, params.project);
       const { stopped } = stopWatchers(sup, params.address, params.project);

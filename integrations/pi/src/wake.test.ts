@@ -273,6 +273,7 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
 
     expect(env.ok).toBe(false);
     expect(String(env.error)).toContain("does not belong to project 'Beta'");
+    expect(env.help?.length).toBeGreaterThan(0);
     expect(notifyDeferreds.length).toBe(1);
   });
 
@@ -363,6 +364,7 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
       expect(env.error).toBeDefined();
       expect(env.error as string).toContain("SANDESH_ADDRESS");
       expect(env.error as string).toContain("SANDESH_PROJECT");
+      expect(env.help?.join(" ")).toContain("sandesh_notify_start");
       expect(notifyDeferreds.length).toBe(0); // nothing spawned — an error result, not a throw
     } finally {
       restoreEnv();
@@ -406,10 +408,12 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
       const unscopedStatus = decodeEnvelope(text(await callExecute(statusTool, {}, fakeCtx)));
       expect(unscopedStatus.ok).toBe(false);
       expect(unscopedStatus.error as string).toContain("pass project");
+      expect(unscopedStatus.help?.join(" ")).toContain("sandesh_notify_status");
 
       const unscopedStop = decodeEnvelope(text(await callExecute(stopTool, {}, fakeCtx)));
       expect(unscopedStop.ok).toBe(false);
       expect(unscopedStop.error as string).toContain("pass project");
+      expect(unscopedStop.help?.join(" ")).toContain("sandesh_notify_stop");
       expect(notifyDeferreds.every((deferred) => !deferred.signal?.aborted)).toBe(true);
 
       const alphaStatus = decodeEnvelope(text(await callExecute(

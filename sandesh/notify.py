@@ -48,6 +48,13 @@ DEFAULT_TIMEOUT_SECS = 14400  # 4h
 _OK_EXITS = (0, 2, 5)  # mail / timeout / dedup are normal outcomes → ok:true
 
 
+_DEFAULT_RECOVERY_HELP = ["Resolve the reported error before restarting the watcher."]
+_RECOVERY_HELP = {
+    3: ["Do not restart this watcher: the address was tombstoned and must stay offline."],
+    4: ["Do not restart this watcher: another notifier owns the address."],
+}
+
+
 def _say(msg, machine):
     """One progress/outcome line: stdout in human mode, stderr in machine mode
     (machine stdout is reserved for the single final envelope)."""
@@ -64,7 +71,7 @@ def _finish(fmt, out, project_id, address, code, unread=None, error=None, warnin
               "unread": sorted(unread or [])}
     if error is not None:
         fields["error"] = error
-    help_ = ["Resolve the reported error before restarting the watcher."] if error is not None else []
+    help_ = _RECOVERY_HELP.get(code, _DEFAULT_RECOVERY_HELP) if error is not None else []
     env = axi.Envelope("notify", code in _OK_EXITS, fields,
                        context={"project": project_id, "address": address},
                        help=help_, warnings=warnings)
