@@ -109,8 +109,8 @@ function nudgeUnexportedIdentity(ctx: ExtensionContext): void {
  * install.sh) and mentions PATH (§S4 / AC7).
  */
 const MISSING_CLI_NOTICE =
-  "sandesh CLI not found on PATH. Install it with `uv tool install sandesh` or " +
-  "`pipx install sandesh` (or run the repo's install.sh), then ensure it is on your PATH.";
+  "sandesh CLI not found on PATH. Install it with `uv tool install sandesh-relay` or " +
+  "`pipx install sandesh-relay` (or run the repo's install.sh), then ensure it is on your PATH.";
 
 /**
  * Minimum `sandesh` CLI version this extension requires (CR-SAN-032 §S3 / AC3).
@@ -124,7 +124,7 @@ const MIN_CLI_VERSION: readonly [number, number, number] = [0, 4, 0];
  */
 const OUTDATED_CLI_NOTICE =
   "sandesh CLI is too old for this extension: version 0.4.0 or newer is required. " +
-  "Upgrade it with `uv tool install sandesh` or `pipx upgrade sandesh` " +
+  "Upgrade it with `uv tool upgrade sandesh-relay` or `pipx upgrade sandesh-relay` " +
   "(or re-run the repo's install.sh).";
 
 /**
@@ -411,16 +411,56 @@ function envelopeText(verb: string, fields: Record<string, unknown>, context: En
   return encode({ axi: { verb, ok: true, ...fields, context: ctx, warnings: [] } });
 }
 
-/**
- * The `context.project` for the notify_status/notify_stop envelopes (PRD §4.1:
- * always present when known): the watcher's project — the one addressed when
- * given, else the first known watcher — falling back to `$SANDESH_PROJECT`.
- * Returns undefined only when neither exists (the key is then omitted).
- */
-function notifyContextProject(sup: WakeSupervisor, address?: string): string | undefined {
+/** An `ok:false` in-extension envelope carrying its recovery `help[]`. */
+function errorEnvelopeText(
+  verb: string,
+  error: string,
+  help: string[],
+  context: EnvelopeContext = {},
+): string {
+  return envelopeText(verb, { ok: false, error, help }, context);
+}
+
+function notifyContextProject(
+  sup: WakeSupervisor,
+  address?: string,
+  projectFilter?: string,
+): string | undefined {
+  if (projectFilter !== undefined) return projectFilter;
   const watchers = sup.status();
-  const watcher = address !== undefined ? watchers.find((w) => w.address === address) : watchers[0];
-  return watcher?.project ?? process.env.SANDESH_PROJECT;
+  if (address !== undefined) {
+    return watchers.find((w) => w.address === address)?.project || process.env.SANDESH_PROJECT || undefined;
+  }
+  return watchers[0]?.project || process.env.SANDESH_PROJECT || undefined;
+}
+
+function aggregateProjectError(
+  watchers: WatcherStatus[],
+  project: string | undefined,
+  operation: string,
+): string | undefined {
+  if (project !== undefined || new Set(watchers.map((watcher) => watcher.project)).size < 2) return undefined;
+  return `watchers span multiple projects; pass project to scope ${operation}`;
+}
+
+function scopedWatchers(watchers: WatcherStatus[], project: string | undefined): WatcherStatus[] {
+  return project === undefined ? watchers : watchers.filter((watcher) => watcher.project === project);
+}
+
+function stopWatchers(
+  sup: WakeSupervisor,
+  address: string | undefined,
+  project: string | undefined,
+): { stopped: number } {
+  const watchers = sup.status();
+  if (address !== undefined) {
+    const watcher = watchers.find((entry) => entry.address === address);
+    if (project !== undefined && watcher?.project !== project) return { stopped: 0 };
+    return sup.stop(address);
+  }
+  const stopped = scopedWatchers(watchers, project)
+    .reduce((count, watcher) => count + sup.stop(watcher.address).stopped, 0);
+  return { stopped };
 }
 
 /**
@@ -468,6 +508,8 @@ function resolveWatcherFields(
   return { ok: true, fields: fields.filter(isWatcherField) };
 }
 
+const FIELDS_HELP = `Pass \`fields\` from: ${WATCHER_FIELDS.join(", ")} — or omit it.`;
+
 /** One `watchers[]` row with the chosen columns; an absent `pid` renders `null`. */
 function watcherRow(w: WatcherStatus, fields: readonly WatcherField[]): Record<string, unknown> {
   const row: Record<string, unknown> = {};
@@ -488,7 +530,7 @@ function watcherLines(watchers: WatcherStatus[]): string {
  * watcher for `$SANDESH_ADDRESS` is running (any watcher, when the env is unset).
  */
 function watcherState(sup: WakeSupervisor): "running" | "stopped" {
-  const self = process.env.SANDESH_ADDRESS;
+  const self = process.env.SANDESH_ADDRESS || undefined;
   const running = sup.status().some((w) => w.running && (self === undefined || w.address === self));
   return running ? "running" : "stopped";
 }
@@ -628,10 +670,12 @@ interface NotifyStartParams {
 
 interface NotifyStatusParams {
   fields?: string[];
+  project?: string;
 }
 
 interface NotifyStopParams {
   address?: string;
+  project?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1047,18 +1091,31 @@ export default function registerExtension(pi: ExtensionAPI): void {
       latestUi = ctx.ui;
       const fields = resolveWatcherFields(params.fields);
       if (!fields.ok) {
-        return textResult(envelopeText("notify_start", { ok: false, error: fields.error }));
+        return textResult(errorEnvelopeText("notify_start", fields.error, [FIELDS_HELP]));
       }
       const address = params.address ?? process.env.SANDESH_ADDRESS;
       const project = params.project ?? process.env.SANDESH_PROJECT;
       if (!address || !project) {
-        return textResult(envelopeText("notify_start", { ok: false, error: NOTIFY_START_UNRESOLVED }));
+        return textResult(
+          errorEnvelopeText("notify_start", NOTIFY_START_UNRESOLVED, [
+            "Pass `address` and `project`, or set $SANDESH_ADDRESS and $SANDESH_PROJECT, then retry sandesh_notify_start.",
+          ]),
+        );
       }
-      const r = sup.start(address, project);
+      let r: ReturnType<WakeSupervisor["start"]>;
+      try {
+        r = sup.start(address, project);
+      } catch (err) {
+        return textResult(
+          errorEnvelopeText("notify_start", err instanceof Error ? err.message : String(err), [
+            "Pass an `address` whose project part matches `project`, then retry sandesh_notify_start.",
+          ]),
+        );
+      }
       return textResult(
         envelopeText(
           "notify_start",
-          { already: r.already, watchers: sup.status().map((w) => watcherRow(w, fields.fields)) },
+          { already: r.already, watchers: scopedWatchers(sup.status(), project).map((w) => watcherRow(w, fields.fields)) },
           { project, address },
         ),
       );
@@ -1071,20 +1128,33 @@ export default function registerExtension(pi: ExtensionAPI): void {
     label: "Sandesh: Notify Status",
     description:
       "List the in-session wake watchers: address, running, lastExit by default; " +
+      "`project` scopes the list and is required when watchers span projects; " +
       "`fields` selects any of address, project, running, pid, startedAt, lastExit, lastIds, timeoutExits.",
-    promptSnippet: "List your wake watchers and whether each is running.",
-    parameters: Type.Object({ fields: watcherFieldsParam }),
+    promptSnippet: "List your wake watchers, optionally scoped to a project.",
+    parameters: Type.Object({
+      fields: watcherFieldsParam,
+      project: Type.Optional(Type.String({ minLength: 1, description: "Project to limit the watcher list to." })),
+    }),
     execute: async (_callId, params: NotifyStatusParams, _signal, _onUpdate, ctx) => {
       latestUi = ctx.ui;
+      const allWatchers = sup.status();
+      const error = aggregateProjectError(allWatchers, params.project, "sandesh_notify_status");
+      if (error) {
+        return textResult(
+          errorEnvelopeText("notify_status", error, [
+            "Pass `project` to scope the watcher list, then retry sandesh_notify_status.",
+          ]),
+        );
+      }
       const fields = resolveWatcherFields(params.fields);
       if (!fields.ok) {
-        return textResult(envelopeText("notify_status", { ok: false, error: fields.error }));
+        return textResult(errorEnvelopeText("notify_status", fields.error, [FIELDS_HELP]));
       }
       return textResult(
         envelopeText(
           "notify_status",
-          { watchers: sup.status().map((w) => watcherRow(w, fields.fields)) },
-          { project: notifyContextProject(sup) },
+          { watchers: scopedWatchers(allWatchers, params.project).map((w) => watcherRow(w, fields.fields)) },
+          { project: notifyContextProject(sup, undefined, params.project) },
         ),
       );
     },
@@ -1094,38 +1164,78 @@ export default function registerExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "sandesh_notify_stop",
     label: "Sandesh: Notify Stop",
-    description: "Stop the wake watcher for an address, or every watcher when address is omitted.",
-    promptSnippet: "Stop your wake watcher(s).",
+    description:
+      "Stop one watcher by address, or scope an aggregate stop with `project` " +
+      "when watchers span projects.",
+    promptSnippet: "Stop a watcher or a project-scoped watcher set.",
     parameters: Type.Object({
-      address: Type.Optional(Type.String({ description: "Address whose watcher to stop; omit to stop all." })),
+      address: Type.Optional(Type.String({ description: "Address whose watcher to stop." })),
+      project: Type.Optional(Type.String({ minLength: 1, description: "Project to limit an aggregate stop to." })),
     }),
     execute: async (_callId, params: NotifyStopParams, _signal, _onUpdate, ctx) => {
       latestUi = ctx.ui;
-      // Resolve the project before stop() so the entry's project is read while
-      // it is still the addressed watcher (stop keeps entries; this is just order).
-      const project = notifyContextProject(sup, params.address);
-      const { stopped } = sup.stop(params.address);
+      const watchers = sup.status();
+      if (params.address === undefined) {
+        const error = aggregateProjectError(watchers, params.project, "sandesh_notify_stop");
+        if (error) {
+          return textResult(
+            errorEnvelopeText("notify_stop", error, [
+              "Pass `project` (or an `address`) to scope the stop, then retry sandesh_notify_stop.",
+            ]),
+          );
+        }
+      }
+      const project = notifyContextProject(sup, params.address, params.project);
+      const { stopped } = stopWatchers(sup, params.address, params.project);
       return textResult(envelopeText("notify_stop", { stopped }, { project, address: params.address }));
     },
   });
 
-  // /sandesh-watcher status | stop [address] — the user-facing view of the supervisor.
   pi.registerCommand("sandesh-watcher", {
-    description: "Sandesh wake watchers: /sandesh-watcher status | stop [address]",
+    description: "Sandesh wake watchers: /sandesh-watcher status [--project <id>] | stop [address] [--project <id>]",
     handler: async (args, ctx) => {
       latestUi = ctx.ui;
       const [sub = "status", ...rest] = args.trim().split(/\s+/);
+      let project: string | undefined;
+      const projectIndex = rest.indexOf("--project");
+      if (projectIndex !== -1) {
+        const value = rest[projectIndex + 1];
+        if (!value || value.startsWith("--")) {
+          ctx.ui.notify("usage: /sandesh-watcher status [--project <id>] | stop [address] [--project <id>]", "warning");
+          return;
+        }
+        project = value;
+        rest.splice(projectIndex, 2);
+      }
       const address = rest.length > 0 ? rest.join(" ") : undefined;
       if (sub === "stop") {
-        const { stopped } = sup.stop(address);
+        const watchers = sup.status();
+        if (address === undefined) {
+          const error = aggregateProjectError(watchers, project, "sandesh-watcher stop");
+          if (error) {
+            ctx.ui.notify(`${error}; use /sandesh-watcher stop --project <id>`, "warning");
+            return;
+          }
+        }
+        const { stopped } = stopWatchers(sup, address, project);
         ctx.ui.notify(`Sandesh watchers stopped: ${stopped}`, "info");
         return;
       }
       if (sub !== "status" && sub !== "") {
-        ctx.ui.notify("usage: /sandesh-watcher status | stop [address]", "warning");
+        ctx.ui.notify("usage: /sandesh-watcher status [--project <id>] | stop [address] [--project <id>]", "warning");
         return;
       }
-      ctx.ui.notify(watcherLines(sup.status()), "info");
+      if (address !== undefined) {
+        ctx.ui.notify("usage: /sandesh-watcher status [--project <id>]", "warning");
+        return;
+      }
+      const watchers = sup.status();
+      const error = aggregateProjectError(watchers, project, "sandesh-watcher status");
+      if (error) {
+        ctx.ui.notify(`${error}; use /sandesh-watcher status --project <id>`, "warning");
+        return;
+      }
+      ctx.ui.notify(watcherLines(scopedWatchers(watchers, project)), "info");
     },
   });
 
@@ -1196,8 +1306,13 @@ export default function registerExtension(pi: ExtensionAPI): void {
     // Arming (§S5 / D4): only SANDESH_AUTOSTART=1 with both identity vars
     // starts the watcher — through the same start the tool uses.
     if (process.env.SANDESH_AUTOSTART === "1") {
-      if (self && project) sup.start(self, project);
-      else ctx.ui.notify(AUTOSTART_ENV_NOTICE, "warning");
+      if (self && project) {
+        try {
+          sup.start(self, project);
+        } catch (err) {
+          ctx.ui.notify(err instanceof Error ? err.message : String(err), "warning");
+        }
+      } else ctx.ui.notify(AUTOSTART_ENV_NOTICE, "warning");
     } else if (identified) {
       ctx.ui.notify(TOOL_STARTED_NOTICE, "info");
     }

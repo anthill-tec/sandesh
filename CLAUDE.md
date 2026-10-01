@@ -83,7 +83,7 @@ sandesh/                         (this repo — source of truth)
 │   ├── migrations/     0001-baseline … 0005-message-fts (+ rollbacks)
 │   ├── schema/current-schema.json   committed snapshot (CI gate: == migrate --dump-schema)
 │   └── data/usage-scenarios.md      the sandesh://usage MCP resource content
-├── integrations/pi/    the Pi extension (bun/TS; npm @anthill-tec/sandesh-pi; 12 tools + native wake)
+├── integrations/pi/    the Pi extension (bun/TS; npm @anthill-tec/sandesh-pi; 16 tools + native wake)
 ├── install.sh          builds a venv at $XDG_DATA_HOME/sandesh/.venv, pip-installs [mcp,migrate],
 │                       symlinks launchers, then migrate --all → consolidate → reindex → admin assign
 ├── tests/              65 test files (run against a temp store; no install needed)
@@ -315,8 +315,10 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
   crashing. Non-lock `OperationalError`s still propagate. `busy_timeout` is a per-connection
   pragma (NOT schema) — no migration.
 - **`--format` is presentation-only and shares the `--project` idiom (CR-SAN-047).**
-  `--format {human,toon,json}` sits on the same `common` parent with `default=argparse.SUPPRESS`
-  so it works before *or* after the verb (resolved `args.format` → `$SANDESH_FORMAT` → `human`);
+  `--format {human,toon,json}` lives on a `fmt_common` parent (`default=argparse.SUPPRESS`) that
+  the `common` parent inherits and that the ten project-free/own-`--project` verbs (search, grant,
+  revoke, archive, unarchive, tombstone, migrate, consolidate, reindex, init) take directly, so it
+  works before *or* after EVERY verb (resolved `args.format` → `$SANDESH_FORMAT` → `human`);
   removing SUPPRESS breaks one position, exactly as for `--project`. Machine-mode **usage
   errors** (unknown flag/verb, bad `--fields`, missing subcommand) are handled by a
   **pre-scan** of argv + `$SANDESH_FORMAT` *before* argparse runs, and `_Parser.error` is
@@ -331,9 +333,8 @@ On wake (exit 0) → `sandesh fetch --to "<self>"` → act → relaunch `notify`
 - **The global store is shared by every project on the machine — tests/probes/agents MUST
   never write it (CR-SAN-049).** `tests/_store_guard.py` (imported first by every test module,
   with a self-contained bootstrap line) re-points `XDG_DATA_HOME` to a per-process tmpfs dir
-  (`/tmp/sandesh-tests-*`, atexit-cleaned) unless the incoming value is already temp-rooted;
-  `SANDESH_TESTS_ALLOW_REAL_STORE=1` is the explicit (never-used) bypass. Per-test stores: use
-  the `TempStore` mixin (setUp/tearDown, `self.connect()` tracked and closed). Subprocess tests
+  (`/tmp/sandesh-tests-*`, atexit-cleaned) unless the incoming value is already temp-rooted.
+  Per-test stores: use the `TempStore` mixin (setUp/tearDown, `self.connect()` tracked and closed). Subprocess tests
   spawning `sandesh` pass `env={..., "XDG_DATA_HOME": <temp>}` explicitly;
   `tests/test_dev_hygiene.py` scans for both rules. A manual probe must set the env INSIDE the
   subprocess env / `os.environ`, never as a shell prefix (tool wrappers can drop it — that is
@@ -350,8 +351,8 @@ archive, unarchive (Wave 6 — tombstone/grant/revoke/admin are NEVER exposed), 
 can be derived (and accepted-but-unused on the recipient-keyed tools). Errors map
 `ValueError`/`PermissionError` → `ToolError`. **The wake is NOT in MCP** — `notify` stays a
 background process (the agent's host re-invokes it; see the wake section above). The Pi
-extension (`integrations/pi/`) mirrors the same 12-tool surface over the CLI, with a native
-wake loop (`sendUserMessage(…, {deliverAs:"followUp"})`) and a ≥0.2.0 CLI session gate.
+extension (`integrations/pi/`) exposes 16 tools over the CLI, with a native
+wake loop (`sendUserMessage(…, {deliverAs:"followUp"})`) and a minimum-CLI-version session gate (`MIN_CLI_VERSION` in `integrations/pi/src/index.ts`).
 
 ---
 

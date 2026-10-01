@@ -286,9 +286,10 @@ describe("C — arming: SANDESH_AUTOSTART gate (§S5, AC8)", () => {
 // ============================================================================
 
 describe("F — AC9 pins", () => {
-  test("src/index.ts source no longer defines a wakeLoop function", () => {
-    const src = readFileSync(resolve(import.meta.dir, "index.ts"), "utf-8");
-    expect(src).not.toContain("function wakeLoop");
+  test("./index exports no wakeLoop symbol — the supervisor owns the loop", async () => {
+    const mod = (await import("./index")) as Record<string, unknown>;
+    expect("wakeLoop" in mod).toBe(false);
+    expect(typeof mod.default).toBe("function");
   });
 
   test("package.json files includes src/wake.ts and src/toon.ts", () => {

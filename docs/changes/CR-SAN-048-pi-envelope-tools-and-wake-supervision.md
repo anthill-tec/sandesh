@@ -48,16 +48,16 @@ de-duplication, no timeout cap, and no start/status/stop surface (`integrations/
   `lastIds` ⇒ no wake, relaunch after 30 s; different ⇒ `pi.sendUserMessage("Unread Sandesh mail for
   <A>: <ids>. Call sandesh_fetch for it.", {deliverAs:"followUp"})`, remember ids, relaunch now;
   **2** → relaunch silently, push timestamp; third within 60 s ⇒ `ctx.ui.notify(warning)` once per
-  burst; **5** ⇒ stop silently ("already running"); **1/3/4/signal** ⇒ stop + `ctx.ui.notify` with
+  burst; **5** ⇒ relaunch once after 30 s, silently (a second consecutive 5 stops the loop silently); **1/3/4/signal** ⇒ stop + `ctx.ui.notify` with
   code + `error`. `stop(address?)` aborts the child's AbortSignal (Pi's `exec` sends SIGTERM, then SIGKILL after its 5 s grace) and clears; no address = all.
   `status()` returns the table. Clock and sleep injectable (`__setWakeClock`, `__setWakeSleepFn`).
 - **§S4 — tools + command.** `sandesh_notify_start(address?, project?)` (defaults from
-  `$SANDESH_ADDRESS`/`$SANDESH_PROJECT`; error naming both if unresolved), `sandesh_notify_status()`,
-  `sandesh_notify_stop(address?)` — results are TOON envelopes built in-extension
-  (`verb: notify_start|notify_status|notify_stop`, same shape as PRD §4.1 incl. `context.project` ALWAYS;
-  P2 default columns `watchers[N]{address,running,lastExit}` — the full status set via a `fields` knob is
-  deferred to the register). Slash command `/sandesh-watcher
-  status|stop [address]`.
+  `$SANDESH_ADDRESS`/`$SANDESH_PROJECT`; error naming both if unresolved), `sandesh_notify_status(project?)`,
+  `sandesh_notify_stop(address?, project?)` — results are TOON envelopes built in-extension
+  (`verb: notify_start|notify_status|notify_stop`, same shape as PRD §4.1; `project` scopes status/aggregate
+  stop, and unscoped aggregates error when watchers span projects; P2 default columns
+  `watchers[N]{address,running,lastExit}` — the full status set via a `fields` knob is
+  deferred to the register). Slash command `/sandesh-watcher status [--project <id>] | stop [address] [--project <id>]`.
 - **§S5 — arming (D4).** `session_start`: probe/nudge unchanged; the wake loop is armed **only** when
   `SANDESH_AUTOSTART=1` and both identity vars are set (then it calls the same `start`). Otherwise a
   one-line `ctx.ui.notify` info says wake is tool-started (`sandesh_notify_start`). The old
@@ -94,16 +94,17 @@ de-duplication, no timeout cap, and no start/status/stop surface (`integrations/
   the relaunch is delayed 30 s (injected clock); a third with `[14]` → message + immediate relaunch.
 - **AC5** — Exit 2: relaunched silently; the third exit 2 within 60 s → exactly one `ctx.ui.notify`
   warning; a fourth outside the window → none.
-- **AC6** — Exit 5 → loop stops, no message, no notify, no relaunch. Exit 1, 3, 4 and a signal (code
+- **AC6** — Exit 5 → no message, no notify; the loop relaunches once after 30 s (injected clock) and stays `running`; a second consecutive exit 5 stops the loop silently. Exit 1, 3, 4 and a signal (code
   `null`, `signalCode: "SIGTERM"`) → loop stops and one `ctx.ui.notify` carries the code and the
   envelope's `error`.
-- **AC7b** — `sandesh_notify_status()` and `sandesh_notify_stop()` envelopes carry `context.project` (from the
-  watcher's project, else `$SANDESH_PROJECT`); a rejected `exec` promise is handled as an undecodable exit 1
+- **AC7b** — `sandesh_notify_status(project?)` and addressless `sandesh_notify_stop(project?)` require an explicit
+  project filter when watchers span projects; the filter scopes returned rows and stop effects. Without a filter,
+  a mixed-project aggregate returns an actionable `ok:false` error without stopping watchers. A rejected `exec` promise is handled as an undecodable exit 1
   (one error notify, no relaunch) — tested in `wake_supervisor.test.ts`.
 - **AC7** — One per address: `sandesh_notify_start` twice for the same address → second returns
   `ok: true` with `already: true` and spawns nothing; two different addresses run concurrently;
-  `sandesh_notify_stop()` with no address stops both (children aborted); `status` reflects each
-  transition.
+  `sandesh_notify_stop({project: P})` stops only watchers in P; an unscoped stop across multiple
+  projects returns an error and leaves all children running; `status` reflects each transition.
 - **AC8** — Arming: with both identity vars and no `SANDESH_AUTOSTART`, `session_start` spawns no
   `notify` and emits the info line; with `SANDESH_AUTOSTART=1` it spawns exactly one; with the vars
   unset and `SANDESH_AUTOSTART=1` it emits the error naming both vars and spawns none.

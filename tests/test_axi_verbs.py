@@ -70,11 +70,13 @@ import tests._store_guard  # noqa: F401 — real-store guard (CR-SAN-049): must 
 import io
 import json
 import os
+import sqlite3
 import shutil
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -383,6 +385,30 @@ class FetchEnvelopeTest(_BaseFixture):
         self.assertEqual(len(axi["messages"]), 2,
                          "--peek must not remove/hide the unread rows")
 
+    def test_machine_fetch_preserves_unread_state_if_recipient_lookup_fails(self):
+        with mock.patch.object(sdb, "message_recipients", side_effect=ValueError("recipient lookup failed")):
+            rc, out, err = self.run_cli([
+                "--format", "toon", "fetch", "--project", "Demo", "--to", "Mainline - Demo",
+            ])
+        self.assertEqual(rc, 1)
+        axi = _toon.decode(out)["axi"]
+        self.assertEqual(axi["error"], "recipient lookup failed")
+        self.assertTrue(axi.get("help"))
+        self.assertEqual(len(sdb.inbox(self.con, "Mainline - Demo", unread_only=True)), 2)
+
+    def test_message_recipients_chunks_below_connection_variable_limit(self):
+        if not hasattr(self.con, "setlimit") or not hasattr(sqlite3, "SQLITE_LIMIT_VARIABLE_NUMBER"):
+            self.skipTest("SQLite variable limit controls require Python 3.11+")
+        limit = sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER
+        previous = self.con.setlimit(limit, 999)
+        try:
+            recipients = sdb.message_recipients(self.con, range(1500))
+        finally:
+            self.con.setlimit(limit, previous)
+        self.assertEqual(len(recipients), 1500)
+        self.assertEqual(recipients[0], {"to": [], "cc": []})
+        self.assertEqual(recipients[1499], {"to": [], "cc": []})
+
 
 # --------------------------------------------------------------------------- #
 # inbox envelope.
@@ -569,6 +595,40 @@ class RegisterUnregisterIdempotenceTest(_BaseFixture):
         self.assertIs(axi["ok"], True)
         self.assertIn("result", axi)
         self.assertEqual(axi["result"], "absent")
+
+    def test_unregister_malformed_absent_address_exits_1_with_the_human_error_not_absent(self):
+        argv = ["unregister", "--project", "Demo", "--address", "Trck 1 - Demo",
+                "--as", "Mainline - Demo"]
+        rc_human, _, err_human = self.run_cli(argv)
+        self.assertEqual(rc_human, 1, f"human mode: err={err_human!r}")
+        rc, out, err = self.run_cli(["--format", "toon"] + argv)
+        self.assertEqual(rc, 1, f"machine mode must mirror human mode's exit 1; out={out!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertIs(axi["ok"], False)
+        self.assertIn("bad address", axi["error"])
+        self.assertNotIn("result", axi)
+        self.assertTrue(sdb.is_active(self.con, "Track 1 - Demo"),
+                        "the real address must stay registered")
+
+    def test_unregister_absent_address_by_a_non_mainline_other_is_a_permission_error_exit_1(self):
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "unregister", "--project", "Demo",
+             "--address", "Track 9 - Demo", "--as", "Track 1 - Demo"])
+        self.assertEqual(rc, 1, f"out={out!r} err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertIs(axi["ok"], False)
+        self.assertIn("only Mainline may remove another participant", axi["error"])
+        self.assertNotIn("result", axi)
+
+    def test_unregister_absent_foreign_project_address_is_a_permission_error_exit_1(self):
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "unregister", "--project", "Demo",
+             "--address", "Track 1 - Other", "--as", "Mainline - Demo"])
+        self.assertEqual(rc, 1, f"out={out!r} err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertIs(axi["ok"], False)
+        self.assertIn("not in project 'Demo'", axi["error"])
+        self.assertNotIn("result", axi)
 
     def test_unregister_live_notifier_ok_true_result_tombstoned_exit_3_unchanged(self):
         sdb.notifier_acquire(self.con, "Track 2 - Demo", os.getpid(), "tok", "host")

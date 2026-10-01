@@ -246,13 +246,120 @@ class TruncationTest(_BaseFixture):
             self.assertNotIn("(truncated", v, f"a 100-char body must never be marked truncated: {v!r}")
         self.assertNotIn("help", axi, "no truncation occurred -> no help[]")
 
-    def test_thread_full_flag_accepted_and_no_help_key(self):
+    def test_thread_default_truncates_body_and_suggests_full(self):
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "thread", "--project", "Demo", "--id", str(self.mid_long)],
+            env={"SANDESH_ADDRESS": "Track 1 - Demo"})
+        self.assertEqual(rc, 0, f"thread must exit 0; err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertEqual(
+            axi["bodies"].get(str(self.mid_long)),
+            self.body_2000[:500] + " (truncated, 2000 chars total)",
+        )
+        self.assertTrue(any("thread" in h and "--full" in h for h in axi.get("help", [])))
+
+    def test_thread_full_flag_returns_complete_body_without_truncation_help(self):
         rc, out, err = self.run_cli(
             ["--format", "toon", "thread", "--project", "Demo",
-             "--id", str(self.mid_long), "--full"])
+             "--id", str(self.mid_long), "--full"],
+            env={"SANDESH_ADDRESS": "Track 1 - Demo"})
         self.assertEqual(rc, 0, f"'thread --full' must be accepted; err={err!r}")
         axi = _toon.decode(out)["axi"]
-        self.assertNotIn("help", axi, "thread of a single message is a detail view -> no help[]")
+        self.assertEqual(axi["bodies"].get(str(self.mid_long)), self.body_2000)
+        self.assertNotIn("help", axi)
+
+    def test_thread_redacts_body_without_caller_identity_but_keeps_metadata(self):
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "thread", "--project", "Demo", "--id", str(self.mid_long)])
+        self.assertEqual(rc, 0, f"thread metadata must remain readable; err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertTrue(any(row["id"] == self.mid_long for row in axi["chain"]))
+        self.assertNotIn(str(self.mid_long), axi["bodies"])
+
+    def test_thread_redacts_body_for_unrelated_same_project_caller(self):
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "thread", "--project", "Demo", "--id", str(self.mid_long)],
+            env={"SANDESH_ADDRESS": "Track 2 - Demo"})
+        self.assertEqual(rc, 0, f"thread metadata must remain readable; err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertNotIn(str(self.mid_long), axi["bodies"])
+
+    def test_thread_allows_recipient_and_redacts_on_project_mismatch(self):
+        sdb.setup("Other")
+        sdb.register(self.con, "Mainline - Other", kind="mainline", project="Other")
+        sdb.assign_admin(self.con, "TestAdmin")
+        sdb.grant_xproj(self.con, "Demo", by="TestAdmin")
+        mid = sdb.send(self.con, self.store, "Track 1 - Demo",
+                       to=["Mainline - Other"], subject="cross-project",
+                       body_text="recipient body", project="Demo")
+
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "thread", "--project", "Other", "--id", str(mid)],
+            env={"SANDESH_ADDRESS": "Mainline - Other"})
+        self.assertEqual(rc, 0, f"recipient must be allowed to read; err={err!r}")
+        self.assertEqual(_toon.decode(out)["axi"]["bodies"][str(mid)], "recipient body")
+
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "thread", "--project", "Demo", "--id", str(mid)],
+            env={"SANDESH_ADDRESS": "Mainline - Other"})
+        self.assertEqual(rc, 0, f"thread metadata must remain readable; err={err!r}")
+        self.assertNotIn(str(mid), _toon.decode(out)["axi"]["bodies"])
+
+
+class RelativeLegacyBodyPathTest(_BaseFixture):
+
+    def _send_with_project_collision(self, recipient):
+        sdb.setup("Other")
+        sdb.register(self.con, "Mainline - Other", kind="mainline", project="Other")
+        sdb.assign_admin(self.con, "TestAdmin")
+        sdb.grant_xproj(self.con, "Demo", by="TestAdmin")
+        mid = sdb.send(self.con, self.store, "Track 1 - Demo", to=[recipient],
+                       subject="relative legacy body", body_text="AlphaOwnerBodyToken",
+                       project="Demo")
+        relative_path = f"messages/msg-{mid}.md"
+        self.con.execute("UPDATE message SET body_path=? WHERE id=?", (relative_path, mid))
+        self.con.commit()
+        collision_path = os.path.join(sdb.store_dir("Other"), relative_path)
+        os.makedirs(os.path.dirname(collision_path), exist_ok=True)
+        with open(collision_path, "w", encoding="utf-8") as fh:
+            fh.write("BetaCollisionBodyToken")
+        return mid
+
+    def test_thread_reads_relative_body_from_sender_project_not_request_project(self):
+        mid = self._send_with_project_collision("Mainline - Other")
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "thread", "--project", "Other", "--id", str(mid), "--full"],
+            env={"SANDESH_ADDRESS": "Mainline - Other"})
+        self.assertEqual(rc, 0, f"authorized recipient should read the body; err={err!r}")
+        bodies = _toon.decode(out)["axi"]["bodies"]
+        self.assertEqual(bodies[str(mid)], "AlphaOwnerBodyToken")
+        self.assertNotEqual(bodies[str(mid)], "BetaCollisionBodyToken")
+
+    def test_thread_does_not_read_a_colliding_body_for_an_unauthorized_message(self):
+        mid = self._send_with_project_collision("Mainline - Demo")
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "thread", "--project", "Other", "--id", str(mid), "--full"],
+            env={"SANDESH_ADDRESS": "Mainline - Other"})
+        self.assertEqual(rc, 0, f"thread metadata should remain readable; err={err!r}")
+        self.assertNotIn(str(mid), _toon.decode(out)["axi"]["bodies"])
+
+    def test_fetch_reads_relative_body_from_sender_project_not_recipient_project(self):
+        mid = self._send_with_project_collision("Mainline - Other")
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "fetch", "--project", "Other", "--to", "Mainline - Other",
+             "--peek", "--full"])
+        self.assertEqual(rc, 0, f"authorized recipient should fetch the body; err={err!r}")
+        bodies = _toon.decode(out)["axi"]["bodies"]
+        self.assertEqual(bodies[str(mid)], "AlphaOwnerBodyToken")
+        self.assertNotEqual(bodies[str(mid)], "BetaCollisionBodyToken")
+
+    def test_reindex_uses_the_sender_project_for_relative_legacy_bodies(self):
+        mid = self._send_with_project_collision("Mainline - Other")
+        sdb.reindex(self.con)
+        alpha = sdb.search(self.con, "Mainline - Other", "AlphaOwnerBodyToken")
+        beta = sdb.search(self.con, "Mainline - Other", "BetaCollisionBodyToken")
+        self.assertEqual([hit["id"] for hit in alpha["hits"]], [mid])
+        self.assertEqual(beta["hits"], [])
 
 
 # =========================================================================== #
@@ -433,6 +540,18 @@ class RemainingVerbsEnvelopeTest(_BaseFixture):
         for row in rows:
             self.assertEqual(set(row.keys()), {"id", "from", "subject"})
         self.assertIs(axi.get("incomplete"), False)
+        self.assertEqual(axi.get("bodies"), {})
+
+    def test_thread_full_includes_body_for_each_visible_message(self):
+        mid_a = sdb.send(self.con, self.store, "Track 1 - Demo", to=["Mainline - Demo"],
+                         subject="thread body root", body_text="root body", project="Demo")
+        mid_b = sdb.reply(self.con, self.store, mid_a, "Track 2 - Demo", project="Demo")
+        rc, out, err = self.run_cli([
+            "--format", "toon", "thread", "--project", "Demo", "--id", str(mid_b), "--full",
+        ], env={"SANDESH_ADDRESS": "Track 1 - Demo"})
+        self.assertEqual(rc, 0, f"thread --full must exit 0; err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertEqual(axi["bodies"], {str(mid_a): "root body"})
 
     def test_thread_fields_flag_widens_to_five_columns(self):
         mid_a = sdb.send(self.con, self.store, "Track 1 - Demo",
@@ -579,6 +698,45 @@ class RemainingVerbsEnvelopeTest(_BaseFixture):
         self.assertIn("--yes", axi.get("error", ""),
                       f"error must name --yes; got {axi.get('error')!r}")
 
+    def test_tombstone_yes_on_an_active_project_surfaces_the_refusal_reason_exit_1(self):
+        sdb.assign_admin(self.con, "TheAdmin")
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "tombstone", "--project", "Demo", "--by", "TheAdmin", "--yes"])
+        self.assertEqual(rc, 1, f"out={out!r} err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertIs(axi["ok"], False)
+        self.assertIn("archive it first", axi["error"])
+        self.assertEqual(sdb.project_state(self.con, "Demo"), "active")
+
+    def test_tombstone_yes_by_a_non_admin_surfaces_the_refusal_reason_exit_1(self):
+        sdb.assign_admin(self.con, "TheAdmin")
+        sdb.archive(self.con, "Demo", "Mainline - Demo")
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "tombstone", "--project", "Demo", "--by", "Nobody", "--yes"])
+        self.assertEqual(rc, 1, f"out={out!r} err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertIs(axi["ok"], False)
+        self.assertIn("only the Sandesh admin may tombstone a project", axi["error"])
+        self.assertEqual(sdb.project_state(self.con, "Demo"), "archived")
+
+    def test_tombstone_yes_succeeds_then_a_second_call_is_result_already_exit_0(self):
+        sdb.assign_admin(self.con, "TheAdmin")
+        sdb.archive(self.con, "Demo", "Mainline - Demo")
+        argv = ["--format", "toon", "tombstone", "--project", "Demo", "--by", "TheAdmin", "--yes"]
+        rc, out, err = self.run_cli(argv)
+        self.assertEqual(rc, 0, f"out={out!r} err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertIs(axi["ok"], True)
+        self.assertEqual(axi["state"], "tombstoned")
+        self.assertNotIn("result", axi)
+        self.assertEqual(sdb.project_state(self.con, "Demo"), "tombstoned")
+        rc, out, err = self.run_cli(argv)
+        self.assertEqual(rc, 0, f"out={out!r} err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertIs(axi["ok"], True)
+        self.assertEqual(axi["result"], "already")
+        self.assertEqual(axi["state"], "tombstoned")
+
 
 # =========================================================================== #
 # Item 4 — AC14 home view (P8/P10).
@@ -613,6 +771,55 @@ class HomeViewTest(_BaseFixture):
         help_ = axi.get("help")
         self.assertIsInstance(help_, list)
         self.assertEqual(len(help_), 2, f"home view must carry exactly 2 help[] entries; got {help_!r}")
+
+    def test_home_view_counts_unread_cc_messages(self):
+        sdb.send(self.con, self.store, "Track 1 - Demo", to=[], cc=["Mainline - Demo"],
+                 subject="cc-only", project="Demo")
+        rc, out, err = self.run_cli(["--format", "toon", "status"], env={
+            "SANDESH_PROJECT": "Demo", "SANDESH_ADDRESS": "Mainline - Demo",
+        })
+        self.assertEqual(rc, 0, f"status must include unread Cc mail; err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertEqual(axi["unread"], 1)
+
+    def test_status_on_absent_store_reports_zeros_without_creating_it(self):
+        empty = tempfile.mkdtemp(prefix="sandesh-axi-status-absent-")
+        self.addCleanup(shutil.rmtree, empty, ignore_errors=True)
+        os.environ["XDG_DATA_HOME"] = empty
+        rc, out, err = self.run_cli(["--format", "toon", "status"], env={
+            "SANDESH_PROJECT": "Demo", "SANDESH_ADDRESS": "Mainline - Demo",
+        })
+        self.assertEqual(rc, 0, f"out={out!r} err={err!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertEqual(axi["unread"], 0)
+        self.assertIs(axi["listening"], False)
+        self.assertEqual(os.listdir(empty), [], "status must not create the store")
+
+    def test_status_on_schema_behind_store_does_not_migrate_it(self):
+        self.con.execute("CREATE TABLE _yoyo_migration (migration_id TEXT)")
+        self.con.commit()
+        rc, out, err = self.run_cli(["--format", "toon", "status"], env={
+            "SANDESH_PROJECT": "Demo", "SANDESH_ADDRESS": "Mainline - Demo",
+        })
+        self.assertEqual(rc, 0, f"out={out!r} err={err!r}")
+        applied = self.con.execute("SELECT COUNT(*) FROM _yoyo_migration").fetchone()[0]
+        self.assertEqual(applied, 0, "status must not auto-apply migrations")
+
+    def test_status_rejects_an_address_from_a_different_project(self):
+        env = {"SANDESH_ADDRESS": "Mainline - Demo"}
+        rc_human, _, err_human = self.run_cli(
+            ["--format", "human", "--project", "Beta", "status"], env=env,
+        )
+        self.assertEqual(rc_human, 1)
+        self.assertIn("address project 'Demo' != project_id 'Beta'", err_human)
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "--project", "Beta", "status"], env=env,
+        )
+        self.assertEqual(rc, 2, f"machine status must reject mismatched identity; out={out!r}")
+        axi = _toon.decode(out)["axi"]
+        self.assertIs(axi["ok"], False)
+        self.assertIn("address project 'Demo' != project_id 'Beta'", axi["error"])
+        self.assertNotIn("unread", axi)
 
     def test_no_subcommand_live_notifier_flips_listening_true(self):
         sdb.notifier_acquire(self.con, "Mainline - Demo", os.getpid(), "tok-1", "host")
@@ -667,6 +874,23 @@ class HomeViewTest(_BaseFixture):
                         f"help[] must list the valid global flags incl. --project; got {help_!r}")
         self.assertTrue(any("--format" in h for h in help_),
                         f"help[] must list the valid global flags incl. --format; got {help_!r}")
+
+
+class StepDiagnosticEnvelopeTest(_BaseFixture):
+    def test_system_exit_diagnostics_survive_all_step_handlers(self):
+        handlers = ("init", "migrate", "consolidate", "reindex")
+        for verb in handlers:
+            def fail(_args, command=verb):
+                print(f"[sandesh] diagnostic from {command}", file=cli.sys.stderr)
+                raise SystemExit(1)
+
+            with mock.patch.object(cli, f"cmd_{verb}", fail):
+                rc, out, err = self.run_cli(["--format", "toon", verb])
+            self.assertEqual(rc, 1, f"{verb} should preserve the handler exit code")
+            axi = _toon.decode(out)["axi"]
+            self.assertEqual(axi["error"], f"diagnostic from {verb}")
+            self.assertEqual(axi["steps"], [])
+            self.assertTrue(axi.get("help"))
 
 
 # =========================================================================== #

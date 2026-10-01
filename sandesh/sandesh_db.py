@@ -43,6 +43,7 @@ import random
 import sqlite3
 import sys
 import time
+import urllib.parse
 
 DB_FILE = "sandesh.db"
 MESSAGES_DIR = "messages"
@@ -251,6 +252,19 @@ def connect():
     return con
 
 
+def connect_readonly():
+    """Open the global DB read-only without creating, migrating or altering it;
+    None when the store does not exist yet. For pure-read callers (`status`)."""
+    path = db_path()
+    if not os.path.exists(path):
+        return None
+    uri = "file:" + urllib.parse.quote(os.path.abspath(path)) + "?mode=ro"
+    con = sqlite3.connect(uri, uri=True)
+    con.row_factory = sqlite3.Row
+    con.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+    return con
+
+
 def validate_project_id(project_id):
     """CR-SAN-045: reject a project id the address grammar cannot express.
     Raises ValueError for an empty or non-matching id — an id that fails this
@@ -450,19 +464,22 @@ def addressbook(con, project):
 
 
 def message_recipients(con, ids):
-    """{message_id: {"to": [addr…], "cc": [addr…]}} for the given ids — one
-    query over message_recipient, each list ordered by recipient address. Every
-    requested id is present (empty lists when it has no rows); [] → {}."""
-    ids = list(ids)
+    """{message_id: {"to": [addr…], "cc": [addr…]}} for the given ids.
+
+    Each list is ordered by recipient address. Every requested id is present
+    (empty lists when it has no rows); [] → {}."""
+    ids = list(dict.fromkeys(ids))
     result = {i: {"to": [], "cc": []} for i in ids}
-    if not ids:
-        return result
-    rows = con.execute(
-        "SELECT message_id, recipient, role FROM message_recipient "
-        f"WHERE message_id IN ({','.join('?' * len(ids))}) "
-        "ORDER BY message_id, recipient", ids).fetchall()
-    for r in rows:
-        result[r["message_id"]][r["role"]].append(r["recipient"])
+    for start in range(0, len(ids), 900):
+        batch = ids[start:start + 900]
+        if not batch:
+            continue
+        rows = con.execute(
+            "SELECT message_id, recipient, role FROM message_recipient "
+            f"WHERE message_id IN ({','.join('?' * len(batch))}) "
+            "ORDER BY message_id, recipient", batch).fetchall()
+        for r in rows:
+            result[r["message_id"]][r["role"]].append(r["recipient"])
     return result
 
 
@@ -481,6 +498,13 @@ def _address_project(con, addr):
         return row["project"]
     _orch, proj = validate_address(addr)
     return proj
+
+
+def message_body_path(con, projects_dir, message):
+    path = message["body_path"]
+    if path and not os.path.isabs(path):
+        path = os.path.join(projects_dir, _address_project(con, message["from_addr"]), path)
+    return path
 
 
 # --------------------------------------------------------------------------- #
@@ -712,12 +736,11 @@ def fetch(con, store, recipient, mark=True, *, sender=None, sender_project=None,
                  sender_project=sender_project, kind=kind, since=since,
                  until=until, subject_like=subject_like)
     items = []
+    projects_dir = os.path.dirname(os.path.normpath(store))
     for r in rows:
         body = None
         if r["body_path"]:
-            path = r["body_path"]
-            if not os.path.isabs(path):                    # legacy relative → resolve under store
-                path = os.path.join(store, path)
+            path = message_body_path(con, projects_dir, r)
             try:
                 with open(path, encoding="utf-8") as fh:   # compiled from the full path
                     body = fh.read()
@@ -773,12 +796,14 @@ def reindex(con):
     subject-only entry (empty body). Idempotent — the index is wiped first, so
     a re-run yields the same rows. Returns the indexed count."""
     con.execute("DELETE FROM message_fts")
-    rows = con.execute("SELECT id, subject, body_path FROM message").fetchall()
+    projects_dir = os.path.join(root_dir(), "projects")
+    rows = con.execute("SELECT id, from_addr, subject, body_path FROM message").fetchall()
     for r in rows:
         body = ""
         if r["body_path"]:
+            path = message_body_path(con, projects_dir, r)
             try:
-                with open(r["body_path"], encoding="utf-8") as fh:
+                with open(path, encoding="utf-8") as fh:
                     body = fh.read()
             except OSError:
                 body = ""                     # missing/unreadable → subject-only
@@ -961,11 +986,10 @@ def notifier_reap_if_stale(con, recipient):
     return False
 
 
-def unregister(con, recipient, requester, project=None):
-    """Remove a participant. Auth: within a project, Mainline may remove anyone and
-    anyone may remove self; a foreign project's address may NOT be removed.
-    Live notifier → tombstone it, return ('tombstoned', pid); else reap stale, soft-delete,
-    return ('unregistered', None)."""
+def unregister_guards(con, recipient, requester, project=None):
+    """The checks unregister() runs before touching anything — requester format
+    (+ project match), Mainline-or-self, recipient in the requester's project.
+    Raises ValueError/PermissionError; returns the requester's project."""
     orch_req, req_proj = validate_address(requester, project)
     if recipient != requester and orch_req != "Mainline":
         raise PermissionError("only Mainline may remove another participant")
@@ -973,6 +997,15 @@ def unregister(con, recipient, requester, project=None):
         raise PermissionError(
             f"cannot unregister {recipient!r}: it is not in project {req_proj!r} "
             f"(cross-project removal is not allowed)")
+    return req_proj
+
+
+def unregister(con, recipient, requester, project=None):
+    """Remove a participant. Auth: within a project, Mainline may remove anyone and
+    anyone may remove self; a foreign project's address may NOT be removed.
+    Live notifier → tombstone it, return ('tombstoned', pid); else reap stale, soft-delete,
+    return ('unregistered', None)."""
+    unregister_guards(con, recipient, requester, project)
     live = notifier_live(con, recipient)
     if live is not None:
         notifier_tombstone(con, recipient)

@@ -133,7 +133,7 @@ class ErrorEnvelopeTest(unittest.TestCase):
         context = {"project": "Demo", "address": "Track 1 - Demo"}
         return error_envelope("send", exc, context)
 
-    def test_error_envelope_is_not_ok_and_carries_only_the_error_field(self):
+    def test_error_envelope_is_not_ok_and_carries_the_error_field(self):
         env = self._send_error_envelope()
         self.assertIs(env.ok, False)
         self.assertEqual(env.fields, {"error": "no recipients (after excluding the sender)"})
@@ -150,6 +150,7 @@ class ErrorEnvelopeTest(unittest.TestCase):
                     "ok": False,
                     "error": "no recipients (after excluding the sender)",
                     "context": {"project": "Demo", "address": "Track 1 - Demo"},
+                    "help": ["Resolve the reported error, then retry `sandesh send`."],
                     "warnings": [],
                 }
             },

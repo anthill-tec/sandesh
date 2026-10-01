@@ -20,6 +20,7 @@ start/status/stop surface. CRs derived from this PRD cite it via `**Design refer
 | 1.1 | 2026-09-26 | Mainline - Sandesh | Owner ruling: the extension is the orchestrator's interface — adopt the ten AXI principles (axi.md) as the standard for the whole agent surface, shaped once in the CLI (§4.0); minimal schemas, truncation, aggregates, empty states, idempotent no-ops, structured errors as results, ambient context, home view, `help[]`. |
 | 1.2 | 2026-09-29 | Mainline - Sandesh | Owner ruling: the identity environment is loaded at the shell boundary (direnv, owned by Model B's `modelb-axi init`); the extension never parses `.env`. P7 gains the unexported-identity nudge (§4.6). |
 | 1.3 | 2026-09-30 | Mainline - Sandesh | Owner ruling: the wake state machine (§4.7) gains a terminal transition for a throwing host dep (stale ctx after session replacement/reload) — halt that watcher quietly, never crash the process (CR-SAN-052). |
+| 1.4 | 2026-09-30 | Mainline - Sandesh | Release-review fix (0.4.0 F3): `stop()` no longer forgets the child it aborted — a `start()` for the same address defers its spawn until that child has exited, so the new watcher cannot lose the CLI dedup to the old one; exit 5 is retried once after 30 s before it is treated as a foreign owner (§4.7). |
 
 ---
 
@@ -51,8 +52,10 @@ Model B's own words fix the target (#1394 Q2/Q3, #1396 3a/3b) and are the wire c
 - **AXI is the standard** (https://axi.md — the ten principles; the fleet-wide rule Crucible's clients already
   follow). Every agent-facing output of the CLI in machine mode and every tool result of the Pi extension is
   measured against it: the calling orchestrator's context budget is a first-class constraint.
-- **Exactly one watcher per address**; a second `notify` exits 5 and is treated as
-  "already running", never surfaced as failure, never relaunched.
+- **Exactly one watcher per address**; a duplicate `notify` exits 5 and is treated as
+  "already running", never surfaced as failure. The Pi supervisor retries exit 5 once after
+  30 seconds because a stopped child may still be winding down; a second consecutive exit 5
+  stops that loop quietly.
 
 ## 3. Goals
 
@@ -73,7 +76,7 @@ Model B's own words fix the target (#1394 Q2/Q3, #1396 3a/3b) and are the wire c
 |---|---|---|
 | 1 | Token-efficient output | TOON at the output boundary (CLI machine mode); internal logic on dicts. The extension never re-renders. |
 | 2 | Minimal default schemas | Lists default to 3–4 columns: `inbox` → `id,from,subject,unread`; `addressbook` → `address,listening`; `search` → `id,from,subject`; `thread` → `id,from,subject`. `--fields a,b,c` (CLI) / `fields` (tools) widens to the full column set of §4.4. Default limits cover the common case in one call (`inbox` 50, `search` 20). |
-| 3 | Content truncation | `fetch`/`thread` bodies: first 500 chars + `(truncated, N chars total)`; `--full` / `full:true` returns everything. Never omit a body; always state its size. |
+| 3 | Content truncation | `fetch`/`thread` bodies: first 500 chars + `(truncated, N chars total)`; `--full` / `full:true` returns everything. A body the caller is allowed to read is never omitted; its size is always stated. `thread` authorizes each message's body separately — the caller (`$SANDESH_ADDRESS`) must be that message's sender or a recipient — and omits the bodies it may not read; relative legacy body paths resolve under the message sender's project. A truncated `thread` carries `help[]` pointing at `--full`. |
 | 4 | Pre-computed aggregates | `inbox` → `unread: <n> of <total>`; `addressbook` → `listening: <n>/<m>`; `send`/`reply` → `delivered: <n>`; `fetch` → `marked_read`; `search` → `total`. The home view (§4.6) answers listening + unread in one call. |
 | 5 | Definitive empty states | An empty result is a sentence field, never a bare `key: []` alone: `messages: 0 unread for <addr>`, `participants: 0 registered in <project>`, `hits: 0 for "<q>"`. `ok: true` — absence is the answer. |
 | 6 | Structured errors, idempotent no-ops, exit codes | `register` of an active address → `ok:true result:already`; `unregister` of an absent one → `ok:true result:absent`; `archive` of an archived project → `ok:true result:already`; `notify_start` on a running loop → `ok:true already:true`. Errors go on **stdout** as `ok:false error help[]` (exit 1 unchanged; usage errors exit 2 and name the valid flags). Unknown flags fail loud. No prompts in machine mode (`tombstone` requires `--yes`). Progress only on stderr. |
@@ -90,7 +93,7 @@ axi:
   ok: true|false
   <verb-specific result fields, flat>
   context:
-    project: <id>          # always
+    project: <id>          # CLI envelopes; mixed-project Pi watcher aggregates require a filter
     address: <addr>        # where the verb acts for one
   help[N]: <next-step hints>          # optional
   warnings[N]: <strings>              # ALWAYS present; `warnings: []` when clean
@@ -144,8 +147,10 @@ the quoting rules are where the subset would drift).
 | `notify` (final envelope) | `exit: <code>`, `address`, `project`, `unread[N]: <ids>` (`unread: []` unless exit 0) |
 | every other verb (`setup`, `thread`, `search`, `projects`, `archive`, `unarchive`, `init`, `migrate`, …) | the generic envelope (`verb`, `ok`, `context`, `warnings`) plus that verb's natural result as flat fields; exact fields are fixed in the implementing CR's spec, never invented at emit time |
 
-`context.project` on all; `context.address` on the recipient/sender-keyed verbs (`register`,
-`unregister`, `inbox`, `fetch`, `notify`, `send`, `reply`).
+`context.project` is present on project-scoped CLI envelopes and Pi envelopes. Mixed-project
+watcher aggregates require an explicit project filter; the filter scopes both returned watcher
+rows and stop actions. `context.address` is present on the recipient/sender-keyed CLI verbs
+(`register`, `unregister`, `inbox`, `fetch`, `notify`, `send`, `reply`).
 
 ### 4.5 `notify` in machine mode — G2
 
@@ -168,7 +173,7 @@ the quoting rules are where the subset would drift).
   are `ok:true`.
 - **Ambient context (P7).** On `session_start`, when `$SANDESH_ADDRESS` + `$SANDESH_PROJECT` are set, the
   extension runs the home view once and injects it as compact context (`pi.sendUserMessage` is NOT used —
-  the harness's system-context seam is; ≤6 lines: address, listening, `unread: n`, `help[2]`). Nothing is
+  the harness's system-context seam is; ≤ 12 lines: the home envelope minus `bin` and `description` — verb/ok, project, address, listening, `unread: n`, context, `help[2]`, warnings). Nothing is
   injected when the vars are unset. This replaces the 0.3.x "wake disabled" warning.
 - **Unexported-identity nudge (P7, v1.2).** Every tool reads its identity from the process environment
   only; loading a project's `.env` into the environment is the shell's job (direnv, emitted by
@@ -193,17 +198,20 @@ State machine per address, owned by the extension:
 | `start(address, project)` | refuse if a loop for that address exists (report it); else spawn `sandesh --project P --format toon notify --to A`; record start time |
 | exit **0** (`unread[N]`) | if the id set equals the previous wake's set → **no wake**, relaunch after **30 s**; else `sendUserMessage("Unread Sandesh mail for <A>: ids …", {deliverAs:"followUp"})`, remember the set, relaunch **immediately** |
 | exit **2** (timeout) | silent relaunch; if this is the **third** exit-2 within 60 s → surface (`ctx.ui.notify` warning) and keep relaunching |
-| exit **5** (dedup) | "already running" — stop this loop silently, do not surface, do not relaunch |
+| exit **5** (dedup) | "already running" — another watcher owns the address, possibly a previous child of this address still winding down: relaunch **once** after **30 s** (silent, still `running`); a second exit 5 in a row stops this loop silently, do not surface |
 | exit **1 / 3 / 4** or a signal | stop the loop; surface the code + reason (from the envelope's `error`) |
-| `stop(address?)` | abort the child (SIGTERM, then SIGKILL after a grace), clear state; no address = all |
+| `stop(address?)` | abort the child (SIGTERM, then SIGKILL after a grace); the entry reports `running:false` at once but remembers the child until it exits — a `start()` for the same address in that window is accepted (`running:true`) and spawns only after that exit, never racing the old child for the address; no address = all |
 | `status()` | per address: running, pid, started, last exit, last wake ids, exit-2 count |
 | a host dep **throws** (`sendUserMessage` / `notify` / `resolve` — the captured `pi` is stale after a session replacement or reload; a throwing `exec` is first reported as exit 1 with its one error notify) | halt that watcher only: mark it stopped, abort its child, **no relaunch**, no rethrow, no further host call; the process survives (an escaped throw in the detached chain would be an unhandled rejection) |
 
-- **Tools:** `sandesh_notify_start(address?, project?)`, `sandesh_notify_status()`,
-  `sandesh_notify_stop(address?)`; `address`/`project` default to `$SANDESH_ADDRESS` /
-  `$SANDESH_PROJECT`. Results are AXI envelopes with the P2 minimal default `watchers[N]{address,running,lastExit}`
-  (`context.project` always present); a `fields` knob widening to the full status set is deferred. `start` on a running address → `ok:true already:true` (P6); `stop` on nothing → `ok:true stopped: 0`.
-  A `/sandesh-watcher status|stop` slash command mirrors status/stop.
+- **Tools:** `sandesh_notify_start(address?, project?)`, `sandesh_notify_status(project?)`,
+  `sandesh_notify_stop(address?, project?)`; only `start` defaults `address`/`project` from
+  `$SANDESH_ADDRESS` / `$SANDESH_PROJECT`. Results are AXI envelopes with the P2 minimal default
+  `watchers[N]{address,running,lastExit}`. If watchers span projects, aggregate status or addressless
+  stop without an explicit `project` returns an actionable error; with `project`, status and stop are
+  limited to that project. A `fields` knob widening to the full status set is deferred. `start` on a
+  running address → `ok:true already:true` (P6); `stop` with no matching watcher → `ok:true stopped: 0`.
+  A `/sandesh-watcher status|stop [--project <id>]` slash command mirrors status/stop; mixed-project aggregates need the filter.
 - **Arming (D4):** `session_start` **no longer arms by default**. Setting
   `SANDESH_AUTOSTART=1` (with both identity vars) restores the 0.3.x auto-arm for users who
   want it — documented in `USER_GUIDE.md` §Pi as the one behaviour change of 0.4.0.

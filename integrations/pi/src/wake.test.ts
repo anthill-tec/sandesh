@@ -261,6 +261,51 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
     ]);
   });
 
+  test("sandesh_notify_start rejects a running address under another project with an error envelope", async () => {
+    const { fakePi, capturedTools, notifyDeferreds } = makeFakePi();
+    registerExtension(fakePi);
+    const { fakeCtx } = makeFakeCtx();
+    const tool = getTool(capturedTools, "sandesh_notify_start");
+
+    await callExecute(tool, { address: "Mainline - Alpha", project: "Alpha" }, fakeCtx);
+    const result = await callExecute(tool, { address: "Mainline - Alpha", project: "Beta" }, fakeCtx);
+    const env = decodeEnvelope(text(result));
+
+    expect(env.ok).toBe(false);
+    expect(String(env.error)).toContain("does not belong to project 'Beta'");
+    expect(env.help?.length).toBeGreaterThan(0);
+    expect(notifyDeferreds.length).toBe(1);
+  });
+
+  test("sandesh_notify_start returns watcher rows only for its project", async () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    registerExtension(fakePi);
+    const { fakeCtx } = makeFakeCtx();
+    const tool = getTool(capturedTools, "sandesh_notify_start");
+    const fields = ["address", "project", "running", "pid", "startedAt", "lastExit", "lastIds", "timeoutExits"];
+
+    await callExecute(tool, { address: "Mainline - Alpha", project: "Alpha", fields }, fakeCtx);
+    const result = await callExecute(
+      tool, { address: "Mainline - Beta", project: "Beta", fields }, fakeCtx);
+    const env = decodeEnvelope(text(result));
+    const watchers = env.fields.watchers as Array<{ address: string; project: string; lastIds: number[] }>;
+
+    expect(env.context.project).toBe("Beta");
+    expect(env.fields.already).toBe(false);
+    expect(watchers).toHaveLength(1);
+    expect(watchers[0].address).toBe("Mainline - Beta");
+    expect(watchers[0].project).toBe("Beta");
+    expect(watchers[0].lastIds).toEqual([]);
+
+    const repeated = decodeEnvelope(text(await callExecute(
+      tool, { address: "Mainline - Beta", project: "Beta", fields }, fakeCtx)));
+    const repeatedWatchers = repeated.fields.watchers as Array<{ address: string; project: string }>;
+    expect(repeated.fields.already).toBe(true);
+    expect(repeatedWatchers).toHaveLength(1);
+    expect(repeatedWatchers[0].address).toBe("Mainline - Beta");
+    expect(repeatedWatchers[0].project).toBe("Beta");
+  });
+
   test("a second sandesh_notify_start for the same address reports already:true and spawns no second child", async () => {
     const { fakePi, capturedTools, notifyDeferreds } = makeFakePi();
     registerExtension(fakePi);
@@ -319,6 +364,7 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
       expect(env.error).toBeDefined();
       expect(env.error as string).toContain("SANDESH_ADDRESS");
       expect(env.error as string).toContain("SANDESH_PROJECT");
+      expect(env.help?.join(" ")).toContain("sandesh_notify_start");
       expect(notifyDeferreds.length).toBe(0); // nothing spawned — an error result, not a throw
     } finally {
       restoreEnv();
@@ -343,6 +389,72 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
     expect(watchers.length).toBe(1);
     expect(watchers[0].address).toBe("Mainline - Demo");
     expect(watchers[0].running).toBe(true);
+  });
+
+  test("mixed-project aggregate tools require and honor project filters", async () => {
+    saveEnv();
+    process.env.SANDESH_PROJECT = "Ambient";
+    try {
+      const { fakePi, capturedTools, notifyDeferreds } = makeFakePi();
+      registerExtension(fakePi);
+      const { fakeCtx } = makeFakeCtx();
+      const startTool = getTool(capturedTools, "sandesh_notify_start");
+      const statusTool = getTool(capturedTools, "sandesh_notify_status");
+      const stopTool = getTool(capturedTools, "sandesh_notify_stop");
+
+      await callExecute(startTool, { address: "Mainline - Alpha", project: "Alpha" }, fakeCtx);
+      await callExecute(startTool, { address: "Mainline - Beta", project: "Beta" }, fakeCtx);
+
+      const unscopedStatus = decodeEnvelope(text(await callExecute(statusTool, {}, fakeCtx)));
+      expect(unscopedStatus.ok).toBe(false);
+      expect(unscopedStatus.error as string).toContain("pass project");
+      expect(unscopedStatus.help?.join(" ")).toContain("sandesh_notify_status");
+
+      const unscopedStop = decodeEnvelope(text(await callExecute(stopTool, {}, fakeCtx)));
+      expect(unscopedStop.ok).toBe(false);
+      expect(unscopedStop.error as string).toContain("pass project");
+      expect(unscopedStop.help?.join(" ")).toContain("sandesh_notify_stop");
+      expect(notifyDeferreds.every((deferred) => !deferred.signal?.aborted)).toBe(true);
+
+      const alphaStatus = decodeEnvelope(text(await callExecute(
+        statusTool, { project: "Alpha", fields: ["address", "project"] }, fakeCtx)));
+      expect(alphaStatus.context.project).toBe("Alpha");
+      expect((alphaStatus.fields.watchers as Array<{ address: string; project: string }>))
+        .toEqual([{ address: "Mainline - Alpha", project: "Alpha" }]);
+
+      const alphaStop = decodeEnvelope(text(await callExecute(stopTool, { project: "Alpha" }, fakeCtx)));
+      expect(alphaStop.context.project).toBe("Alpha");
+      expect(alphaStop.fields.stopped).toBe(1);
+      expect(notifyDeferreds[0].signal?.aborted).toBe(true);
+      expect(notifyDeferreds[1].signal?.aborted).toBe(false);
+
+      const betaStatus = decodeEnvelope(text(await callExecute(statusTool, { project: "Beta" }, fakeCtx)));
+      expect((betaStatus.fields.watchers as Array<{ address: string }>).map((w) => w.address))
+        .toEqual(["Mainline - Beta"]);
+      const betaStop = decodeEnvelope(text(await callExecute(stopTool, { project: "Beta" }, fakeCtx)));
+      expect(betaStop.fields.stopped).toBe(1);
+      expect(notifyDeferreds[1].signal?.aborted).toBe(true);
+    } finally {
+      restoreEnv();
+    }
+  });
+
+  test("aggregate status and stop retain context for watchers in one project", async () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    registerExtension(fakePi);
+    const { fakeCtx } = makeFakeCtx();
+    const startTool = getTool(capturedTools, "sandesh_notify_start");
+    const statusTool = getTool(capturedTools, "sandesh_notify_status");
+    const stopTool = getTool(capturedTools, "sandesh_notify_stop");
+
+    await callExecute(startTool, { address: "Mainline - Demo", project: "Demo" }, fakeCtx);
+    await callExecute(startTool, { address: "Track 1 - Demo", project: "Demo" }, fakeCtx);
+
+    const status = decodeEnvelope(text(await callExecute(statusTool, {}, fakeCtx)));
+    expect(status.context.project).toBe("Demo");
+    const stop = decodeEnvelope(text(await callExecute(stopTool, {}, fakeCtx)));
+    expect(stop.context.project).toBe("Demo");
+    expect(stop.fields.stopped).toBe(2);
   });
 
   test("sandesh_notify_stop({address}) aborts the running child's signal and reports stopped:1", async () => {
@@ -390,6 +502,46 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
     } finally {
       restoreEnv();
     }
+  });
+
+  test("omits empty SANDESH_PROJECT from status and stop context when no watcher exists", async () => {
+    saveEnv();
+    process.env.SANDESH_PROJECT = "";
+    try {
+      const { fakePi, capturedTools } = makeFakePi();
+      registerExtension(fakePi);
+      const { fakeCtx } = makeFakeCtx();
+      const status = decodeEnvelope(text(await callExecute(getTool(capturedTools, "sandesh_notify_status"), {}, fakeCtx)));
+      const stop = decodeEnvelope(text(await callExecute(getTool(capturedTools, "sandesh_notify_stop"), {}, fakeCtx)));
+      expect(status.context.project).toBeUndefined();
+      expect(stop.context.project).toBeUndefined();
+    } finally {
+      restoreEnv();
+    }
+  });
+
+  test("/sandesh-watcher requires a project for mixed-project aggregates and scopes filtered operations", async () => {
+    const { fakePi, capturedCommands, capturedTools, notifyDeferreds } = makeFakePi();
+    registerExtension(fakePi);
+    const { fakeCtx, notifyCalls } = makeFakeCtx();
+    const startTool = getTool(capturedTools, "sandesh_notify_start");
+    const cmd = capturedCommands.get("sandesh-watcher")!;
+
+    await callExecute(startTool, { address: "Mainline - Alpha", project: "Alpha" }, fakeCtx);
+    await callExecute(startTool, { address: "Mainline - Beta", project: "Beta" }, fakeCtx);
+
+    await cmd.handler("status", fakeCtx);
+    expect(notifyCalls[notifyCalls.length - 1].msg).toContain("pass project");
+    await cmd.handler("status --project Alpha", fakeCtx);
+    expect(notifyCalls[notifyCalls.length - 1].msg).toContain("Mainline - Alpha");
+    expect(notifyCalls[notifyCalls.length - 1].msg).not.toContain("Mainline - Beta");
+
+    await cmd.handler("stop", fakeCtx);
+    expect(notifyCalls[notifyCalls.length - 1].msg).toContain("pass project");
+    expect(notifyDeferreds.every((deferred) => !deferred.signal?.aborted)).toBe(true);
+    await cmd.handler("stop --project Alpha", fakeCtx);
+    expect(notifyDeferreds[0].signal?.aborted).toBe(true);
+    expect(notifyDeferreds[1].signal?.aborted).toBe(false);
   });
 
   test("registers a /sandesh-watcher command whose status/stop subcommands both call ctx.ui.notify", async () => {
@@ -481,6 +633,27 @@ describe("E — sandesh_status appends watcher: running|stopped without breaking
       await callExecute(startTool, {}, fakeCtx);
       const result = await callExecute(statusTool, {}, fakeCtx);
       const env = decodeEnvelope(text(result));
+      expect(env.verb).toBe("status");
+      expect(env.fields.watcher).toBe("running");
+    } finally {
+      restoreEnv();
+    }
+  });
+
+  test("with SANDESH_ADDRESS set but EMPTY, a watcher started with explicit params makes sandesh_status() report watcher === 'running'", async () => {
+    saveEnv();
+    process.env.SANDESH_ADDRESS = "";
+    process.env.SANDESH_PROJECT = "Demo";
+    try {
+      const { fakePi, capturedTools } = makeFakePi();
+      registerExtension(fakePi);
+      const { fakeCtx } = makeFakeCtx();
+      const startTool = getTool(capturedTools, "sandesh_notify_start");
+      const statusTool = getTool(capturedTools, "sandesh_status");
+
+      const started = decodeEnvelope(text(await callExecute(startTool, { address: "Mainline - Demo", project: "Demo" }, fakeCtx)));
+      expect(started.ok).toBe(true);
+      const env = decodeEnvelope(text(await callExecute(statusTool, {}, fakeCtx)));
       expect(env.verb).toBe("status");
       expect(env.fields.watcher).toBe("running");
     } finally {

@@ -24,7 +24,7 @@ import { test, expect, describe, mock, beforeEach, afterEach } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import type { ExecResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExecResult, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import registerExtension from "./index";
 
 // ─── Local mirror of identity.ts's §S1 notice string — see file header. ────
@@ -66,11 +66,14 @@ function makeFakeExec(opts?: { versionOk?: boolean }) {
 
 function makeFakePi(execOpts?: { versionOk?: boolean }) {
   const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+  const tools = new Map<string, ToolDefinition<any, any, any>>();
   const { exec, calls } = makeFakeExec(execOpts);
   const sendMessageMock = mock((_msg: unknown, _opts?: unknown): void => {});
   const sendUserMessageMock = mock((_text: string, _opts?: unknown): void => {});
   const fakePi = {
-    registerTool: mock(() => {}),
+    registerTool: mock((tool: ToolDefinition<any, any, any>) => {
+      tools.set(tool.name, tool);
+    }),
     registerCommand: mock(() => {}),
     on: mock((event: string, handler: unknown) => {
       handlers.set(event, handler as (event: unknown, ctx: ExtensionContext) => unknown);
@@ -79,7 +82,12 @@ function makeFakePi(execOpts?: { versionOk?: boolean }) {
     sendMessage: sendMessageMock,
     sendUserMessage: sendUserMessageMock,
   } as unknown as ExtensionAPI;
-  return { fakePi, handlers, calls };
+  return { fakePi, handlers, tools, calls };
+}
+
+/** Every `SANDESH_*` entry of the process environment, as a plain object. */
+function sandeshEnv(): Record<string, string | undefined> {
+  return Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith("SANDESH_")));
 }
 
 function makeFakeCtx(cwd?: string) {
@@ -315,16 +323,29 @@ describe("§S1 — the unexported-identity nudge: co-occurrence with autostart (
 // AC6 — caller existence + no ad-hoc process.env.SANDESH_ writes
 // ============================================================================
 
-describe("§S1 — AC6 caller existence + no direct process.env.SANDESH_ writes outside tests", () => {
-  test("index.ts calls unexportedIdentityKeys(", () => {
-    const src = fs.readFileSync(path.join(__dirname, "index.ts"), "utf-8");
-    expect(src).toMatch(/unexportedIdentityKeys\(/);
-  });
+describe("§S1 — AC6 the extension never writes the identity into process.env", () => {
+  test("session_start (nudge fired from ./.env) plus a tool call leave every SANDESH_* env entry exactly as it was", async () => {
+    delete process.env.SANDESH_ADDRESS;
+    delete process.env.SANDESH_PROJECT;
+    process.env.SANDESH_AUTOSTART = "1";
+    const tmpDir = makeTmpDir();
+    fs.writeFileSync(path.join(tmpDir, ".env"), "SANDESH_PROJECT=Demo\nSANDESH_ADDRESS=Mainline - Demo\n");
+    const before = sandeshEnv();
 
-  test("no non-test .ts file under src/ assigns to process.env.SANDESH_*", () => {
-    const assignPattern = /process\.env\.SANDESH_[A-Z_]*\s*=(?!=)/;
-    const files = fs.readdirSync(__dirname).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));
-    const offenders = files.filter((f) => assignPattern.test(fs.readFileSync(path.join(__dirname, f), "utf-8")));
-    expect(offenders).toEqual([]);
+    const { fakePi, handlers, tools } = makeFakePi();
+    registerExtension(fakePi);
+    const { fakeCtx, notifyCalls } = makeFakeCtx(tmpDir);
+    await handlers.get("session_start")!(fakeSessionStartEvent, fakeCtx);
+    await flush();
+    expect(notifyCalls.some((n) => n.msg.startsWith(NUDGE_PREFIX))).toBe(true);
+
+    const statusTool = tools.get("sandesh_notify_status");
+    expect(statusTool).toBeDefined();
+    await statusTool!.execute("test-call-id", {}, undefined, undefined, fakeCtx);
+    await flush();
+
+    expect(sandeshEnv()).toEqual(before);
+    expect(process.env.SANDESH_ADDRESS).toBeUndefined();
+    expect(process.env.SANDESH_PROJECT).toBeUndefined();
   });
 });

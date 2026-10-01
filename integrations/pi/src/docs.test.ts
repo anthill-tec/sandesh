@@ -75,6 +75,25 @@ describe("integrations/pi/README.md — tool table (CR-SAN-048 §S6)", () => {
   });
 });
 
+describe("integrations/pi/README.md — wake supervision contract", () => {
+  const readme = fs.readFileSync(README_PATH, "utf-8");
+  const supervision = readme.split("Supervision rules:\n")[1]?.split("\n\nInspect")[0] ?? "";
+  const bullets = supervision.split(/\n(?=- )/);
+  const exit5 = bullets.find((bullet: string) => bullet.startsWith("- **Exit 5 ")) ?? "";
+  const stopStart = bullets.find((bullet: string) => bullet.startsWith("- **One watcher per address:")) ?? "";
+
+  test("documents one delayed exit-5 retry before quiet stop", () => {
+    expect(exit5).toContain("one quiet retry after 30 s");
+    expect(exit5).toContain("entry stays `running`");
+    expect(exit5).toContain("second exit 5 in a row stops the loop quietly");
+  });
+
+  test("documents start deferral until a stopped child's exit", () => {
+    expect(stopStart).toContain("spawns its child only");
+    expect(stopStart).toContain("when the stopped one has exited");
+  });
+});
+
 describe("docs/USER_GUIDE.md §Pi — 0.4.0 arming behaviour change (CR-SAN-048 §S6)", () => {
   const guide = fs.readFileSync(USER_GUIDE_PATH, "utf-8");
   const piSection = extractPiSection(guide);

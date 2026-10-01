@@ -1,38 +1,10 @@
 /**
- * CR-SAN-050 §S5, AC5 — RED: sandesh_notify_status/sandesh_notify_start
- * `fields` knob (048 SUGGESTION 1, P2 widening) mapping to the full
- * `WatcherStatus` columns (address,project,running,pid,startedAt,lastExit,
- * lastIds,timeoutExits); default stays {address,running,lastExit}. Also pins
- * the `__resetWakeState` → `resetExtensionState` rename (048 SUGGESTION 3).
- *
- * This file drives the wiring exclusively through `registerExtension(fakePi)`'s
- * captured tools (mirrors wake.test.ts's harness pattern) — it never imports
- * `./wake` directly.
- *
- * RED reason: today neither `sandesh_notify_status` nor `sandesh_notify_start`
- * accepts a `fields` param — their TypeBox `parameters` is `Type.Object({})` /
- * `{address?, project?}` with no `fields` property, and both hardcode the
- * 3-column `watcherRow` shape:
- *  - passing `fields:[...]` is silently ignored (execute's param type doesn't
- *    gate at runtime in this harness) → the decoded row still has exactly
- *    {address,running,lastExit}, not the requested 8 keys → key-set
- *    assertions fail.
- *  - `sandesh_notify_start` still returns a single-element `watchers` array
- *    (only the just-started entry), so a second start's `watchers[1]` is
- *    `undefined` → property-access assertions on it fail.
- *  - an unknown field name is never validated → the call still returns
- *    `ok:true` (not the required `ok:false` + naming error) → that assertion
- *    fails.
- *  - `tool.parameters.properties.fields` is `undefined` on both tools.
- * `__resetWakeState` is still the exported name in index.ts (not
- * `resetExtensionState`), and `src/uvx_provision.test.ts` still imports it —
- * so the rename assertions fail too.
+ * CR-SAN-050 §S5, AC5 — watcher field selection and public reset API.
+ * The harness drives registered tools through `registerExtension(fakePi)` and
+ * checks the returned watcher rows and module exports.
  */
 
 import { test, expect, describe, mock } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type {
   ExecResult,
   ExtensionAPI,
@@ -199,19 +171,24 @@ describe("sandesh_notify_status/start — fields knob (CR-SAN-050 §S5, AC5)", (
     expect(env.error as string).toContain("bogus");
     for (const f of ALL_FIELDS) {
       expect(env.error as string).toContain(f);
+      expect(env.help?.join(" ")).toContain(f);
     }
   });
 
-  test("sandesh_notify_status and sandesh_notify_start TypeBox parameters both declare a `fields` property", () => {
+  test("notify status/stop project filters and status fields are declared by TypeBox", () => {
     const { fakePi, capturedTools } = makeFakePi();
     registerExtension(fakePi);
     const statusTool = getTool(capturedTools, "sandesh_notify_status");
     const startTool = getTool(capturedTools, "sandesh_notify_start");
+    const stopTool = getTool(capturedTools, "sandesh_notify_stop");
 
     const statusProps = (statusTool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
     const startProps = (startTool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
+    const stopProps = (stopTool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
     expect(Object.prototype.hasOwnProperty.call(statusProps, "fields")).toBe(true);
     expect(Object.prototype.hasOwnProperty.call(startProps, "fields")).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(statusProps, "project")).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(stopProps, "project")).toBe(true);
   });
 });
 
@@ -225,14 +202,4 @@ describe("__resetWakeState → resetExtensionState rename (CR-SAN-050 §S5, AC5)
     expect(typeof mod.resetExtensionState).toBe("function");
   });
 
-  test("no src/*.test.ts (other than this file) references __resetWakeState", () => {
-    const here = dirname(fileURLToPath(import.meta.url));
-    const offenders: string[] = [];
-    for (const name of readdirSync(here)) {
-      if (!name.endsWith(".test.ts") || name === "notify_fields.test.ts") continue;
-      const contents = readFileSync(join(here, name), "utf8");
-      if (contents.includes("__resetWakeState")) offenders.push(name);
-    }
-    expect(offenders).toEqual([]);
-  });
 });

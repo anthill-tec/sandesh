@@ -6,13 +6,18 @@
  *   - 0       → mail. Same id-set as last time ⇒ no message, relaunch after 30 s;
  *               different ⇒ `sendUserMessage(…, {deliverAs:"followUp"})`, relaunch now.
  *   - 2       → timeout. Relaunch silently; the 3rd within 60 s ⇒ one warning.
- *   - 5       → dedup (another watcher owns the address). Stop silently.
+ *   - 5       → dedup (another watcher owns the address — possibly a previous
+ *               child still winding down). Retry once after 30 s; a second 5
+ *               in a row stops silently.
  *   - 1/3/4   → error / tombstoned / evicted. Stop + one error notify.
  *   - signal  → (code null) stop + one error notify naming the signal.
  * Undecodable stdout is treated as exit 1 with error "no envelope".
  * A host dep that throws out of the exit handling (stale extension ctx after
  * session replacement/reload — CR-SAN-052 §S2) ⇒ halt that watcher only: no
  * relaunch, no further host call, nothing rethrown.
+ * `stop()` reports the entry stopped at once but remembers its child until the
+ * process exits; a `start()` for the same address in that window spawns only
+ * after that exit, so the new child never loses the CLI dedup to the old one.
  *
  * All host effects (exec, messaging, notify, clock, sleep, CLI resolution) are
  * constructor-injected via `WakeDeps` so the state machine is unit-testable.
@@ -56,9 +61,12 @@ interface Entry extends WatcherStatus {
   stopped: boolean;
   generation: number;
   controller: AbortController;
+  child: Promise<void> | null;
+  dedupRetried: boolean;
 }
 
 const SAME_IDS_DELAY_MS = 30_000;
+const DEDUP_RETRY_DELAY_MS = 30_000;
 const TIMEOUT_WINDOW_MS = 60_000;
 const TIMEOUT_BURST = 3;
 
@@ -92,6 +100,9 @@ export class WakeSupervisor {
   constructor(private readonly deps: WakeDeps) {}
 
   start(address: string, project: string): StartResult {
+    if (!address.endsWith(` - ${project}`)) {
+      throw new Error(`address '${address}' does not belong to project '${project}'`);
+    }
     const existing = this.entries.get(address);
     if (existing !== undefined && existing.running) {
       return { already: true, status: snapshot(existing) };
@@ -107,9 +118,22 @@ export class WakeSupervisor {
       stopped: false,
       generation: 0,
       controller: new AbortController(),
+      child: null,
+      dedupRetried: false,
     };
     this.entries.set(address, entry);
-    this.launch(entry);
+    const previous = existing?.child ?? null;
+    if (previous === null) {
+      this.launch(entry);
+    } else {
+      entry.running = true;
+      entry.child = previous;
+      previous
+        .then(() => {
+          if (!entry.stopped && this.entries.get(address) === entry) this.launch(entry);
+        })
+        .catch(() => this.halt(entry));
+    }
     return { already: false, status: snapshot(entry) };
   }
 
@@ -120,7 +144,9 @@ export class WakeSupervisor {
    * SIGTERM on abort and force-kills if the child is still alive after its
    * grace period); the supervisor only aborts the signal — there is no timer
    * here. The `stopped`/generation guards make the child's eventual exit a
-   * no-op in `onExit`, so a stopped watcher is never relaunched.
+   * no-op in `onExit`, so a stopped watcher is never relaunched. The entry keeps
+   * its `child` promise until the process exits; `start()` on the same address
+   * defers its spawn to that exit.
    */
   stop(address?: string): { stopped: number } {
     let stopped = 0;
@@ -166,6 +192,14 @@ export class WakeSupervisor {
     } catch (err) {
       pending = Promise.reject(err);
     }
+    const exited: Promise<void> = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    entry.child = exited;
+    void exited.then(() => {
+      if (entry.child === exited) entry.child = null;
+    });
     pending
       .then(
         (r) => this.onExit(entry, gen, r),
@@ -205,6 +239,7 @@ export class WakeSupervisor {
     entry.lastExit = exit;
 
     if (signal === undefined && exit === 0) {
+      entry.dedupRetried = false;
       if (sameIdSet(ids, entry.lastIds)) {
         await this.deps.sleep(SAME_IDS_DELAY_MS);
         if (entry.stopped || gen !== entry.generation) return;
@@ -220,6 +255,7 @@ export class WakeSupervisor {
     }
 
     if (signal === undefined && exit === 2) {
+      entry.dedupRetried = false;
       const now = this.deps.now();
       entry.timeoutExits.push(now);
       entry.timeoutExits = entry.timeoutExits.filter((t) => t >= now - TIMEOUT_WINDOW_MS);
@@ -229,6 +265,14 @@ export class WakeSupervisor {
           "warning",
         );
       }
+      this.launch(entry);
+      return;
+    }
+
+    if (signal === undefined && exit === 5 && !entry.dedupRetried) {
+      entry.dedupRetried = true;
+      await this.deps.sleep(DEDUP_RETRY_DELAY_MS);
+      if (entry.stopped || gen !== entry.generation) return;
       this.launch(entry);
       return;
     }

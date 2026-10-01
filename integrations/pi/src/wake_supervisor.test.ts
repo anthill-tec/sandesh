@@ -286,11 +286,46 @@ describe("AC5 — exit 2 (timeout) burst warning", () => {
 // ─── AC6 — terminal exits stop the loop ────────────────────────────────────
 
 describe("AC6 — terminal exits stop the loop", () => {
-  test("exit 5 (dedup) stops silently — no message, no notify, no relaunch", async () => {
-    const { deps, execCalls, sendUserMessageMock, notifyMock } = makeDeps();
+  test("exit 5 (dedup) is retried once after 30 s; a second exit 5 stops silently — no message, no notify", async () => {
+    const { deps, execCalls, sendUserMessageMock, notifyMock, sleepCalls, sleepDeferreds } = makeDeps();
     const sup = new WakeSupervisor(deps);
     sup.start("Mainline - Demo", "Demo");
+    const dedup = () => ({
+      code: 5,
+      stdout: notifyEnvelope({ exit: 5, address: "Mainline - Demo", project: "Demo" }),
+      stderr: "",
+      signalCode: null,
+    });
 
+    execCalls[0].deferred.resolve(dedup());
+    await flush();
+
+    // First dedup: still supervised, waiting 30 s before the single retry.
+    expect(sleepCalls).toEqual([30_000]);
+    expect(execCalls.length).toBe(1);
+    expect(sup.status()[0].running).toBe(true);
+
+    sleepDeferreds[0].resolve();
+    await flush();
+    expect(execCalls.length).toBe(2); // the one retry
+
+    execCalls[1].deferred.resolve(dedup());
+    await flush();
+
+    expect(sendUserMessageMock.mock.calls.length).toBe(0);
+    expect(notifyMock.mock.calls.length).toBe(0);
+    expect(sleepCalls.length).toBe(1); // no second retry
+    expect(execCalls.length).toBe(2);
+
+    const status = sup.status();
+    expect(status[0].running).toBe(false);
+    expect(status[0].lastExit).toBe(5);
+  });
+
+  test("stop() during the exit-5 retry wait prevents the retry spawn", async () => {
+    const { deps, execCalls, sleepDeferreds } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
     execCalls[0].deferred.resolve({
       code: 5,
       stdout: notifyEnvelope({ exit: 5, address: "Mainline - Demo", project: "Demo" }),
@@ -298,14 +333,12 @@ describe("AC6 — terminal exits stop the loop", () => {
       signalCode: null,
     });
     await flush();
+    expect(sup.stop("Mainline - Demo")).toEqual({ stopped: 1 });
 
-    expect(sendUserMessageMock.mock.calls.length).toBe(0);
-    expect(notifyMock.mock.calls.length).toBe(0);
-    expect(execCalls.length).toBe(1); // no relaunch
-
-    const status = sup.status();
-    expect(status[0].running).toBe(false);
-    expect(status[0].lastExit).toBe(5);
+    sleepDeferreds[0].resolve();
+    await flush();
+    expect(execCalls.length).toBe(1);
+    expect(sup.status()[0].running).toBe(false);
   });
 
   test("exit 1 with error 'not registered' stops and surfaces one error notify naming the code and reason", async () => {
@@ -449,6 +482,18 @@ describe("AC7 — one loop per address, concurrent addresses, stop/status", () =
     expect(execCalls.length).toBe(1); // nothing spawned by the second call
   });
 
+  test("start() for a running address under another project throws and leaves the watcher untouched", () => {
+    const { deps, execCalls } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Alpha", "Alpha");
+
+    expect(() => sup.start("Mainline - Alpha", "Beta")).toThrow("does not belong to project 'Beta'");
+    expect(execCalls.length).toBe(1);
+    expect(sup.status().map((w) => [w.address, w.project, w.running])).toEqual([
+      ["Mainline - Alpha", "Alpha", true],
+    ]);
+  });
+
   test("two different addresses run concurrently; status() reports both as running", () => {
     const { deps, execCalls } = makeDeps();
     const sup = new WakeSupervisor(deps);
@@ -487,6 +532,82 @@ describe("AC7 — one loop per address, concurrent addresses, stop/status", () =
 
     const result = sup.stop("nobody");
     expect(result).toEqual({ stopped: 0 });
+  });
+
+  test("stop() then start() for the same address spawns the new child only after the old one has exited", async () => {
+    const { deps, execCalls, sendUserMessageMock, notifyMock } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+    expect(sup.stop("Mainline - Demo")).toEqual({ stopped: 1 });
+    expect(execCalls[0].signal.aborted).toBe(true);
+
+    const restarted = sup.start("Mainline - Demo", "Demo");
+    expect(restarted.already).toBe(false);
+    expect(restarted.status.running).toBe(true);
+    await flush();
+    expect(execCalls.length).toBe(1); // the old child is still alive — no second spawn yet
+    expect(sup.status()).toHaveLength(1);
+    expect(sup.status()[0].running).toBe(true);
+
+    // The old child terminates in response to the abort.
+    execCalls[0].deferred.resolve({ code: null, stdout: "", stderr: "", signalCode: "SIGTERM" });
+    await flush();
+
+    expect(execCalls.length).toBe(2);
+    expect(execCalls[1].args).toContain("Mainline - Demo");
+    expect(execCalls[1].signal.aborted).toBe(false);
+    expect(sup.status()[0].running).toBe(true);
+    expect(sendUserMessageMock.mock.calls.length).toBe(0);
+    expect(notifyMock.mock.calls.length).toBe(0);
+  });
+
+  test("stop() → start() → stop() before the old child exits spawns nothing once it does", async () => {
+    const { deps, execCalls } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+    sup.stop("Mainline - Demo");
+    sup.start("Mainline - Demo", "Demo");
+    expect(sup.stop("Mainline - Demo")).toEqual({ stopped: 1 });
+
+    execCalls[0].deferred.resolve({ code: null, stdout: "", stderr: "", signalCode: "SIGTERM" });
+    await flush();
+
+    expect(execCalls.length).toBe(1);
+    expect(sup.status()[0].running).toBe(false);
+  });
+
+  test("two stop()/start() cycles before the old child exits still spawn exactly one new child, after that exit", async () => {
+    const { deps, execCalls } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+    sup.stop("Mainline - Demo");
+    sup.start("Mainline - Demo", "Demo");
+    sup.stop("Mainline - Demo");
+    sup.start("Mainline - Demo", "Demo");
+    await flush();
+    expect(execCalls.length).toBe(1); // the original child is still alive
+
+    execCalls[0].deferred.resolve({ code: null, stdout: "", stderr: "", signalCode: "SIGTERM" });
+    await flush();
+    expect(execCalls.length).toBe(2);
+    expect(sup.status()[0].running).toBe(true);
+  });
+
+  test("start() after a self-terminated watcher (exit 1) spawns immediately — nothing to wait for", async () => {
+    const { deps, execCalls } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+    execCalls[0].deferred.resolve({
+      code: 1,
+      stdout: notifyEnvelope({ exit: 1, address: "Mainline - Demo", project: "Demo", error: "boom", ok: false }),
+      stderr: "",
+      signalCode: null,
+    });
+    await flush();
+    expect(sup.status()[0].running).toBe(false);
+
+    sup.start("Mainline - Demo", "Demo");
+    expect(execCalls.length).toBe(2);
   });
 
   test("a stopped loop's pending exit resolves after the abort but must NOT relaunch or message", async () => {

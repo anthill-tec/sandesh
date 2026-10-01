@@ -261,6 +261,28 @@ class ArgvCoverageMatchesRegistryTest(_AmbientEnvFixture):
             f"extra in cases={sorted(covered_verbs - registry_verbs)}")
 
 
+class FormatAfterVerbAllVerbsTest(_AmbientEnvFixture):
+    """`--format` placed AFTER the verb must be accepted by every verb — the
+    ten built without the `common` parent (search, grant, revoke, archive,
+    unarchive, tombstone, migrate, consolidate, reindex, init) included — and
+    yield that verb's own envelope, exactly as the before-the-verb form does."""
+
+    def test_format_after_the_verb_yields_the_verbs_envelope_for_every_verb(self):
+        self.assertEqual(set(_VERB_ARGV), set(cli.AXI_FN))
+        for verb, (argv_builder, prep) in sorted(_VERB_ARGV.items()):
+            with self.subTest(verb=verb):
+                tmp, mid, rid = _build_store(prep)
+                try:
+                    argv, env = argv_builder(mid, rid)
+                    rc, out, err = run_cli(argv + ["--format", "json"], env=env)
+                finally:
+                    shutil.rmtree(tmp, ignore_errors=True)
+                self.assertNotEqual(
+                    rc, 2, f"{verb}: --format after the verb was rejected; out={out!r} err={err!r}")
+                axi = json.loads(out)["axi"]
+                self.assertEqual(axi["verb"], verb)
+
+
 class AllVerbsToonJsonParityTest(_AmbientEnvFixture):
     """AC1 — every `cli.AXI_FN` verb's toon output decodes to the same dict as
     its json output (the literal AC2-from-CR-047 oracle), per verb."""

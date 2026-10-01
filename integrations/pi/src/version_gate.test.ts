@@ -544,6 +544,8 @@ describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () 
       msg.includes("pipx") ||
       msg.includes("install.sh");
     expect(hasUpgradeHint).toBe(true);
+    expect(msg).toContain("uv tool upgrade sandesh-relay");
+    expect(msg).toContain("pipx upgrade sandesh-relay");
   });
 });
 

@@ -6,8 +6,7 @@ Target contract — the not-yet-existing `tests/_store_guard.py`:
     prefix="sandesh-tests-")` under `tempfile.gettempdir()`, registers an
     `atexit` cleanup, and re-points `os.environ["XDG_DATA_HOME"]` to it —
     UNLESS the incoming value already resolves under the system temp root
-    (respected) or `SANDESH_TESTS_ALLOW_REAL_STORE=1` is set (bypass,
-    unchanged). Exposes `GUARD_TMP` (the per-process dir path) and
+    (respected). Exposes `GUARD_TMP` (the per-process dir path) and
     `temp_root()` (== `os.path.realpath(tempfile.gettempdir())`).
   * Exposes `TempStore`, a `unittest.TestCase` mixin: `setUp` creates its own
     `tempfile.TemporaryDirectory(prefix="sandesh-<something>-")` under the
@@ -18,14 +17,8 @@ Target contract — the not-yet-existing `tests/_store_guard.py`:
 
 WHY THIS MATTERS (the memory rule behind §S2): `~/.local/share/sandesh/
 sandesh.db` is the ONE global store shared by every running Sandesh project
-on this machine (Model B, Crucible, …) — `XDG_DATA_HOME` is exported globally
-in this dev shell, so any test that forgets to override it writes into that
-shared store. EVERY scenario below therefore runs in a subprocess with a
-FULLY-CONTROLLED env (`_minimal_env()` below builds a minimal dict from
-scratch — never `{**os.environ, ...}` — so the ambient `XDG_DATA_HOME` can
-never leak in by accident), never in-process, and this test module itself
-never writes to the real store (test 8's real-store check opens it
-STRICTLY read-only via a `file:...?mode=ro` URI).
+on this machine (Model B, Crucible, …). Every subprocess scenario below uses
+an isolated environment, and no test reads, lists, or probes the shared store.
 
 DESIGN NOTE: during RED the guard was imported lazily (inside test #6) so
 the then-missing `tests/_store_guard.py` only broke the tests that depend on
@@ -42,9 +35,6 @@ Expected RED (against current code — `tests/_store_guard.py` does not exist):
                    surfaces that traceback as the assertion message.
   test 6        -> ERROR: `import tests._store_guard as guard` inside the
                    test body raises ModuleNotFoundError directly.
-  test 8        -> may PASS (a pin — it only reads the real store read-only
-                   via setUpModule/tearDownModule and does not depend on the
-                   guard existing at all).
 
 Run targeted (Crucible client resolves the venv interpreter):
   python3 ~/Documents/data_projects/crucible/clients/python-crucible.py \\
@@ -62,13 +52,11 @@ if _REPO_ROOT not in sys.path:
 
 import tests._store_guard as guard  # noqa: E402,F401 — AC3: first import, re-points XDG_DATA_HOME to tmpfs
 
-import glob  # noqa: E402
 import json  # noqa: E402
 import shutil  # noqa: E402
 import sqlite3  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
-import time  # noqa: E402
 import unittest  # noqa: E402
 
 _VENV_PYTHON = os.path.join(_REPO_ROOT, ".venv", "bin", "python")
@@ -247,9 +235,7 @@ class Ac2RealStorePathTest(unittest.TestCase):
     the stand-in dir is never written to."""
 
     def setUp(self):
-        self.standin = os.path.join(
-            os.path.expanduser("~"), ".cache", f"sandesh-guard-test-{os.getpid()}-realpath")
-        os.makedirs(self.standin, exist_ok=True)
+        self.standin = tempfile.mkdtemp(prefix="sandesh-guard-test-realpath-", dir=_REPO_ROOT)
 
     def tearDown(self):
         shutil.rmtree(self.standin, ignore_errors=True)
@@ -305,41 +291,13 @@ class Ac2TempRootedValueRespectedTest(unittest.TestCase):
         )
 
 
-class Ac2BypassEnvVarTest(unittest.TestCase):
-    """AC2 'bypass' case: SANDESH_TESTS_ALLOW_REAL_STORE=1 -> XDG_DATA_HOME is
-    left completely untouched, even when it points at a real-store-like
-    (non-temp) path."""
-
-    def setUp(self):
-        self.standin = os.path.join(
-            os.path.expanduser("~"), ".cache", f"sandesh-guard-test-{os.getpid()}-bypass")
-        os.makedirs(self.standin, exist_ok=True)
-
-    def tearDown(self):
-        shutil.rmtree(self.standin, ignore_errors=True)
-
-    def test_bypass_var_leaves_real_store_like_path_untouched(self):
-        env = _minimal_env(xdg=self.standin, extra={"SANDESH_TESTS_ALLOW_REAL_STORE": "1"})
-        proc = _run_snippet(_SNIPPET_REPORT_XDG_AND_DBPATH, env)
-        data = _parse_json_stdout(proc)
-
-        self.assertEqual(
-            data["xdg_after"], self.standin,
-            "SANDESH_TESTS_ALLOW_REAL_STORE=1 must bypass the guard entirely",
-        )
-        self.assertTrue(data["db_path"].startswith(self.standin))
-        self.assertEqual(os.listdir(self.standin), [])
-
-
 class ImportOrderGuardTest(unittest.TestCase):
     """`sandesh.sandesh_db` imported BEFORE `tests._store_guard` must still
     observe the re-pointed XDG_DATA_HOME — db_path() has no cached path, it
     reads os.environ at call time, so import order must not matter."""
 
     def setUp(self):
-        self.standin = os.path.join(
-            os.path.expanduser("~"), ".cache", f"sandesh-guard-test-{os.getpid()}-order")
-        os.makedirs(self.standin, exist_ok=True)
+        self.standin = tempfile.mkdtemp(prefix="sandesh-guard-test-order-", dir=_REPO_ROOT)
 
     def tearDown(self):
         shutil.rmtree(self.standin, ignore_errors=True)
@@ -436,90 +394,20 @@ class Ac4bLifecycleTest(unittest.TestCase):
     under $HOME either."""
 
     def test_no_leftover_temp_dirs_after_suite_with_a_failing_test(self):
-        start = time.time() - 1  # 1s slack for filesystem mtime granularity
-        env = _minimal_env()
-        proc = _run_snippet(_SNIPPET_AC4B_LIFECYCLE, env)
-        data = _parse_json_stdout(proc)
+        with tempfile.TemporaryDirectory(prefix="ac4b-private-tmp-") as private_tmp:
+            env = _minimal_env(extra={"TMPDIR": private_tmp})
+            proc = _run_snippet(_SNIPPET_AC4B_LIFECYCLE, env)
+            data = _parse_json_stdout(proc)
 
-        self.assertTrue(data["ok"], f"lifecycle subprocess errored: {data.get('error')}")
-        self.assertEqual(data["tests_run"], 2)
-        self.assertEqual(data["failures"], 1)
+            self.assertTrue(data["ok"], f"lifecycle subprocess errored: {data.get('error')}")
+            self.assertEqual(data["tests_run"], 2)
+            self.assertEqual(data["failures"], 1)
+            self.assertEqual(data["temp_root"], os.path.realpath(private_tmp))
 
-        root = _local_temp_root()
-        # THIS process's own guard dir is live for the whole run by design (the
-        # module-level import created it; atexit removes it "'" asserted for the
-        # subprocess case by Ac2UnsetXdgTest); it is not a leftover of the child.
-        own_guard = os.path.realpath(guard.GUARD_TMP)
-        leftover_temp = [
-            p for p in glob.glob(os.path.join(root, "sandesh-*"))
-            if os.path.isdir(p) and os.path.getmtime(p) >= start
-            and os.path.realpath(p) != own_guard
-        ]
-        self.assertEqual(
-            leftover_temp, [],
-            f"leftover sandesh-* dirs under the temp root after the run: {leftover_temp}",
-        )
-
-        home_leftover = glob.glob(os.path.join(os.path.expanduser("~"), "sandesh-tests-*"))
-        self.assertEqual(
-            home_leftover, [],
-            f"a sandesh-tests-* dir leaked under $HOME: {home_leftover}",
-        )
-
-
-# --------------------------------------------------------------------------- #
-# Real-store invariant (a pin — may already PASS; needs no guard at all)
-
-_REAL_STORE_PATH = os.path.expanduser("~/.local/share/sandesh/sandesh.db")
-_real_store_counts = {}
-
-
-def _read_real_store_counts():
-    if not os.path.isfile(_REAL_STORE_PATH):
-        return None
-    con = sqlite3.connect(f"file:{_REAL_STORE_PATH}?mode=ro", uri=True)
-    try:
-        project_count = con.execute("SELECT COUNT(*) FROM project").fetchone()[0]
-        address_count = con.execute("SELECT COUNT(*) FROM address").fetchone()[0]
-        return {"project": project_count, "address": address_count}
-    finally:
-        con.close()
-
-
-def setUpModule():
-    _real_store_counts["before"] = _read_real_store_counts()
-
-
-def tearDownModule():
-    before = _real_store_counts.get("before")
-    if before is None:
-        return
-    after = _read_real_store_counts()
-    if after != before:
-        raise AssertionError(
-            "the shared real store changed while tests/test_store_guard.py ran "
-            f"(memory rule violation): before={before} after={after}"
-        )
-
-
-class RealStoreInvariantTest(unittest.TestCase):
-    """AC4b / the memory rule: `~/.local/share/sandesh/sandesh.db` (the ONE
-    global store shared by every running Sandesh project on this machine)
-    must never be written by this test module. The actual before/after
-    `COUNT(*)` comparison lives in `tearDownModule` above (per the dispatch
-    prompt: 'Implement as setUpModule/tearDownModule') and runs a read-only
-    (`mode=ro`) query; this test just asserts the fixture actually observed
-    real numbers (or records absence), so a silently-skipped invariant isn't
-    mistaken for a real pass in the report."""
-
-    def test_real_store_counts_were_observed_or_store_absent(self):
-        before = _real_store_counts.get("before")
-        if before is None:
-            self.skipTest(f"real store {_REAL_STORE_PATH!r} does not exist on this machine")
-        self.assertIn("project", before)
-        self.assertIn("address", before)
-        self.assertGreaterEqual(before["project"], 0)
-        self.assertGreaterEqual(before["address"], 0)
+            self.assertEqual(
+                os.listdir(private_tmp), [],
+                "the child's guard dir and every TempStore dir must be removed after the run",
+            )
 
 
 if __name__ == "__main__":

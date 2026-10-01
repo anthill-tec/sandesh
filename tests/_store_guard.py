@@ -13,8 +13,7 @@ WHAT IT DOES AT IMPORT. It creates ONE per-process ``TemporaryDirectory(prefix=
 the dev box, so nothing survives a reboot; never ``$HOME``, never the repo), registers
 an ``atexit`` cleanup, and re-points ``XDG_DATA_HOME`` to it — UNLESS the incoming
 value already resolves under the system temp root (a harness-supplied temp store is
-respected), or ``SANDESH_TESTS_ALLOW_REAL_STORE=1`` is set (the explicit bypass; never
-set in practice). ``sandesh_db.db_path()`` reads ``os.environ`` at call time, so import
+respected). ``sandesh_db.db_path()`` reads ``os.environ`` at call time, so import
 order relative to ``sandesh`` does not matter.
 """
 
@@ -47,11 +46,7 @@ def _cleanup_guard():
 atexit.register(_cleanup_guard)
 
 _cur = os.environ.get("XDG_DATA_HOME")
-if os.environ.get("SANDESH_TESTS_ALLOW_REAL_STORE") == "1":
-    pass  # explicit bypass — leave the env untouched
-elif _cur and _under_temp_root(_cur):
-    pass  # already a temp-rooted store — respected
-else:
+if not (_cur and _under_temp_root(_cur)):
     os.environ["XDG_DATA_HOME"] = GUARD_TMP
 
 
