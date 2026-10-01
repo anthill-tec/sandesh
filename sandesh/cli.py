@@ -79,6 +79,13 @@ def _split(csv):
     return [x.strip() for x in csv.split(",") if x.strip()] if csv else []
 
 
+def _positive_int(value):
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
 def _read_body(args):
     if getattr(args, "body_file", None):
         with open(args.body_file, encoding="utf-8") as fh:
@@ -205,9 +212,13 @@ def _run_machine(args, fmt):
     fn = AXI_FN.get(verb)
     if fn is not None and verb in _EMITS_OWN_ENVELOPE:
         # notify (§S5): the watcher writes its own final envelope to the stdout
-        # current at entry and its progress to stderr — no redirect, no second
-        # envelope, and a signal-handler SystemExit propagates untouched.
-        return fn(args)[0]
+        # current at entry and its progress to stderr — no redirect or second
+        # envelope. Startup failures before the watcher owns output are emitted here.
+        try:
+            return fn(args)[0]
+        except sdb.MigrationRequired as exc:
+            axi.emit(axi.error_envelope(verb, exc, context), fmt)
+            return 1
     rc, error, fields, help_, exited = 0, None, {}, [], False
     try:
         with contextlib.redirect_stdout(sys.stderr):
@@ -418,9 +429,11 @@ def cmd_inbox(args):
     return 0
 
 
-def _fetch_items(con, store, args, who):
-    """sdb.fetch with the CLI's filter flags mapped 1:1 (marks unless --peek)."""
-    return sdb.fetch(con, store, who, mark=not args.peek,
+def _fetch_items(con, store, args, who, *, mark=None):
+    """sdb.fetch with the CLI's filter flags mapped 1:1."""
+    if mark is None:
+        mark = not args.peek
+    return sdb.fetch(con, store, who, mark=mark,
                      sender=args.from_, sender_project=args.from_project,
                      kind=args.kind, since=args.since, until=args.until,
                      subject_like=args.subject)
@@ -830,6 +843,10 @@ def _status_identity(args):
     if not project or not address:
         raise _UsageError("the home view needs your identity: set $SANDESH_PROJECT "
                           "(or pass --project) and $SANDESH_ADDRESS")
+    try:
+        sdb.validate_address(address, project)
+    except ValueError as exc:
+        raise _UsageError(str(exc)) from exc
     return project, address
 
 
@@ -837,7 +854,7 @@ def _status_fields(project, address):
     con = sdb.connect()
     try:
         listening = sdb.notifier_live(con, address) is not None
-        unread = len(sdb.unread_to(con, address))
+        unread = len(sdb.inbox(con, address, unread_only=True))
     finally:
         con.close()
     return {"bin": _bin_path(), "description": DESCRIPTION, "project": project,
@@ -971,9 +988,9 @@ def axi_inbox(args):
 def axi_fetch(args):
     project, store, con = _ctx(args)
     who = _require_own_addr(args, "to", "--to '<address>'")
-    items = _fetch_items(con, store, args, who)
-    _print_fetch(items, who, args.peek)
+    items = _fetch_items(con, store, args, who, mark=False)
     if not items:
+        _print_fetch(items, who, args.peek)
         return 0, {"messages": f"0 unread for {who}", "marked_read": 0}
     recipients = sdb.message_recipients(con, [it["id"] for it in items])
     rows = [{
@@ -991,6 +1008,9 @@ def axi_fetch(args):
         bodies[str(it["id"])] = text
         cut = cut or was_cut
     help_ = [_tmpl(project, "fetch --to <addr> --full  (complete bodies)")] if cut else []
+    if not args.peek:
+        sdb.mark_read(con, who, [it["id"] for it in items])
+    _print_fetch(items, who, args.peek)
     return 0, {"messages": rows, "bodies": bodies,
                "marked_read": 0 if args.peek else len(items)}, help_
 
@@ -1130,16 +1150,35 @@ def axi_search(args):
 
 
 def axi_thread(args):
-    _, _, con = _ctx(args)
+    project, store, con = _ctx(args)
     cols = args.fields or THREAD_DEFAULT
     chain = sdb.thread(con, args.id)
     if not chain:
         raise ValueError(f"no such message #{args.id}")
     _print_thread(chain)
-    rows = [_pick({"id": m["id"], "from": m["from_addr"], "subject": m["subject"],
-                   "created": m["created_at"], "re": m["in_reply_to"]}, cols)
-            for m in chain if not _is_hole(m)]
-    return 0, {"chain": rows, "incomplete": any(_is_hole(m) for m in chain)}
+    rows, bodies, cut = [], {}, False
+    for message in chain:
+        if _is_hole(message):
+            continue
+        rows.append(_pick({"id": message["id"], "from": message["from_addr"],
+                           "subject": message["subject"], "created": message["created_at"],
+                           "re": message["in_reply_to"]}, cols))
+        path = message["body_path"]
+        if not path:
+            continue
+        if not os.path.isabs(path):
+            path = os.path.join(store, path)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                body = fh.read()
+        except FileNotFoundError:
+            body = f"(body file missing: {path})"
+        text, was_cut = (body, False) if args.full else _truncate(body)
+        bodies[str(message["id"])] = text
+        cut = cut or was_cut
+    help_ = [_tmpl(project, "thread --id <id> --full  (complete bodies)")] if cut else []
+    return 0, {"chain": rows, "bodies": bodies,
+               "incomplete": any(_is_hole(m) for m in chain)}, help_
 
 
 def axi_projects(args):
@@ -1210,9 +1249,14 @@ def axi_steps(args):
     are the verb's). A non-zero return 	a _Failed with the steps so far + the
     handler's stderr text as the error (the exit code equals human mode's)."""
     out, err = io.StringIO(), io.StringIO()
+    exit_detail = None
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             rc = args.fn(args) or 0
+    except SystemExit as exc:
+        code = exc.code
+        rc = code if isinstance(code, int) else (1 if code else 0)
+        exit_detail = code if isinstance(code, str) else None
     finally:
         print(out.getvalue(), end="")
         print(err.getvalue(), end="", file=sys.stderr)
@@ -1226,8 +1270,10 @@ def axi_steps(args):
     if rc:
         lines = [ln[len(_ERR_PREFIX):] if ln.startswith(_ERR_PREFIX) else ln
                  for ln in err.getvalue().splitlines() if ln.strip()]
-        raise _Failed(rc, "\n".join(lines) or f"{args.cmd} failed (exit {rc})",
-                      {"steps": steps})
+        detail = "\n".join(lines) or exit_detail or f"{args.cmd} failed (exit {rc})"
+        if detail.startswith(_ERR_PREFIX):
+            detail = detail[len(_ERR_PREFIX):]
+        raise _Failed(rc, detail, {"steps": steps})
     return 0, {"steps": steps}
 
 
@@ -1360,7 +1406,7 @@ def build_parser(axi_format="human", axi_context=None):
     p.add_argument("--fields", type=_fields_arg(INBOX_FIELDS), default=None, metavar="CSV",
                    help="machine-mode columns (subset of "
                         f"{','.join(INBOX_FIELDS)}; default {','.join(INBOX_DEFAULT)})")
-    p.add_argument("--limit", type=int, default=INBOX_LIMIT,
+    p.add_argument("--limit", type=_positive_int, default=INBOX_LIMIT,
                    help=f"machine-mode row cap (default {INBOX_LIMIT}; the aggregate is unsliced)")
     p.set_defaults(fn=cmd_inbox)
 
@@ -1388,7 +1434,7 @@ def build_parser(axi_format="human", axi_context=None):
                    help="machine-mode columns (subset of "
                         f"{','.join(THREAD_FIELDS)}; default {','.join(THREAD_DEFAULT)})")
     p.add_argument("--full", action="store_true",
-                   help="machine-mode: accepted for symmetry with fetch (thread renders no bodies)")
+                   help=f"machine-mode: complete bodies (default: first {BODY_LIMIT} chars)")
     p.set_defaults(fn=cmd_thread)
 
     p = sub.add_parser(
@@ -1458,7 +1504,7 @@ def build_parser(axi_format="human", axi_context=None):
     p.add_argument("--to", required=True, help="your address (whose mail to search)")
     p.add_argument("--from-project", dest="from_project",
                    help="only hits whose sender belongs to this project")
-    p.add_argument("--limit", type=int, default=20, help="page size (default 20)")
+    p.add_argument("--limit", type=_positive_int, default=20, help="page size (default 20)")
     p.add_argument("--offset", type=int, default=0, help="page start (default 0)")
     p.set_defaults(fn=cmd_search)
 

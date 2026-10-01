@@ -83,7 +83,7 @@ sandesh/                         (this repo — source of truth)
 │   ├── migrations/     0001-baseline … 0005-message-fts (+ rollbacks)
 │   ├── schema/current-schema.json   committed snapshot (CI gate: == migrate --dump-schema)
 │   └── data/usage-scenarios.md      the sandesh://usage MCP resource content
-├── integrations/pi/    the Pi extension (bun/TS; npm @anthill-tec/sandesh-pi; 12 tools + native wake)
+├── integrations/pi/    the Pi extension (bun/TS; npm @anthill-tec/sandesh-pi; 16 tools + native wake)
 ├── install.sh          builds a venv at $XDG_DATA_HOME/sandesh/.venv, pip-installs [mcp,migrate],
 │                       symlinks launchers, then migrate --all → consolidate → reindex → admin assign
 ├── tests/              65 test files (run against a temp store; no install needed)
@@ -352,7 +352,7 @@ archive, unarchive (Wave 6 — tombstone/grant/revoke/admin are NEVER exposed), 
 can be derived (and accepted-but-unused on the recipient-keyed tools). Errors map
 `ValueError`/`PermissionError` → `ToolError`. **The wake is NOT in MCP** — `notify` stays a
 background process (the agent's host re-invokes it; see the wake section above). The Pi
-extension (`integrations/pi/`) mirrors the same 12-tool surface over the CLI, with a native
+extension (`integrations/pi/`) exposes 16 tools over the CLI, with a native
 wake loop (`sendUserMessage(…, {deliverAs:"followUp"})`) and a ≥0.2.0 CLI session gate.
 
 ---

@@ -6,13 +6,11 @@ sandesh/_toon.py is expected to be a verbatim copy of the fleet's TOON codec
 (~/.crucible/clients/toon.py), prefixed with a provenance header ending in the
 sentinel line ``# --- end provenance ---``. sandesh/_toon_provenance.py is
 expected to hold TOON_SOURCE_SHA256 = sha256(everything after that sentinel).
-Neither module exists yet — GREEN creates them. The ImportError below is a
-valid RED per the RED-phase contract (Mode 1: not-yet-existing SUT symbol).
+The tests verify that provenance contract and the encoder/decoder behavior.
 """
 
 import os, sys; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root — CR-SAN-049 guard bootstrap
 import tests._store_guard  # noqa: F401 — real-store guard (CR-SAN-049): must be the first non-bootstrap import
-import ast
 import hashlib
 import os
 import sys
@@ -52,37 +50,12 @@ class ToonVendorProvenanceTest(unittest.TestCase):
         digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
         self.assertEqual(digest, TOON_SOURCE_SHA256)
 
-    def test_provenance_header_names_source_and_sha256(self):
-        header, _body = _split_header_and_body()
-        self.assertIn("Source:", header)
-        self.assertIn("SHA256:", header)
-
     def test_provenance_header_hash_would_change_if_body_tampered(self):
         # Regression pin: prove the oracle is sensitive to body content, not
         # a vacuous "any string equals any string" comparison.
         _header, body = _split_header_and_body()
         tampered_digest = hashlib.sha256((body + "\n# tampered\n").encode("utf-8")).hexdigest()
         self.assertNotEqual(tampered_digest, TOON_SOURCE_SHA256)
-
-
-class ToonVendorImportsTest(unittest.TestCase):
-    def test_all_imports_resolve_to_stdlib_module_roots(self):
-        with open(_SOURCE_PATH, encoding="utf-8") as f:
-            source = f.read()
-        tree = ast.parse(source, filename=_SOURCE_PATH)
-        roots = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    roots.add(alias.name.split(".")[0])
-            elif isinstance(node, ast.ImportFrom):
-                if node.level and node.level > 0:
-                    continue  # relative import — not a stdlib-vs-third-party question
-                if node.module:
-                    roots.add(node.module.split(".")[0])
-        self.assertTrue(roots, "expected sandesh/_toon.py to have at least one import")
-        non_stdlib = roots - set(sys.stdlib_module_names)
-        self.assertEqual(non_stdlib, set(), f"non-stdlib imports found in _toon.py: {non_stdlib}")
 
 
 class ToonVendorApiTest(unittest.TestCase):

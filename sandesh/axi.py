@@ -61,5 +61,6 @@ def emit(env, fmt, out=None):
 
 
 def error_envelope(verb, exc, context=None):
-    """``ok:false`` envelope carrying ``error: str(exc)`` as its only field."""
-    return Envelope(verb, False, {"error": str(exc)}, context)
+    """``ok:false`` envelope carrying the error and a recovery hint."""
+    return Envelope(verb, False, {"error": str(exc)}, context,
+                    help=[f"Resolve the reported error, then retry `sandesh {verb}`."])

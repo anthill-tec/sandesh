@@ -73,6 +73,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from sandesh import _toon  # noqa: E402
+from sandesh import cli  # noqa: E402
 from sandesh import notify  # noqa: E402
 from sandesh import sandesh_db as sdb  # noqa: E402
 
@@ -272,6 +273,7 @@ class NotifyExit3And4Test(_NotifyFastPathFixture):
         self.assertIs(axi["ok"], False)
         self.assertTrue(axi["error"], "error must be non-empty")
         self.assertIn("tombstoned", axi["error"].lower())
+        self.assertTrue(axi.get("help"))
         self.assertEqual(axi["unread"], [])
 
     def test_toon_exit4_evicted_ok_false_error_names_evicted(self):
@@ -288,6 +290,7 @@ class NotifyExit3And4Test(_NotifyFastPathFixture):
         self.assertIs(axi["ok"], False)
         self.assertTrue(axi["error"], "error must be non-empty")
         self.assertIn("evicted", axi["error"].lower())
+        self.assertTrue(axi.get("help"))
         self.assertEqual(axi["unread"], [])
 
 
@@ -308,6 +311,7 @@ class NotifyExit1Test(_NotifyFastPathFixture):
         self.assertEqual(axi["exit"], 1)
         self.assertIs(axi["ok"], False)
         self.assertEqual(axi["error"], "bad address format")
+        self.assertTrue(axi.get("help"))
         self.assertEqual(axi["unread"], [])
 
     def test_toon_exit1_is_active_false_error_names_not_registered(self):
@@ -320,7 +324,26 @@ class NotifyExit1Test(_NotifyFastPathFixture):
         self.assertEqual(axi["exit"], 1)
         self.assertIs(axi["ok"], False)
         self.assertIn("not registered", axi["error"].lower())
+        self.assertTrue(axi.get("help"))
         self.assertEqual(axi["unread"], [])
+
+
+class NotifyStartupMigrationEnvelopeTest(unittest.TestCase):
+    def test_migration_required_before_notify_start_emits_one_error_envelope(self):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sdb, "connect", side_effect=sdb.MigrationRequired("store schema is behind")), \
+                redirect_stdout(out), redirect_stderr(err):
+            rc = cli.main([
+                "--format", "toon", "notify", "--project", "Demo",
+                "--to", "Track 1 - Demo",
+            ])
+        self.assertEqual(rc, 1)
+        self.assertEqual(out.getvalue().count("axi:"), 1)
+        axi = _toon.decode(out.getvalue())["axi"]
+        self.assertEqual(axi["verb"], "notify")
+        self.assertIs(axi["ok"], False)
+        self.assertEqual(axi["error"], "store schema is behind")
+        self.assertTrue(axi.get("help"))
 
 
 class NotifyHumanGoldenPinTest(_NotifyFastPathFixture):
@@ -441,6 +464,7 @@ class NotifySubprocessTest(unittest.TestCase):
         self.assertEqual(out.count("axi:"), 1, f"exactly one envelope; out={out!r}")
         axi = _toon.decode(out)["axi"]
         self.assertEqual(axi["exit"], 2)
+        self.assertNotIn("help", axi)
         self.assertIn("[notify]", err)
 
     def test_toon_exit0_wakes_on_send_unread_lists_triggering_id(self):
@@ -500,6 +524,7 @@ class NotifySubprocessTest(unittest.TestCase):
             "sigterm" in axi["error"].lower() or "signal" in axi["error"].lower(),
             f"error must name SIGTERM/signal; got {axi['error']!r}",
         )
+        self.assertTrue(axi.get("help"))
         self.assertEqual(axi["unread"], [])
 
         con = sdb.connect()

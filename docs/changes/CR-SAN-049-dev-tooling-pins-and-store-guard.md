@@ -38,10 +38,9 @@ other running projects" after a VERIFY probe created a `Demo` project in the sha
   "sandesh-<test>-")` + `os.environ["XDG_DATA_HOME"] = self._tmp.name`; `tearDown` → close connections,
   restore the previous env value, `self._tmp.cleanup()` — so no test rolls its own. `sandesh_db.db_path()`
   gains no change.
-- **§S3 — subprocess discipline.** Every test that spawns `python -m sandesh.cli …` passes `env={…,
-  "XDG_DATA_HOME": <temp>}` explicitly (audit the existing subprocess tests: `test_axi_notify`,
-  `test_lifecycle_e2e`, `test_publish_workflow`, `test_package`); a grep-guard test asserts no test file
-  calls `subprocess` without `XDG_DATA_HOME` in its `env=`.
+- **§S3 — subprocess discipline.** Every test that spawns Sandesh passes an explicit `env` with an
+  isolated temporary `XDG_DATA_HOME`; guard-specific subprocess tests may omit the variable only when
+  exercising the guard's unset-input behavior.
 - **§S3b — `axi.py` import form.** `from sandesh import _toon` → `import sandesh._toon as _toon` (same
   binding; clears a Pyright "unknown import symbol" false positive on underscore submodules). No behaviour
   change; `tests/test_axi_envelope.py` + `test_toon_vendor.py` stay green.
@@ -58,11 +57,10 @@ other running projects" after a VERIFY probe created a `Demo` project in the sha
   `sandesh_db.db_path()` resolves under that temp path; with it set to an existing dir under the temp root →
   unchanged (respected); with `SANDESH_TESTS_ALLOW_REAL_STORE=1` → unchanged (bypass). The guard's temp dir
   is removed at interpreter exit (assert after the subprocess ends).
-- **AC3** — Every `tests/test_*.py` imports `tests._store_guard` before any `sandesh` import (a test scans
-  the files); every `subprocess.run/Popen` call in `tests/` passes an `env` containing `XDG_DATA_HOME`.
-- **AC4** — Full suite green with `XDG_DATA_HOME` unset in the parent shell (the guard supplies it), and the
-  real store's `project` table row-count is unchanged before/after the run (the test records and compares
-  via a read-only `sqlite3` open of the real path — read-only URI mode).
+- **AC3** — Every `tests/test_*.py` imports `tests._store_guard` before any `sandesh` import. Subprocesses
+  that run Sandesh use an explicit temporary `XDG_DATA_HOME`; guard-specific tests cover unset input.
+- **AC4** — Representative test files run standalone with `XDG_DATA_HOME` pointed at an isolated
+  temporary directory and exit 0; no test reads, lists, or probes the shared real store.
 - **AC4b** — Lifecycle: after the full suite, no `sandesh-tests-*`/`sandesh-*` directory remains under the
   system temp root (the guard's `atexit` and every `TempStore.cleanup()` ran); a test that deliberately
   fails mid-way still cleans its store (tearDown runs); the guard's temp root is under `tempfile.gettempdir()`

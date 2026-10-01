@@ -300,6 +300,7 @@ class FailureEnvelopeTest(_DemoFixture):
         self.assertEqual(axi["verb"], verb)
         self.assertIs(axi["ok"], False)
         self.assertEqual(axi["error"], expected_message)
+        self.assertTrue(axi.get("help"), "runtime error results must include recovery help[]")
         return expected_message
 
     def test_send_to_unregistered_recipient_ac7_error_envelope(self):
@@ -347,6 +348,20 @@ class UsageErrorMachineModeTest(_DemoFixture):
         self.assertEqual(rc, 2)
         self.assertEqual(out, "", f"human mode must write nothing to stdout; out={out!r}")
         self.assertIn("usage:", err.lower(), f"argparse usage must be on stderr; err={err!r}")
+
+    def test_inbox_and_search_limits_reject_zero_and_negative_values(self):
+        for verb, args in (
+            ("inbox", ["--project", "Demo", "--to", "Mainline - Demo"]),
+            ("search", ["term", "--to", "Mainline - Demo"]),
+        ):
+            for limit in ("0", "-1"):
+                rc, out, err = self.run_cli(
+                    ["--format", "toon", verb, *args, "--limit", limit])
+                self.assertEqual(rc, 2, f"{verb} --limit {limit} must be rejected")
+                axi = _toon.decode(out)["axi"]
+                self.assertIs(axi["ok"], False)
+                self.assertIn("at least 1", axi["error"])
+                self.assertTrue(axi.get("help"))
 
 
 # --------------------------------------------------------------------------- #

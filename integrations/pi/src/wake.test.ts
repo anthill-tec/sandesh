@@ -392,6 +392,22 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
     }
   });
 
+  test("omits empty SANDESH_PROJECT from status and stop context when no watcher exists", async () => {
+    saveEnv();
+    process.env.SANDESH_PROJECT = "";
+    try {
+      const { fakePi, capturedTools } = makeFakePi();
+      registerExtension(fakePi);
+      const { fakeCtx } = makeFakeCtx();
+      const status = decodeEnvelope(text(await callExecute(getTool(capturedTools, "sandesh_notify_status"), {}, fakeCtx)));
+      const stop = decodeEnvelope(text(await callExecute(getTool(capturedTools, "sandesh_notify_stop"), {}, fakeCtx)));
+      expect(status.context.project).toBeUndefined();
+      expect(stop.context.project).toBeUndefined();
+    } finally {
+      restoreEnv();
+    }
+  });
+
   test("registers a /sandesh-watcher command whose status/stop subcommands both call ctx.ui.notify", async () => {
     const { fakePi, capturedCommands } = makeFakePi();
     registerExtension(fakePi);

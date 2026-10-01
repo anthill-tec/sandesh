@@ -450,19 +450,22 @@ def addressbook(con, project):
 
 
 def message_recipients(con, ids):
-    """{message_id: {"to": [addr…], "cc": [addr…]}} for the given ids — one
-    query over message_recipient, each list ordered by recipient address. Every
-    requested id is present (empty lists when it has no rows); [] → {}."""
-    ids = list(ids)
+    """{message_id: {"to": [addr…], "cc": [addr…]}} for the given ids.
+
+    Each list is ordered by recipient address. Every requested id is present
+    (empty lists when it has no rows); [] → {}."""
+    ids = list(dict.fromkeys(ids))
     result = {i: {"to": [], "cc": []} for i in ids}
-    if not ids:
-        return result
-    rows = con.execute(
-        "SELECT message_id, recipient, role FROM message_recipient "
-        f"WHERE message_id IN ({','.join('?' * len(ids))}) "
-        "ORDER BY message_id, recipient", ids).fetchall()
-    for r in rows:
-        result[r["message_id"]][r["role"]].append(r["recipient"])
+    for start in range(0, len(ids), 900):
+        batch = ids[start:start + 900]
+        if not batch:
+            continue
+        rows = con.execute(
+            "SELECT message_id, recipient, role FROM message_recipient "
+            f"WHERE message_id IN ({','.join('?' * len(batch))}) "
+            "ORDER BY message_id, recipient", batch).fetchall()
+        for r in rows:
+            result[r["message_id"]][r["role"]].append(r["recipient"])
     return result
 
 

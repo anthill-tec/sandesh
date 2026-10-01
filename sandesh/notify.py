@@ -64,9 +64,10 @@ def _finish(fmt, out, project_id, address, code, unread=None, error=None, warnin
               "unread": sorted(unread or [])}
     if error is not None:
         fields["error"] = error
+    help_ = ["Resolve the reported error before restarting the watcher."] if error is not None else []
     env = axi.Envelope("notify", code in _OK_EXITS, fields,
                        context={"project": project_id, "address": address},
-                       warnings=warnings)
+                       help=help_, warnings=warnings)
     axi.emit(env, fmt, out)
     out.flush()
 

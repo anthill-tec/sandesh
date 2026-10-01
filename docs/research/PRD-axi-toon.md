@@ -52,8 +52,10 @@ Model B's own words fix the target (#1394 Q2/Q3, #1396 3a/3b) and are the wire c
 - **AXI is the standard** (https://axi.md — the ten principles; the fleet-wide rule Crucible's clients already
   follow). Every agent-facing output of the CLI in machine mode and every tool result of the Pi extension is
   measured against it: the calling orchestrator's context budget is a first-class constraint.
-- **Exactly one watcher per address**; a second `notify` exits 5 and is treated as
-  "already running", never surfaced as failure, never relaunched.
+- **Exactly one watcher per address**; a duplicate `notify` exits 5 and is treated as
+  "already running", never surfaced as failure. The Pi supervisor retries exit 5 once after
+  30 seconds because a stopped child may still be winding down; a second consecutive exit 5
+  stops that loop quietly.
 
 ## 3. Goals
 

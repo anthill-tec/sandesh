@@ -70,11 +70,13 @@ import tests._store_guard  # noqa: F401 — real-store guard (CR-SAN-049): must 
 import io
 import json
 import os
+import sqlite3
 import shutil
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -382,6 +384,30 @@ class FetchEnvelopeTest(_BaseFixture):
         self.assertIn("messages", axi)
         self.assertEqual(len(axi["messages"]), 2,
                          "--peek must not remove/hide the unread rows")
+
+    def test_machine_fetch_preserves_unread_state_if_recipient_lookup_fails(self):
+        with mock.patch.object(sdb, "message_recipients", side_effect=ValueError("recipient lookup failed")):
+            rc, out, err = self.run_cli([
+                "--format", "toon", "fetch", "--project", "Demo", "--to", "Mainline - Demo",
+            ])
+        self.assertEqual(rc, 1)
+        axi = _toon.decode(out)["axi"]
+        self.assertEqual(axi["error"], "recipient lookup failed")
+        self.assertTrue(axi.get("help"))
+        self.assertEqual(len(sdb.inbox(self.con, "Mainline - Demo", unread_only=True)), 2)
+
+    def test_message_recipients_chunks_below_connection_variable_limit(self):
+        if not hasattr(self.con, "setlimit") or not hasattr(sqlite3, "SQLITE_LIMIT_VARIABLE_NUMBER"):
+            self.skipTest("SQLite variable limit controls require Python 3.11+")
+        limit = sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER
+        previous = self.con.setlimit(limit, 999)
+        try:
+            recipients = sdb.message_recipients(self.con, range(1500))
+        finally:
+            self.con.setlimit(limit, previous)
+        self.assertEqual(len(recipients), 1500)
+        self.assertEqual(recipients[0], {"to": [], "cc": []})
+        self.assertEqual(recipients[1499], {"to": [], "cc": []})
 
 
 # --------------------------------------------------------------------------- #

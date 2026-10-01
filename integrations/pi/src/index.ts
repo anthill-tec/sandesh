@@ -420,7 +420,7 @@ function envelopeText(verb: string, fields: Record<string, unknown>, context: En
 function notifyContextProject(sup: WakeSupervisor, address?: string): string | undefined {
   const watchers = sup.status();
   const watcher = address !== undefined ? watchers.find((w) => w.address === address) : watchers[0];
-  return watcher?.project ?? process.env.SANDESH_PROJECT;
+  return watcher?.project || process.env.SANDESH_PROJECT || undefined;
 }
 
 /**
