@@ -20,6 +20,7 @@ import os
 import os, sys; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root — CR-SAN-049 guard bootstrap
 import tests._store_guard  # noqa: F401 — real-store guard (CR-SAN-049): must be the first non-bootstrap import
 import re
+import shutil
 import unittest
 
 # ---------------------------------------------------------------------------
@@ -458,68 +459,187 @@ class PublishTestpypiTest(unittest.TestCase):
 # upload a dev version; every other ref keeps the documented X.Y.Z.devN.
 # ---------------------------------------------------------------------------
 
-def _job_section(raw: str, job: str, next_job: str | None) -> str:
-    start = _char_index(rf"^  {job}\s*:", raw, re.M)
-    end = _char_index(rf"^  {next_job}\s*:", raw, re.M) if next_job else -1
-    return raw[start:end] if end > start else raw[start:]
+def _parse_yaml(raw: str):
+    """Parse the YAML subset the workflow uses (maps, sequences, scalars,
+    block scalars) into dicts/lists/strings. Stdlib only - PyYAML is absent."""
+    lines = raw.splitlines()
+    pos = [0]
+
+    def indent_of(line):
+        return len(line) - len(line.lstrip(" "))
+
+    def skip_blank():
+        while pos[0] < len(lines) and (not lines[pos[0]].strip()
+                                       or lines[pos[0]].lstrip().startswith("#")):
+            pos[0] += 1
+
+    def scalar(text):
+        text = re.sub(r"\s+#.*$", "", text).strip()
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
+            text = text[1:-1]
+        return text
+
+    def block_scalar(style, key_indent):
+        body = []
+        while pos[0] < len(lines) and (not lines[pos[0]].strip()
+                                       or indent_of(lines[pos[0]]) > key_indent):
+            body.append(lines[pos[0]])
+            pos[0] += 1
+        nonblank = [indent_of(x) for x in body if x.strip()]
+        base = min(nonblank) if nonblank else 0
+        body = [x[base:] for x in body]
+        while body and not body[-1].strip():
+            body.pop()
+        if style.startswith(">"):
+            return " ".join(x.strip() for x in body)
+        return "\n".join(body) + ("\n" if not style.endswith("-") else "")
+
+    def parse_block():
+        skip_blank()
+        if pos[0] >= len(lines):
+            return None
+        ind = indent_of(lines[pos[0]])
+        return (parse_seq if lines[pos[0]].lstrip().startswith("- ") else parse_map)(ind)
+
+    def parse_seq(ind):
+        items = []
+        while True:
+            skip_blank()
+            if (pos[0] >= len(lines) or indent_of(lines[pos[0]]) != ind
+                    or not lines[pos[0]].lstrip().startswith("- ")):
+                return items
+            rest = lines[pos[0]].lstrip()[2:]
+            lines[pos[0]] = " " * (ind + 2) + rest
+            items.append(parse_map(ind + 2))
+
+    def parse_map(ind):
+        result = {}
+        while True:
+            skip_blank()
+            if pos[0] >= len(lines) or indent_of(lines[pos[0]]) != ind:
+                return result
+            text = lines[pos[0]].strip()
+            m = re.match(r"^([^\s:][^:]*):(?:\s+(.*))?$", text)
+            if m is None or text.startswith("- "):
+                return result
+            key, value = m.group(1), m.group(2)
+            pos[0] += 1
+            if value is None or not scalar(value):
+                skip_blank()
+                nxt_ok = pos[0] < len(lines) and indent_of(lines[pos[0]]) > ind
+                result[key] = parse_block() if nxt_ok else None
+            elif value.strip() in ("|", "|-", ">", ">-"):
+                result[key] = block_scalar(value.strip(), ind)
+            else:
+                result[key] = scalar(value)
+
+    return parse_map(0)
 
 
-def _sanity_script(raw: str) -> str:
-    job = _job_section(raw, "publish-testpypi", None)
-    m = re.search(r"Version sanity.*?run: \|\n(.*?)\n      - uses: pypa", job, re.S)
-    if m is None:
-        return ""
-    return "\n".join(line[10:] for line in m.group(1).splitlines())
+def _eval_if(expr: str, event: str, ref: str) -> bool:
+    """Evaluate the workflow `if:` subset: && of ==/startsWith on github.*"""
+    for clause in expr.split("&&"):
+        clause = clause.strip()
+        m = re.fullmatch(r"github\.(event_name|ref) == '([^']*)'", clause)
+        if m:
+            actual = event if m.group(1) == "event_name" else ref
+            ok = actual == m.group(2)
+        else:
+            m = re.fullmatch(r"startsWith\(github\.ref, '([^']*)'\)", clause)
+            if m is None:
+                raise AssertionError(f"unsupported if clause: {clause!r}")
+            ok = ref.startswith(m.group(1))
+        if not ok:
+            return False
+    return True
+
+
+def _named_step(job: dict, prefix: str) -> dict:
+    for step in job["steps"]:
+        if step.get("name", "").startswith(prefix):
+            return step
+    raise AssertionError(f"no step named {prefix!r}")
+
+
+def _step_index(job: dict, prefix: str) -> int:
+    return job["steps"].index(_named_step(job, prefix))
 
 
 class ReleaseRehearsalVersionTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.raw = _read_workflow()
-        cls.build = _job_section(cls.raw, "build", "create-release")
-        cls.testpypi = _job_section(cls.raw, "publish-testpypi", None)
+        cls.jobs = _parse_yaml(cls.raw)["jobs"]
+        cls.build = cls.jobs["build"]
+        cls.testpypi = cls.jobs["publish-testpypi"]
+        cls.pin = _named_step(cls.build, "Pin release version")
 
-    def _pin_step(self):
-        start = _char_index(r"name: Pin release version", self.build)
-        self.assertGreater(start, -1, "build job must have the 'Pin release version' step")
-        return self.build[start:_char_index(r"name: Build sdist", self.build)]
+    def _run(self, script, cwd, env):
+        import subprocess
+        base = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "XDG_DATA_HOME": cwd, "HOME": cwd}
+        base.update(env)
+        return subprocess.run(["bash", "-c", script], cwd=cwd, env=base,
+                              capture_output=True, text=True)
 
-    def test_pin_step_only_on_release_branch_dispatch(self):
-        step = self._pin_step()
-        self.assertIn("github.event_name == 'workflow_dispatch'", step)
-        self.assertIn("startsWith(github.ref, 'refs/heads/release/')", step)
-        self.assertIn("SETUPTOOLS_SCM_PRETEND_VERSION=", step)
-        self.assertIn("integrations/pi/package.json", step,
-                      "the pinned version must be checked against the set-version manifest")
+    def test_pin_step_runs_only_for_release_branch_dispatch(self):
+        cond = self.pin["if"]
+        self.assertTrue(_eval_if(cond, "workflow_dispatch", "refs/heads/release/0.4.0"))
+        for event, ref in [("workflow_dispatch", "refs/heads/main"),
+                           ("workflow_dispatch", "refs/heads/develop"),
+                           ("push", "refs/heads/release/0.4.0"),
+                           ("pull_request", "refs/heads/release/0.4.0"),
+                           ("release", "refs/tags/v0.4.0")]:
+            self.assertFalse(_eval_if(cond, event, ref), (event, ref))
 
-    def test_pin_step_precedes_build(self):
-        self.assertLess(_char_index(r"name: Pin release version", self.build),
-                        _char_index(r"name: Build sdist", self.build))
+    def test_pin_step_precedes_build_and_takes_ref_via_env(self):
+        self.assertLess(_step_index(self.build, "Pin release version"),
+                        _step_index(self.build, "Build sdist"))
+        self.assertIn("REF_NAME", self.pin["env"])
+        self.assertNotIn("${{", self.pin["run"], "no ${{ }} interpolation inside run")
 
-    def test_ref_name_reaches_shell_via_env_not_inline_expression(self):
-        step = self._pin_step()
-        self.assertNotIn("${{", step[step.index("run: |"):],
-                         "no ${{ }} interpolation inside run (script injection)")
+    def _run_pin(self, ref_name, pkg_version):
+        import json
+        import tempfile
+        if shutil.which("jq") is None:
+            self.skipTest("jq not available")
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "integrations", "pi"))
+            with open(os.path.join(tmp, "integrations", "pi", "package.json"), "w") as f:
+                json.dump({"version": pkg_version}, f)
+            github_env = os.path.join(tmp, "github_env")
+            open(github_env, "w").close()
+            proc = self._run(self.pin["run"], tmp,
+                             {"REF_NAME": ref_name, "GITHUB_ENV": github_env})
+            with open(github_env) as f:
+                return proc.returncode, f.read()
+
+    def test_pin_exports_exact_release_version(self):
+        code, exported = self._run_pin("release/0.4.0", "0.4.0")
+        self.assertEqual(code, 0)
+        self.assertEqual(exported, "SETUPTOOLS_SCM_PRETEND_VERSION=0.4.0\n")
+
+    def test_pin_refuses_and_exports_nothing_on_bad_input(self):
+        for ref_name, pkg in [("release/0.4.0", "0.3.9"), ("release/0.4", "0.4"),
+                              ("release/foo", "foo"), ("release/0.4.0-rc1", "0.4.0-rc1")]:
+            code, exported = self._run_pin(ref_name, pkg)
+            self.assertNotEqual(code, 0, (ref_name, pkg))
+            self.assertEqual(exported, "", (ref_name, pkg))
 
     def test_testpypi_checks_the_uploaded_artifact_not_a_rebuild(self):
-        self.assertNotIn("python -m build", self.testpypi)
-        self.assertLess(_char_index(r"download-artifact", self.testpypi),
-                        _char_index(r"name: Version sanity", self.testpypi))
+        self.assertFalse(any("python -m build" in s.get("run", "") for s in self.testpypi["steps"]))
+        download = next(i for i, s in enumerate(self.testpypi["steps"])
+                        if s.get("uses", "").startswith("actions/download-artifact"))
+        self.assertLess(download, _step_index(self.testpypi, "Version sanity"))
 
     def _run_sanity(self, version, ref):
-        import subprocess
         import tempfile
-        script = _sanity_script(self.raw)
-        self.assertTrue(script, "could not extract the version-sanity script")
+        script = _named_step(self.testpypi, "Version sanity")["run"]
         with tempfile.TemporaryDirectory() as tmp:
             os.mkdir(os.path.join(tmp, "dist"))
             if version:
                 open(os.path.join(tmp, "dist", f"sandesh_relay-{version}.tar.gz"), "w").close()
-            env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                   "XDG_DATA_HOME": tmp,
-                   "REF": ref, "REF_NAME": ref.removeprefix("refs/heads/")}
-            return subprocess.run(["bash", "-c", script], cwd=tmp, env=env,
-                                  capture_output=True, text=True).returncode
+            return self._run(script, tmp, {"REF": ref,
+                                           "REF_NAME": ref.removeprefix("refs/heads/")}).returncode
 
     def test_sanity_release_branch_requires_exact_version(self):
         self.assertEqual(self._run_sanity("0.4.0", "refs/heads/release/0.4.0"), 0)
@@ -537,10 +657,39 @@ class ReleaseRehearsalVersionTest(unittest.TestCase):
         self.assertNotEqual(self._run_sanity("0.4.1.dev3+g1a2b", "refs/heads/develop"), 0)
         self.assertNotEqual(self._run_sanity(None, "refs/heads/develop"), 0)
 
-    def test_real_pypi_publish_stays_release_event_only(self):
-        job = _job_section(self.raw, "publish-pypi", "publish-testpypi")
-        self.assertIn("if: github.event_name == 'release'", job)
-        self.assertIn("git merge-base --is-ancestor", job)
+    def test_publishing_jobs_are_gated_by_event(self):
+        events = ["release", "workflow_dispatch", "push", "pull_request"]
+        for job, allowed in [("publish-pypi", {"release"}),
+                             ("publish-testpypi", {"workflow_dispatch"})]:
+            got = {e for e in events
+                   if _eval_if(self.jobs[job]["if"], e, "refs/heads/release/0.4.0")}
+            self.assertEqual(got, allowed, job)
+
+    def _run_guard(self, github_ref, extra_commit_off_main):
+        import subprocess
+        import tempfile
+        script = _named_step(self.jobs["publish-pypi"], "Guard")["run"]
+        git_env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                   "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        with tempfile.TemporaryDirectory() as tmp:
+            def git(*args):
+                subprocess.run(["git", *args], cwd=tmp, check=True, capture_output=True,
+                               env={**os.environ, **git_env, "HOME": tmp, "XDG_DATA_HOME": tmp})
+            git("init", "-q", "-b", "main")
+            git("commit", "-q", "--allow-empty", "-m", "base")
+            git("remote", "add", "origin", tmp)
+            if extra_commit_off_main:
+                git("checkout", "-q", "-b", "side")
+                git("commit", "-q", "--allow-empty", "-m", "side")
+            sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp, check=True,
+                                 capture_output=True, text=True).stdout.strip()
+            return self._run(script, tmp, {"GITHUB_REF": github_ref, "GITHUB_SHA": sha}).returncode
+
+    def test_real_pypi_guard_requires_version_tag_on_main(self):
+        self.assertEqual(self._run_guard("refs/tags/v0.4.0", False), 0)
+        self.assertNotEqual(self._run_guard("refs/heads/release/0.4.0", False), 0)
+        self.assertNotEqual(self._run_guard("refs/tags/v0.4", False), 0)
+        self.assertNotEqual(self._run_guard("refs/tags/v0.4.0", True), 0)
 
 
 # ---------------------------------------------------------------------------
