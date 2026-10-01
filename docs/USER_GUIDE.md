@@ -201,7 +201,10 @@ branch on `$?` keep working; parse stdout, ignore stderr.
   `inbox --limit N` caps rows (default 50; the `unread: n of total` aggregate is never
   sliced). `fetch` bodies are cut at **500 chars** with a
   `(truncated, N chars total)` suffix and a `help[]` pointing at `fetch … --full`;
-  `--full` (also accepted by `thread`) returns complete bodies.
+  `--full` (also accepted by `thread`) returns complete bodies. `thread` bodies follow
+  the same 500-char cut (with a `help[]` pointing at `thread … --full`) and are shown
+  per message only when `$SANDESH_ADDRESS` is that message's sender or a recipient;
+  other messages in the chain list without a body.
 - **Idempotent no-ops are `ok: true`:** `register` of an existing address →
   `result: already`; `unregister` of an absent one → `result: absent`; `archive` of an
   archived project → `result: already` (human mode still exits as before).

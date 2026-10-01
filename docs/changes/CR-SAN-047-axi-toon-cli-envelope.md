@@ -113,7 +113,7 @@ existing function); the rest is presentation (`cli.py`, `notify.py`, two new mod
 - **AC11** — AXI conformance, table-driven over `addressbook, inbox, search, thread, projects, send, reply,
   register, unregister, archive`: default list column count ≤ 4; the named aggregate field present; the
   empty-state sentence present on an empty fixture; `help[]` present on lists/mutations and absent on
-  `fetch --id`/`thread` single-message output; `--fields id,from,to,cc,kind,subject,created,re,unread` on
+  `fetch --id` single-message output (`thread` carries a `--full` help entry only when a body was truncated); `--fields id,from,to,cc,kind,subject,created,re,unread` on
   `inbox` yields all nine columns; `--fields bogus` → exit 2, stdout `ok:false` + `error` naming the valid set.
 - **AC12** — Idempotent no-ops: `register` twice → second `ok:true result:already` exit 0; `unregister` of an
   absent address → `ok:true result:absent` exit 0; `archive` twice → `ok:true result:already` exit 0. Human mode
