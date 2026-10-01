@@ -411,15 +411,46 @@ function envelopeText(verb: string, fields: Record<string, unknown>, context: En
   return encode({ axi: { verb, ok: true, ...fields, context: ctx, warnings: [] } });
 }
 
-function notifyContextProject(sup: WakeSupervisor, address?: string): string | undefined {
+function notifyContextProject(
+  sup: WakeSupervisor,
+  address?: string,
+  projectFilter?: string,
+): string | undefined {
+  if (projectFilter !== undefined) return projectFilter;
   const watchers = sup.status();
   if (address !== undefined) {
     return watchers.find((w) => w.address === address)?.project || process.env.SANDESH_PROJECT || undefined;
   }
-  if (watchers.length === 0) return process.env.SANDESH_PROJECT || undefined;
-  const project = watchers[0].project;
-  if (watchers.some((watcher) => watcher.project !== project)) return undefined;
-  return project || process.env.SANDESH_PROJECT || undefined;
+  return watchers[0]?.project || process.env.SANDESH_PROJECT || undefined;
+}
+
+function aggregateProjectError(
+  watchers: WatcherStatus[],
+  project: string | undefined,
+  operation: string,
+): string | undefined {
+  if (project !== undefined || new Set(watchers.map((watcher) => watcher.project)).size < 2) return undefined;
+  return `watchers span multiple projects; pass project to scope ${operation}`;
+}
+
+function scopedWatchers(watchers: WatcherStatus[], project: string | undefined): WatcherStatus[] {
+  return project === undefined ? watchers : watchers.filter((watcher) => watcher.project === project);
+}
+
+function stopWatchers(
+  sup: WakeSupervisor,
+  address: string | undefined,
+  project: string | undefined,
+): { stopped: number } {
+  const watchers = sup.status();
+  if (address !== undefined) {
+    const watcher = watchers.find((entry) => entry.address === address);
+    if (project !== undefined && watcher?.project !== project) return { stopped: 0 };
+    return sup.stop(address);
+  }
+  const stopped = scopedWatchers(watchers, project)
+    .reduce((count, watcher) => count + sup.stop(watcher.address).stopped, 0);
+  return { stopped };
 }
 
 /**
@@ -627,10 +658,12 @@ interface NotifyStartParams {
 
 interface NotifyStatusParams {
   fields?: string[];
+  project?: string;
 }
 
 interface NotifyStopParams {
   address?: string;
+  project?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1070,11 +1103,18 @@ export default function registerExtension(pi: ExtensionAPI): void {
     label: "Sandesh: Notify Status",
     description:
       "List the in-session wake watchers: address, running, lastExit by default; " +
+      "`project` scopes the list and is required when watchers span projects; " +
       "`fields` selects any of address, project, running, pid, startedAt, lastExit, lastIds, timeoutExits.",
-    promptSnippet: "List your wake watchers and whether each is running.",
-    parameters: Type.Object({ fields: watcherFieldsParam }),
+    promptSnippet: "List your wake watchers, optionally scoped to a project.",
+    parameters: Type.Object({
+      fields: watcherFieldsParam,
+      project: Type.Optional(Type.String({ minLength: 1, description: "Project to limit the watcher list to." })),
+    }),
     execute: async (_callId, params: NotifyStatusParams, _signal, _onUpdate, ctx) => {
       latestUi = ctx.ui;
+      const allWatchers = sup.status();
+      const error = aggregateProjectError(allWatchers, params.project, "sandesh_notify_status");
+      if (error) return textResult(envelopeText("notify_status", { ok: false, error }));
       const fields = resolveWatcherFields(params.fields);
       if (!fields.ok) {
         return textResult(envelopeText("notify_status", { ok: false, error: fields.error }));
@@ -1082,8 +1122,8 @@ export default function registerExtension(pi: ExtensionAPI): void {
       return textResult(
         envelopeText(
           "notify_status",
-          { watchers: sup.status().map((w) => watcherRow(w, fields.fields)) },
-          { project: notifyContextProject(sup) },
+          { watchers: scopedWatchers(allWatchers, params.project).map((w) => watcherRow(w, fields.fields)) },
+          { project: notifyContextProject(sup, undefined, params.project) },
         ),
       );
     },
@@ -1093,38 +1133,72 @@ export default function registerExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "sandesh_notify_stop",
     label: "Sandesh: Notify Stop",
-    description: "Stop the wake watcher for an address, or every watcher when address is omitted.",
-    promptSnippet: "Stop your wake watcher(s).",
+    description:
+      "Stop one watcher by address, or scope an aggregate stop with `project` " +
+      "when watchers span projects.",
+    promptSnippet: "Stop a watcher or a project-scoped watcher set.",
     parameters: Type.Object({
-      address: Type.Optional(Type.String({ description: "Address whose watcher to stop; omit to stop all." })),
+      address: Type.Optional(Type.String({ description: "Address whose watcher to stop." })),
+      project: Type.Optional(Type.String({ minLength: 1, description: "Project to limit an aggregate stop to." })),
     }),
     execute: async (_callId, params: NotifyStopParams, _signal, _onUpdate, ctx) => {
       latestUi = ctx.ui;
-      // Resolve the project before stop() so the entry's project is read while
-      // it is still the addressed watcher (stop keeps entries; this is just order).
-      const project = notifyContextProject(sup, params.address);
-      const { stopped } = sup.stop(params.address);
+      const watchers = sup.status();
+      if (params.address === undefined) {
+        const error = aggregateProjectError(watchers, params.project, "sandesh_notify_stop");
+        if (error) return textResult(envelopeText("notify_stop", { ok: false, error }));
+      }
+      const project = notifyContextProject(sup, params.address, params.project);
+      const { stopped } = stopWatchers(sup, params.address, params.project);
       return textResult(envelopeText("notify_stop", { stopped }, { project, address: params.address }));
     },
   });
 
-  // /sandesh-watcher status | stop [address] — the user-facing view of the supervisor.
   pi.registerCommand("sandesh-watcher", {
-    description: "Sandesh wake watchers: /sandesh-watcher status | stop [address]",
+    description: "Sandesh wake watchers: /sandesh-watcher status [--project <id>] | stop [address] [--project <id>]",
     handler: async (args, ctx) => {
       latestUi = ctx.ui;
       const [sub = "status", ...rest] = args.trim().split(/\s+/);
+      let project: string | undefined;
+      const projectIndex = rest.indexOf("--project");
+      if (projectIndex !== -1) {
+        const value = rest[projectIndex + 1];
+        if (!value || value.startsWith("--")) {
+          ctx.ui.notify("usage: /sandesh-watcher status [--project <id>] | stop [address] [--project <id>]", "warning");
+          return;
+        }
+        project = value;
+        rest.splice(projectIndex, 2);
+      }
       const address = rest.length > 0 ? rest.join(" ") : undefined;
       if (sub === "stop") {
-        const { stopped } = sup.stop(address);
+        const watchers = sup.status();
+        if (address === undefined) {
+          const error = aggregateProjectError(watchers, project, "sandesh-watcher stop");
+          if (error) {
+            ctx.ui.notify(`${error}; use /sandesh-watcher stop --project <id>`, "warning");
+            return;
+          }
+        }
+        const { stopped } = stopWatchers(sup, address, project);
         ctx.ui.notify(`Sandesh watchers stopped: ${stopped}`, "info");
         return;
       }
       if (sub !== "status" && sub !== "") {
-        ctx.ui.notify("usage: /sandesh-watcher status | stop [address]", "warning");
+        ctx.ui.notify("usage: /sandesh-watcher status [--project <id>] | stop [address] [--project <id>]", "warning");
         return;
       }
-      ctx.ui.notify(watcherLines(sup.status()), "info");
+      if (address !== undefined) {
+        ctx.ui.notify("usage: /sandesh-watcher status [--project <id>]", "warning");
+        return;
+      }
+      const watchers = sup.status();
+      const error = aggregateProjectError(watchers, project, "sandesh-watcher status");
+      if (error) {
+        ctx.ui.notify(`${error}; use /sandesh-watcher status --project <id>`, "warning");
+        return;
+      }
+      ctx.ui.notify(watcherLines(scopedWatchers(watchers, project)), "info");
     },
   });
 

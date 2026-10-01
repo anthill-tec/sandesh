@@ -345,7 +345,7 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
     expect(watchers[0].running).toBe(true);
   });
 
-  test("aggregate notify status and stop omit project context when watchers span projects", async () => {
+  test("mixed-project aggregate tools require and honor project filters", async () => {
     saveEnv();
     process.env.SANDESH_PROJECT = "Ambient";
     try {
@@ -359,15 +359,33 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
       await callExecute(startTool, { address: "Mainline - Alpha", project: "Alpha" }, fakeCtx);
       await callExecute(startTool, { address: "Mainline - Beta", project: "Beta" }, fakeCtx);
 
-      const status = decodeEnvelope(text(await callExecute(statusTool, { fields: ["project"] }, fakeCtx)));
-      expect(status.context.project).toBeUndefined();
-      expect((status.fields.watchers as Array<{ project: string }>).map((w) => w.project).sort())
-        .toEqual(["Alpha", "Beta"]);
+      const unscopedStatus = decodeEnvelope(text(await callExecute(statusTool, {}, fakeCtx)));
+      expect(unscopedStatus.ok).toBe(false);
+      expect(unscopedStatus.error as string).toContain("pass project");
 
-      const stop = decodeEnvelope(text(await callExecute(stopTool, {}, fakeCtx)));
-      expect(stop.context.project).toBeUndefined();
-      expect(stop.fields.stopped).toBe(2);
-      expect(notifyDeferreds.every((deferred) => deferred.signal?.aborted)).toBe(true);
+      const unscopedStop = decodeEnvelope(text(await callExecute(stopTool, {}, fakeCtx)));
+      expect(unscopedStop.ok).toBe(false);
+      expect(unscopedStop.error as string).toContain("pass project");
+      expect(notifyDeferreds.every((deferred) => !deferred.signal?.aborted)).toBe(true);
+
+      const alphaStatus = decodeEnvelope(text(await callExecute(
+        statusTool, { project: "Alpha", fields: ["address", "project"] }, fakeCtx)));
+      expect(alphaStatus.context.project).toBe("Alpha");
+      expect((alphaStatus.fields.watchers as Array<{ address: string; project: string }>))
+        .toEqual([{ address: "Mainline - Alpha", project: "Alpha" }]);
+
+      const alphaStop = decodeEnvelope(text(await callExecute(stopTool, { project: "Alpha" }, fakeCtx)));
+      expect(alphaStop.context.project).toBe("Alpha");
+      expect(alphaStop.fields.stopped).toBe(1);
+      expect(notifyDeferreds[0].signal?.aborted).toBe(true);
+      expect(notifyDeferreds[1].signal?.aborted).toBe(false);
+
+      const betaStatus = decodeEnvelope(text(await callExecute(statusTool, { project: "Beta" }, fakeCtx)));
+      expect((betaStatus.fields.watchers as Array<{ address: string }>).map((w) => w.address))
+        .toEqual(["Mainline - Beta"]);
+      const betaStop = decodeEnvelope(text(await callExecute(stopTool, { project: "Beta" }, fakeCtx)));
+      expect(betaStop.fields.stopped).toBe(1);
+      expect(notifyDeferreds[1].signal?.aborted).toBe(true);
     } finally {
       restoreEnv();
     }
@@ -452,6 +470,30 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
     } finally {
       restoreEnv();
     }
+  });
+
+  test("/sandesh-watcher requires a project for mixed-project aggregates and scopes filtered operations", async () => {
+    const { fakePi, capturedCommands, capturedTools, notifyDeferreds } = makeFakePi();
+    registerExtension(fakePi);
+    const { fakeCtx, notifyCalls } = makeFakeCtx();
+    const startTool = getTool(capturedTools, "sandesh_notify_start");
+    const cmd = capturedCommands.get("sandesh-watcher")!;
+
+    await callExecute(startTool, { address: "Mainline - Alpha", project: "Alpha" }, fakeCtx);
+    await callExecute(startTool, { address: "Mainline - Beta", project: "Beta" }, fakeCtx);
+
+    await cmd.handler("status", fakeCtx);
+    expect(notifyCalls[notifyCalls.length - 1].msg).toContain("pass project");
+    await cmd.handler("status --project Alpha", fakeCtx);
+    expect(notifyCalls[notifyCalls.length - 1].msg).toContain("Mainline - Alpha");
+    expect(notifyCalls[notifyCalls.length - 1].msg).not.toContain("Mainline - Beta");
+
+    await cmd.handler("stop", fakeCtx);
+    expect(notifyCalls[notifyCalls.length - 1].msg).toContain("pass project");
+    expect(notifyDeferreds.every((deferred) => !deferred.signal?.aborted)).toBe(true);
+    await cmd.handler("stop --project Alpha", fakeCtx);
+    expect(notifyDeferreds[0].signal?.aborted).toBe(true);
+    expect(notifyDeferreds[1].signal?.aborted).toBe(false);
   });
 
   test("registers a /sandesh-watcher command whose status/stop subcommands both call ctx.ui.notify", async () => {

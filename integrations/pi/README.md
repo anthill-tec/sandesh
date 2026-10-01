@@ -69,8 +69,8 @@ first turn.
 | `sandesh_search`        | FTS5 full-text search over subjects/bodies (`limit`).                            |
 | `sandesh_status`        | home view: address, listening, unread — plus `watcher: running\|stopped`.        |
 | `sandesh_notify_start`  | start the supervised wake watcher for an address (idempotent, one per address); returns the watcher table. |
-| `sandesh_notify_status` | list the in-session watchers: address, running, last exit by default; `fields` selects any of address, project, running, pid, startedAt, lastExit, lastIds, timeoutExits (both notify tools). |
-| `sandesh_notify_stop`   | stop one watcher (by address) or every watcher (no address).                     |
+| `sandesh_notify_status` | list in-session watchers: address, running, last exit by default; `project` scopes the list, and is required when watchers span projects; `fields` selects watcher columns. |
+| `sandesh_notify_stop`   | stop one watcher by address or an aggregate scoped by `project`; unscoped multi-project stops return an error. |
 
 ### Results are AXI envelopes (`--format toon`)
 
@@ -109,9 +109,9 @@ pre-0.4.0 auto-arm at session start (both identity vars must then be set). Super
   when the stopped one has exited, so it never loses the address to it.
 - `session_shutdown` stops every watcher.
 
-Inspect or stop from the prompt with `/sandesh-watcher status` and
-`/sandesh-watcher stop [address]`; `sandesh_notify_status` / `sandesh_notify_stop` are the
-tool equivalents.
+Inspect or stop from the prompt with `/sandesh-watcher status [--project <id>]` and
+`/sandesh-watcher stop [address] [--project <id>]`; mixed-project aggregates require the
+project filter. `sandesh_notify_status` / `sandesh_notify_stop` are the tool equivalents.
 
 ## Manual end-to-end smoke test
 

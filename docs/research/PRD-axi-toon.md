@@ -93,7 +93,7 @@ axi:
   ok: true|false
   <verb-specific result fields, flat>
   context:
-    project: <id>          # CLI envelopes; Pi watcher aggregates omit if ambiguous
+    project: <id>          # CLI envelopes; mixed-project Pi watcher aggregates require a filter
     address: <addr>        # where the verb acts for one
   help[N]: <next-step hints>          # optional
   warnings[N]: <strings>              # ALWAYS present; `warnings: []` when clean
@@ -147,10 +147,10 @@ the quoting rules are where the subset would drift).
 | `notify` (final envelope) | `exit: <code>`, `address`, `project`, `unread[N]: <ids>` (`unread: []` unless exit 0) |
 | every other verb (`setup`, `thread`, `search`, `projects`, `archive`, `unarchive`, `init`, `migrate`, …) | the generic envelope (`verb`, `ok`, `context`, `warnings`) plus that verb's natural result as flat fields; exact fields are fixed in the implementing CR's spec, never invented at emit time |
 
-`context.project` is present on project-scoped CLI envelopes and on Pi envelopes when one
-project is unambiguous; aggregate watcher results spanning projects omit it. `context.address`
-is present on the recipient/sender-keyed CLI verbs (`register`, `unregister`, `inbox`, `fetch`,
-`notify`, `send`, `reply`).
+`context.project` is present on project-scoped CLI envelopes and Pi envelopes. Mixed-project
+watcher aggregates require an explicit project filter; the filter scopes both returned watcher
+rows and stop actions. `context.address` is present on the recipient/sender-keyed CLI verbs
+(`register`, `unregister`, `inbox`, `fetch`, `notify`, `send`, `reply`).
 
 ### 4.5 `notify` in machine mode — G2
 
@@ -204,11 +204,14 @@ State machine per address, owned by the extension:
 | `status()` | per address: running, pid, started, last exit, last wake ids, exit-2 count |
 | a host dep **throws** (`sendUserMessage` / `notify` / `resolve` — the captured `pi` is stale after a session replacement or reload; a throwing `exec` is first reported as exit 1 with its one error notify) | halt that watcher only: mark it stopped, abort its child, **no relaunch**, no rethrow, no further host call; the process survives (an escaped throw in the detached chain would be an unhandled rejection) |
 
-- **Tools:** `sandesh_notify_start(address?, project?)`, `sandesh_notify_status()`,
-  `sandesh_notify_stop(address?)`; `address`/`project` default to `$SANDESH_ADDRESS` /
-  `$SANDESH_PROJECT`. Results are AXI envelopes with the P2 minimal default `watchers[N]{address,running,lastExit}`
-  (`context.project` is present when unambiguous; aggregate `notify_status` or addressless `notify_stop` omits it when watchers span projects, and uses `$SANDESH_PROJECT` only when there are no watchers); a `fields` knob widening to the full status set is deferred. `start` on a running address → `ok:true already:true` (P6); `stop` on nothing → `ok:true stopped: 0`.
-  A `/sandesh-watcher status|stop` slash command mirrors status/stop.
+- **Tools:** `sandesh_notify_start(address?, project?)`, `sandesh_notify_status(project?)`,
+  `sandesh_notify_stop(address?, project?)`; only `start` defaults `address`/`project` from
+  `$SANDESH_ADDRESS` / `$SANDESH_PROJECT`. Results are AXI envelopes with the P2 minimal default
+  `watchers[N]{address,running,lastExit}`. If watchers span projects, aggregate status or addressless
+  stop without an explicit `project` returns an actionable error; with `project`, status and stop are
+  limited to that project. A `fields` knob widening to the full status set is deferred. `start` on a
+  running address → `ok:true already:true` (P6); `stop` with no matching watcher → `ok:true stopped: 0`.
+  A `/sandesh-watcher status|stop [--project <id>]` slash command mirrors status/stop; mixed-project aggregates need the filter.
 - **Arming (D4):** `session_start` **no longer arms by default**. Setting
   `SANDESH_AUTOSTART=1` (with both identity vars) restores the 0.3.x auto-arm for users who
   want it — documented in `USER_GUIDE.md` §Pi as the one behaviour change of 0.4.0.

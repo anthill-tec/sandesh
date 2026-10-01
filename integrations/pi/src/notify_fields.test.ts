@@ -174,16 +174,20 @@ describe("sandesh_notify_status/start — fields knob (CR-SAN-050 §S5, AC5)", (
     }
   });
 
-  test("sandesh_notify_status and sandesh_notify_start TypeBox parameters both declare a `fields` property", () => {
+  test("notify status/stop project filters and status fields are declared by TypeBox", () => {
     const { fakePi, capturedTools } = makeFakePi();
     registerExtension(fakePi);
     const statusTool = getTool(capturedTools, "sandesh_notify_status");
     const startTool = getTool(capturedTools, "sandesh_notify_start");
+    const stopTool = getTool(capturedTools, "sandesh_notify_stop");
 
     const statusProps = (statusTool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
     const startProps = (startTool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
+    const stopProps = (stopTool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
     expect(Object.prototype.hasOwnProperty.call(statusProps, "fields")).toBe(true);
     expect(Object.prototype.hasOwnProperty.call(startProps, "fields")).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(statusProps, "project")).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(stopProps, "project")).toBe(true);
   });
 });
 
