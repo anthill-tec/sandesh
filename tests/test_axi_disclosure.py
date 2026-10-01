@@ -306,6 +306,62 @@ class TruncationTest(_BaseFixture):
         self.assertNotIn(str(mid), _toon.decode(out)["axi"]["bodies"])
 
 
+class RelativeLegacyBodyPathTest(_BaseFixture):
+
+    def _send_with_project_collision(self, recipient):
+        sdb.setup("Other")
+        sdb.register(self.con, "Mainline - Other", kind="mainline", project="Other")
+        sdb.assign_admin(self.con, "TestAdmin")
+        sdb.grant_xproj(self.con, "Demo", by="TestAdmin")
+        mid = sdb.send(self.con, self.store, "Track 1 - Demo", to=[recipient],
+                       subject="relative legacy body", body_text="AlphaOwnerBodyToken",
+                       project="Demo")
+        relative_path = f"messages/msg-{mid}.md"
+        self.con.execute("UPDATE message SET body_path=? WHERE id=?", (relative_path, mid))
+        self.con.commit()
+        collision_path = os.path.join(sdb.store_dir("Other"), relative_path)
+        os.makedirs(os.path.dirname(collision_path), exist_ok=True)
+        with open(collision_path, "w", encoding="utf-8") as fh:
+            fh.write("BetaCollisionBodyToken")
+        return mid
+
+    def test_thread_reads_relative_body_from_sender_project_not_request_project(self):
+        mid = self._send_with_project_collision("Mainline - Other")
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "thread", "--project", "Other", "--id", str(mid), "--full"],
+            env={"SANDESH_ADDRESS": "Mainline - Other"})
+        self.assertEqual(rc, 0, f"authorized recipient should read the body; err={err!r}")
+        bodies = _toon.decode(out)["axi"]["bodies"]
+        self.assertEqual(bodies[str(mid)], "AlphaOwnerBodyToken")
+        self.assertNotEqual(bodies[str(mid)], "BetaCollisionBodyToken")
+
+    def test_thread_does_not_read_a_colliding_body_for_an_unauthorized_message(self):
+        mid = self._send_with_project_collision("Mainline - Demo")
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "thread", "--project", "Other", "--id", str(mid), "--full"],
+            env={"SANDESH_ADDRESS": "Mainline - Other"})
+        self.assertEqual(rc, 0, f"thread metadata should remain readable; err={err!r}")
+        self.assertNotIn(str(mid), _toon.decode(out)["axi"]["bodies"])
+
+    def test_fetch_reads_relative_body_from_sender_project_not_recipient_project(self):
+        mid = self._send_with_project_collision("Mainline - Other")
+        rc, out, err = self.run_cli(
+            ["--format", "toon", "fetch", "--project", "Other", "--to", "Mainline - Other",
+             "--peek", "--full"])
+        self.assertEqual(rc, 0, f"authorized recipient should fetch the body; err={err!r}")
+        bodies = _toon.decode(out)["axi"]["bodies"]
+        self.assertEqual(bodies[str(mid)], "AlphaOwnerBodyToken")
+        self.assertNotEqual(bodies[str(mid)], "BetaCollisionBodyToken")
+
+    def test_reindex_uses_the_sender_project_for_relative_legacy_bodies(self):
+        mid = self._send_with_project_collision("Mainline - Other")
+        sdb.reindex(self.con)
+        alpha = sdb.search(self.con, "Mainline - Other", "AlphaOwnerBodyToken")
+        beta = sdb.search(self.con, "Mainline - Other", "BetaCollisionBodyToken")
+        self.assertEqual([hit["id"] for hit in alpha["hits"]], [mid])
+        self.assertEqual(beta["hits"], [])
+
+
 # =========================================================================== #
 # Item 2 — P9 help[] rules (AC11 remainder).
 # =========================================================================== #

@@ -486,6 +486,13 @@ def _address_project(con, addr):
     return proj
 
 
+def message_body_path(con, projects_dir, message):
+    path = message["body_path"]
+    if path and not os.path.isabs(path):
+        path = os.path.join(projects_dir, _address_project(con, message["from_addr"]), path)
+    return path
+
+
 # --------------------------------------------------------------------------- #
 # sending
 
@@ -715,12 +722,11 @@ def fetch(con, store, recipient, mark=True, *, sender=None, sender_project=None,
                  sender_project=sender_project, kind=kind, since=since,
                  until=until, subject_like=subject_like)
     items = []
+    projects_dir = os.path.dirname(os.path.normpath(store))
     for r in rows:
         body = None
         if r["body_path"]:
-            path = r["body_path"]
-            if not os.path.isabs(path):                    # legacy relative → resolve under store
-                path = os.path.join(store, path)
+            path = message_body_path(con, projects_dir, r)
             try:
                 with open(path, encoding="utf-8") as fh:   # compiled from the full path
                     body = fh.read()
@@ -776,12 +782,14 @@ def reindex(con):
     subject-only entry (empty body). Idempotent — the index is wiped first, so
     a re-run yields the same rows. Returns the indexed count."""
     con.execute("DELETE FROM message_fts")
-    rows = con.execute("SELECT id, subject, body_path FROM message").fetchall()
+    projects_dir = os.path.join(root_dir(), "projects")
+    rows = con.execute("SELECT id, from_addr, subject, body_path FROM message").fetchall()
     for r in rows:
         body = ""
         if r["body_path"]:
+            path = message_body_path(con, projects_dir, r)
             try:
-                with open(r["body_path"], encoding="utf-8") as fh:
+                with open(path, encoding="utf-8") as fh:
                     body = fh.read()
             except OSError:
                 body = ""                     # missing/unreadable → subject-only
