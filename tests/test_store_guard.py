@@ -52,13 +52,11 @@ if _REPO_ROOT not in sys.path:
 
 import tests._store_guard as guard  # noqa: E402,F401 — AC3: first import, re-points XDG_DATA_HOME to tmpfs
 
-import glob  # noqa: E402
 import json  # noqa: E402
 import shutil  # noqa: E402
 import sqlite3  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
-import time  # noqa: E402
 import unittest  # noqa: E402
 
 _VENV_PYTHON = os.path.join(_REPO_ROOT, ".venv", "bin", "python")
@@ -396,30 +394,20 @@ class Ac4bLifecycleTest(unittest.TestCase):
     under $HOME either."""
 
     def test_no_leftover_temp_dirs_after_suite_with_a_failing_test(self):
-        start = time.time() - 1  # 1s slack for filesystem mtime granularity
-        env = _minimal_env()
-        proc = _run_snippet(_SNIPPET_AC4B_LIFECYCLE, env)
-        data = _parse_json_stdout(proc)
+        with tempfile.TemporaryDirectory(prefix="ac4b-private-tmp-") as private_tmp:
+            env = _minimal_env(extra={"TMPDIR": private_tmp})
+            proc = _run_snippet(_SNIPPET_AC4B_LIFECYCLE, env)
+            data = _parse_json_stdout(proc)
 
-        self.assertTrue(data["ok"], f"lifecycle subprocess errored: {data.get('error')}")
-        self.assertEqual(data["tests_run"], 2)
-        self.assertEqual(data["failures"], 1)
+            self.assertTrue(data["ok"], f"lifecycle subprocess errored: {data.get('error')}")
+            self.assertEqual(data["tests_run"], 2)
+            self.assertEqual(data["failures"], 1)
+            self.assertEqual(data["temp_root"], os.path.realpath(private_tmp))
 
-        root = _local_temp_root()
-        # THIS process's own guard dir is live for the whole run by design (the
-        # module-level import created it; atexit removes it "'" asserted for the
-        # subprocess case by Ac2UnsetXdgTest); it is not a leftover of the child.
-        own_guard = os.path.realpath(guard.GUARD_TMP)
-        leftover_temp = [
-            p for p in glob.glob(os.path.join(root, "sandesh-*"))
-            if os.path.isdir(p) and os.path.getmtime(p) >= start
-            and os.path.realpath(p) != own_guard
-        ]
-        self.assertEqual(
-            leftover_temp, [],
-            f"leftover sandesh-* dirs under the temp root after the run: {leftover_temp}",
-        )
-
+            self.assertEqual(
+                os.listdir(private_tmp), [],
+                "the child's guard dir and every TempStore dir must be removed after the run",
+            )
 
 
 if __name__ == "__main__":

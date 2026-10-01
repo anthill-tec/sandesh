@@ -9,12 +9,10 @@ if _REPO_ROOT not in sys.path:
 
 import tests._store_guard as guard  # noqa: E402,F401
 
-import glob  # noqa: E402
 import importlib.metadata  # noqa: E402
 import shlex  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
-import time  # noqa: E402
 import tomllib  # noqa: E402
 import unittest  # noqa: E402
 
@@ -146,9 +144,11 @@ class CiTwineFloorPinnedTest(unittest.TestCase):
 class RepresentativeSuitesIsolatedStoreTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._start_time = time.time() - 1
-        cls._isolated_xdg = tempfile.TemporaryDirectory(prefix="isolated-sandesh-hygiene-")
+        cls._private_tmp = tempfile.TemporaryDirectory(prefix="hygiene-private-tmp-")
+        cls._isolated_xdg = tempfile.TemporaryDirectory(
+            prefix="isolated-sandesh-hygiene-", dir=cls._private_tmp.name)
         env = dict(os.environ)
+        env["TMPDIR"] = cls._private_tmp.name
         env["XDG_DATA_HOME"] = cls._isolated_xdg.name
         cls._results = {}
         for relative_path in _REPRESENTATIVE_FILES:
@@ -161,6 +161,7 @@ class RepresentativeSuitesIsolatedStoreTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls._isolated_xdg.cleanup()
+        cls._private_tmp.cleanup()
 
     def test_representative_suites_pass_with_explicit_isolated_store(self):
         failures = {
@@ -171,12 +172,9 @@ class RepresentativeSuitesIsolatedStoreTest(unittest.TestCase):
         self.assertEqual(failures, {})
 
     def test_representative_suites_leave_no_guard_temp_directories(self):
-        root = os.path.realpath(tempfile.gettempdir())
-        own_guard = os.path.realpath(guard.GUARD_TMP)
         leftovers = [
-            path for path in glob.glob(os.path.join(root, "sandesh-*"))
-            if os.path.isdir(path) and os.path.getmtime(path) >= self._start_time
-            and os.path.realpath(path) != own_guard
+            name for name in os.listdir(self._private_tmp.name)
+            if name != os.path.basename(self._isolated_xdg.name)
         ]
         self.assertEqual(leftovers, [])
 
