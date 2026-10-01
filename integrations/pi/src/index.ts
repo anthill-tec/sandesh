@@ -1090,7 +1090,7 @@ export default function registerExtension(pi: ExtensionAPI): void {
       return textResult(
         envelopeText(
           "notify_start",
-          { already: r.already, watchers: sup.status().map((w) => watcherRow(w, fields.fields)) },
+          { already: r.already, watchers: scopedWatchers(sup.status(), project).map((w) => watcherRow(w, fields.fields)) },
           { project, address },
         ),
       );

@@ -261,6 +261,35 @@ describe("A — sandesh_notify_start/status/stop tools + /sandesh-watcher comman
     ]);
   });
 
+  test("sandesh_notify_start returns watcher rows only for its project", async () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    registerExtension(fakePi);
+    const { fakeCtx } = makeFakeCtx();
+    const tool = getTool(capturedTools, "sandesh_notify_start");
+    const fields = ["address", "project", "running", "pid", "startedAt", "lastExit", "lastIds", "timeoutExits"];
+
+    await callExecute(tool, { address: "Mainline - Alpha", project: "Alpha", fields }, fakeCtx);
+    const result = await callExecute(
+      tool, { address: "Mainline - Beta", project: "Beta", fields }, fakeCtx);
+    const env = decodeEnvelope(text(result));
+    const watchers = env.fields.watchers as Array<{ address: string; project: string; lastIds: number[] }>;
+
+    expect(env.context.project).toBe("Beta");
+    expect(env.fields.already).toBe(false);
+    expect(watchers).toHaveLength(1);
+    expect(watchers[0].address).toBe("Mainline - Beta");
+    expect(watchers[0].project).toBe("Beta");
+    expect(watchers[0].lastIds).toEqual([]);
+
+    const repeated = decodeEnvelope(text(await callExecute(
+      tool, { address: "Mainline - Beta", project: "Beta", fields }, fakeCtx)));
+    const repeatedWatchers = repeated.fields.watchers as Array<{ address: string; project: string }>;
+    expect(repeated.fields.already).toBe(true);
+    expect(repeatedWatchers).toHaveLength(1);
+    expect(repeatedWatchers[0].address).toBe("Mainline - Beta");
+    expect(repeatedWatchers[0].project).toBe("Beta");
+  });
+
   test("a second sandesh_notify_start for the same address reports already:true and spawns no second child", async () => {
     const { fakePi, capturedTools, notifyDeferreds } = makeFakePi();
     registerExtension(fakePi);

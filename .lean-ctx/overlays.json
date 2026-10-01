@@ -66,19 +66,6 @@
       "stale": false
     },
     {
-      "id": "ov_file:$ rg --line-number --color=never --glob 'test_*.py' -M240 --max-columns-preview…_1790853412153",
-      "target": "file:$ rg --line-number --color=never --glob 'test_*.py' -M240 --max-columns-preview…",
-      "operation": {
-        "type": "exclude",
-        "reason": "evicted via dashboard"
-      },
-      "scope": "project",
-      "before_hash": "",
-      "author": "user",
-      "created_at": "2026-10-01T11:16:52.153554968Z",
-      "stale": false
-    },
-    {
       "id": "ov_file:$ rg --line-number --color=never --glob '*.test.ts' -M240 --max-columns-preview…_1790853414520",
       "target": "file:$ rg --line-number --color=never --glob '*.test.ts' -M240 --max-columns-preview…",
       "operation": {
@@ -89,19 +76,6 @@
       "before_hash": "",
       "author": "user",
       "created_at": "2026-10-01T11:16:54.520337976Z",
-      "stale": false
-    },
-    {
-      "id": "ov_file:$ rg --line-number --color=never --glob 'test_*.py' -M400 --max-columns-preview…_1790853433845",
-      "target": "file:$ rg --line-number --color=never --glob 'test_*.py' -M400 --max-columns-preview…",
-      "operation": {
-        "type": "exclude",
-        "reason": "evicted via dashboard"
-      },
-      "scope": "project",
-      "before_hash": "",
-      "author": "user",
-      "created_at": "2026-10-01T11:17:13.845828106Z",
       "stale": false
     },
     {
@@ -170,32 +144,6 @@
       "stale": false
     },
     {
-      "id": "ov_file:$ rg --line-number --color=never -C2 -M400 --max-columns-preview 'relative|body…_1790853477348",
-      "target": "file:$ rg --line-number --color=never -C2 -M400 --max-columns-preview 'relative|body…",
-      "operation": {
-        "type": "exclude",
-        "reason": "evicted via dashboard"
-      },
-      "scope": "project",
-      "before_hash": "",
-      "author": "user",
-      "created_at": "2026-10-01T11:17:57.348953548Z",
-      "stale": false
-    },
-    {
-      "id": "ov_file:$ rg --line-number --color=never -C1 --glob 'test_*.py' -M400 --max-columns-pre…_1790854437883",
-      "target": "file:$ rg --line-number --color=never -C1 --glob 'test_*.py' -M400 --max-columns-pre…",
-      "operation": {
-        "type": "exclude",
-        "reason": "evicted via dashboard"
-      },
-      "scope": "project",
-      "before_hash": "",
-      "author": "user",
-      "created_at": "2026-10-01T11:33:57.883898359Z",
-      "stale": false
-    },
-    {
       "id": "ov_file:$ rg --line-number --color=never -C5 -M400 --max-columns-preview 'notify_status…_1790854867815",
       "target": "file:$ rg --line-number --color=never -C5 -M400 --max-columns-preview 'notify_status…",
       "operation": {
@@ -245,6 +193,97 @@
       "before_hash": "",
       "author": "user",
       "created_at": "2026-10-01T12:17:34.145032575Z",
+      "stale": false
+    },
+    {
+      "id": "ov_file:$ rg --line-number --color=never -C1 --glob 'test_*.py' -M400 --max-columns-pre…_1790857494984",
+      "target": "file:$ rg --line-number --color=never -C1 --glob 'test_*.py' -M400 --max-columns-pre…",
+      "operation": {
+        "type": "exclude",
+        "reason": "evicted via dashboard"
+      },
+      "scope": "project",
+      "before_hash": "",
+      "author": "user",
+      "created_at": "2026-10-01T12:24:54.984831841Z",
+      "stale": false
+    },
+    {
+      "id": "ov_file:$ rg --line-number --color=never --glob 'test_*.py' -M400 --max-columns-preview…_1790857498177",
+      "target": "file:$ rg --line-number --color=never --glob 'test_*.py' -M400 --max-columns-preview…",
+      "operation": {
+        "type": "exclude",
+        "reason": "evicted via dashboard"
+      },
+      "scope": "project",
+      "before_hash": "",
+      "author": "user",
+      "created_at": "2026-10-01T12:24:58.177007556Z",
+      "stale": false
+    },
+    {
+      "id": "ov_file:$ rg --line-number --color=never --glob 'test_*.py' -M240 --max-columns-preview…_1790857502487",
+      "target": "file:$ rg --line-number --color=never --glob 'test_*.py' -M240 --max-columns-preview…",
+      "operation": {
+        "type": "exclude",
+        "reason": "evicted via dashboard"
+      },
+      "scope": "project",
+      "before_hash": "",
+      "author": "user",
+      "created_at": "2026-10-01T12:25:02.487252426Z",
+      "stale": false
+    },
+    {
+      "id": "ov_file:$ rg --line-number --color=never -C2 -M400 --max-columns-preview 'relative|body…_1790857508061",
+      "target": "file:$ rg --line-number --color=never -C2 -M400 --max-columns-preview 'relative|body…",
+      "operation": {
+        "type": "exclude",
+        "reason": "evicted via dashboard"
+      },
+      "scope": "project",
+      "before_hash": "",
+      "author": "user",
+      "created_at": "2026-10-01T12:25:08.061381599Z",
+      "stale": false
+    },
+    {
+      "id": "ov_file:/home/antonyj/Documents/data_projects/sandesh/integrations/pi/src/identity.test.ts_1790857509746",
+      "target": "file:/home/antonyj/Documents/data_projects/sandesh/integrations/pi/src/identity.test.ts",
+      "operation": {
+        "type": "exclude",
+        "reason": "evicted via dashboard"
+      },
+      "scope": "project",
+      "before_hash": "",
+      "author": "user",
+      "created_at": "2026-10-01T12:25:09.746532595Z",
+      "stale": false
+    },
+    {
+      "id": "ov_file:$ rg --line-number --color=never -C1 -M400 --max-columns-preview 'read_text|/.r…_1790857511870",
+      "target": "file:$ rg --line-number --color=never -C1 -M400 --max-columns-preview 'read_text|/.r…",
+      "operation": {
+        "type": "exclude",
+        "reason": "evicted via dashboard"
+      },
+      "scope": "project",
+      "before_hash": "",
+      "author": "user",
+      "created_at": "2026-10-01T12:25:11.870069677Z",
+      "stale": false
+    },
+    {
+      "id": "ov_file:$ rg --line-number --color=never -C2 -M400 --max-columns-preview 'direnv|/.env|…_1790857514029",
+      "target": "file:$ rg --line-number --color=never -C2 -M400 --max-columns-preview 'direnv|/.env|…",
+      "operation": {
+        "type": "exclude",
+        "reason": "evicted via dashboard"
+      },
+      "scope": "project",
+      "before_hash": "",
+      "author": "user",
+      "created_at": "2026-10-01T12:25:14.029267199Z",
       "stale": false
     }
   ]
