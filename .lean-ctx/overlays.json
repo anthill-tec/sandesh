@@ -233,6 +233,19 @@
       "author": "user",
       "created_at": "2026-10-01T11:50:29.108301026Z",
       "stale": false
+    },
+    {
+      "id": "ov_file:$ rg --line-number --color=never -C3 -M400 --max-columns-preview 'sandesh_notif…_1790857054145",
+      "target": "file:$ rg --line-number --color=never -C3 -M400 --max-columns-preview 'sandesh_notif…",
+      "operation": {
+        "type": "exclude",
+        "reason": "evicted via dashboard"
+      },
+      "scope": "project",
+      "before_hash": "",
+      "author": "user",
+      "created_at": "2026-10-01T12:17:34.145032575Z",
+      "stale": false
     }
   ]
 }

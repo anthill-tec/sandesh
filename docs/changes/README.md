@@ -1,9 +1,6 @@
 # CR Queue — Sandesh
 
-> **Deprecated for state tracking (2026-09-29).** Crucible is the single source of truth for CR
-> planning, ordering, dependencies, release/wave membership and status — ask it (`next`, `status`,
-> `queue`), not this file. The table below is a frozen historical record through CR-SAN-046; new CRs
-> are not added here. Specs remain in this folder (`CR-SAN-NNN-*.md`) for scope and ACs.
+Single source of truth for change requests. Pick the next `PENDING` CR by phase + dependencies.
 
 | CR | Title | Phase | Status | Depends on | Shipped |
 |---|---|---|---|---|---|
@@ -90,11 +87,6 @@ PyPI publish, 2026-06-15).
 (provisioning core: `sandesh init` + lazy auto-migrate) → 037 (install.sh surface-choice + delegate
 + mandatory-migrate) → 038 (Pi uvx + provision nudge, bun) → 039 (docs restructure). One CLI core,
 two interchangeable surfaces (`[mcp]`=Claude, Pi extension=Pi); install prompts for surface(s).
-
-**Wave 16 (0.4.0) — the Model B contract** — design contract: **[PRD-axi-toon](../research/PRD-axi-toon.md)**
-(APPROVED 2026-09-26, owner-delegated; AXI principles per axi.md as the standard for the agent surface).
-Order CR-SAN-047 (python, CLI) → CR-SAN-049 (chore: dev pins + real-store test guard) → CR-SAN-048 (bun, Pi). Requested by Mainline - ModelB (Sandesh thread
-#1394/#1396); npm Trusted Publishing + `NPM_TOKEN` retirement ride the 0.4.0 release.
 
 ## Canonical statuses
 `PENDING` / `IN_PROGRESS` / `COMPLETED` / `SUPERSEDED` / `DEFERRED`
