@@ -352,7 +352,7 @@ can be derived (and accepted-but-unused on the recipient-keyed tools). Errors ma
 `ValueError`/`PermissionError` → `ToolError`. **The wake is NOT in MCP** — `notify` stays a
 background process (the agent's host re-invokes it; see the wake section above). The Pi
 extension (`integrations/pi/`) exposes 16 tools over the CLI, with a native
-wake loop (`sendUserMessage(…, {deliverAs:"followUp"})`) and a ≥0.2.0 CLI session gate.
+wake loop (`sendUserMessage(…, {deliverAs:"followUp"})`) and a minimum-CLI-version session gate (`MIN_CLI_VERSION` in `integrations/pi/src/index.ts`).
 
 ---
 
