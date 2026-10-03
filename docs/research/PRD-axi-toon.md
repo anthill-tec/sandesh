@@ -21,6 +21,7 @@ start/status/stop surface. CRs derived from this PRD cite it via `**Design refer
 | 1.2 | 2026-09-29 | Mainline - Sandesh | Owner ruling: the identity environment is loaded at the shell boundary (direnv, owned by Model B's `modelb-axi init`); the extension never parses `.env`. P7 gains the unexported-identity nudge (§4.6). |
 | 1.3 | 2026-09-30 | Mainline - Sandesh | Owner ruling: the wake state machine (§4.7) gains a terminal transition for a throwing host dep (stale ctx after session replacement/reload) — halt that watcher quietly, never crash the process (CR-SAN-052). |
 | 1.4 | 2026-09-30 | Mainline - Sandesh | Release-review fix (0.4.0 F3): `stop()` no longer forgets the child it aborted — a `start()` for the same address defers its spawn until that child has exited, so the new watcher cannot lose the CLI dedup to the old one; exit 5 is retried once after 30 s before it is treated as a foreign owner (§4.7). |
+| 1.5 | 2026-10-03 | Mainline - Sandesh | Hotfix 0.4.1 (CR-SAN-053, Crucible #1416): watchers are owned per registration — a sub-agent session's registration never stops, replaces or reads the parent's; an unrequested stop surfaces a warning; `start` reports an exit inside a 2 s settle window as an error. |
 
 ---
 
@@ -201,6 +202,8 @@ State machine per address, owned by the extension:
 | exit **5** (dedup) | "already running" — another watcher owns the address, possibly a previous child of this address still winding down: relaunch **once** after **30 s** (silent, still `running`); a second exit 5 in a row stops this loop silently, do not surface |
 | exit **1 / 3 / 4** or a signal | stop the loop; surface the code + reason (from the envelope's `error`) |
 | `stop(address?)` | abort the child (SIGTERM, then SIGKILL after a grace); the entry reports `running:false` at once but remembers the child until it exits — a `start()` for the same address in that window is accepted (`running:true`) and spawns only after that exit, never racing the old child for the address; no address = all |
+| an **unrequested** `stop` (any stop not asked for via `sandesh_notify_stop`, `/sandesh-watcher stop` or `session_shutdown`) | stop it as above, and surface one `ctx.ui.notify` warning per stopped entry naming the address and `sandesh_notify_start`; requested stops stay quiet |
+| the new watcher **exits within the settle window** (2 s) after `start` | `sandesh_notify_start` returns `ok:false` with the exit code and the envelope's `error` (or `no envelope`), `help[]` naming `sandesh_addressbook` and `sandesh_register`; a watcher still `running` after the window (no exit yet, a relaunch, the exit-5 retry wait) returns `ok:true` |
 | `status()` | per address: running, pid, started, last exit, last wake ids, exit-2 count |
 | a host dep **throws** (`sendUserMessage` / `notify` / `resolve` — the captured `pi` is stale after a session replacement or reload; a throwing `exec` is first reported as exit 1 with its one error notify) | halt that watcher only: mark it stopped, abort its child, **no relaunch**, no rethrow, no further host call; the process survives (an escaped throw in the detached chain would be an unhandled rejection) |
 
@@ -215,7 +218,11 @@ State machine per address, owned by the extension:
 - **Arming (D4):** `session_start` **no longer arms by default**. Setting
   `SANDESH_AUTOSTART=1` (with both identity vars) restores the 0.3.x auto-arm for users who
   want it — documented in `USER_GUIDE.md` §Pi as the one behaviour change of 0.4.0.
-  `session_shutdown` still stops every loop.
+  `session_shutdown` stops only its own registration's loops (see ownership below).
+- **Ownership:** watchers are owned **per registration** — each `registerExtension` (each Pi
+  session, sub-agent sessions included) owns its supervisor and its UI route. A registration
+  never stops, replaces or reads another's watchers, and its watcher notices go only to its own
+  session's UI; `session_shutdown` stops only its own.
 - `__resetWakeState`/`__setWakeSleepFn` test seams are kept and extended (injectable clock
   for the 30 s / 60 s rules).
 
