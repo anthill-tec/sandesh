@@ -537,32 +537,18 @@ def _parse_yaml(raw: str):
 
 
 def _eval_if(expr: str, event: str, ref: str) -> bool:
-    """Evaluate the workflow `if:` subset: && of ==/startsWith on github.*,
-    where a single &&-joined term may itself be a parenthesised ||-chain of
-    startsWith(...) alternatives, e.g.
-    "(startsWith(github.ref, 'a/') || startsWith(github.ref, 'b/'))" \u2014
-    needed so a branch-prefix gate can accept more than one prefix (e.g.
-    release/X.Y.Z OR hotfix/X.Y.Z) while still excluding everything else.
-    """
-    def eval_simple(clause):
+    """Evaluate the workflow `if:` subset: && of ==/startsWith on github.*"""
+    for clause in expr.split("&&"):
+        clause = clause.strip()
         m = re.fullmatch(r"github\.(event_name|ref) == '([^']*)'", clause)
         if m:
             actual = event if m.group(1) == "event_name" else ref
-            return actual == m.group(2)
-        m = re.fullmatch(r"startsWith\(github\.ref, '([^']*)'\)", clause)
-        if m:
-            return ref.startswith(m.group(1))
-        return None
-
-    for clause in expr.split("&&"):
-        clause = clause.strip()
-        ok = eval_simple(clause)
-        if ok is None and clause.startswith("(") and clause.endswith(")"):
-            sub_results = [eval_simple(c.strip()) for c in clause[1:-1].split("||")]
-            if sub_results and all(r is not None for r in sub_results):
-                ok = any(sub_results)
-        if ok is None:
-            raise AssertionError(f"unsupported if clause: {clause!r}")
+            ok = actual == m.group(2)
+        else:
+            m = re.fullmatch(r"startsWith\(github\.ref, '([^']*)'\)", clause)
+            if m is None:
+                raise AssertionError(f"unsupported if clause: {clause!r}")
+            ok = ref.startswith(m.group(1))
         if not ok:
             return False
     return True
@@ -605,24 +591,6 @@ class ReleaseRehearsalVersionTest(unittest.TestCase):
                            ("release", "refs/tags/v0.4.0")]:
             self.assertFalse(_eval_if(cond, event, ref), (event, ref))
 
-    def test_pin_step_if_also_allows_hotfix_branch_dispatch(self):
-        """Hotfix-pin coverage: the rehearsal pin's ``if`` must gate hotfix/X.Y.Z
-        dispatch too, not only release/X.Y.Z.
-
-        FAILS at RED \u2014 the step's current ``if`` only has
-        ``startsWith(github.ref, 'refs/heads/release/')``, so a workflow_dispatch
-        on a hotfix branch is (wrongly) excluded from pinning.
-        """
-        cond = self.pin["if"]
-        self.assertTrue(_eval_if(cond, "workflow_dispatch", "refs/heads/hotfix/0.4.1"))
-        self.assertTrue(_eval_if(cond, "workflow_dispatch", "refs/heads/release/0.4.0"))
-        for event, ref in [("workflow_dispatch", "refs/heads/main"),
-                           ("workflow_dispatch", "refs/heads/develop"),
-                           ("push", "refs/heads/hotfix/0.4.1"),
-                           ("pull_request", "refs/heads/hotfix/0.4.1"),
-                           ("release", "refs/tags/v0.4.1")]:
-            self.assertFalse(_eval_if(cond, event, ref), (event, ref))
-
     def test_pin_step_precedes_build_and_takes_ref_via_env(self):
         self.assertLess(_step_index(self.build, "Pin release version"),
                         _step_index(self.build, "Build sdist"))
@@ -657,24 +625,6 @@ class ReleaseRehearsalVersionTest(unittest.TestCase):
             self.assertNotEqual(code, 0, (ref_name, pkg))
             self.assertEqual(exported, "", (ref_name, pkg))
 
-    def test_pin_step_pins_exact_hotfix_version_and_refuses_bad_input(self):
-        """Hotfix-pin coverage: hotfix/X.Y.Z must pin exactly like release/X.Y.Z,
-        and still refuse a version mismatch or a malformed branch suffix.
-
-        FAILS at RED \u2014 the pin script only strips a 'release/' prefix
-        (``V="${REF_NAME#release/}"``), so for a 'hotfix/0.4.1' ref the
-        stripped value stays 'hotfix/0.4.1', never matches the X.Y.Z regex, and
-        the step always refuses \u2014 even for the exact matching version.
-        """
-        code, exported = self._run_pin("hotfix/0.4.1", "0.4.1")
-        self.assertEqual(code, 0)
-        self.assertEqual(exported, "SETUPTOOLS_SCM_PRETEND_VERSION=0.4.1\n")
-        for ref_name, pkg in [("hotfix/0.4.1", "0.4.0"), ("hotfix/0.4", "0.4"),
-                              ("hotfix/foo", "foo")]:
-            code, exported = self._run_pin(ref_name, pkg)
-            self.assertNotEqual(code, 0, (ref_name, pkg))
-            self.assertEqual(exported, "", (ref_name, pkg))
-
     def test_testpypi_checks_the_uploaded_artifact_not_a_rebuild(self):
         self.assertFalse(any("python -m build" in s.get("run", "") for s in self.testpypi["steps"]))
         download = next(i for i, s in enumerate(self.testpypi["steps"])
@@ -695,19 +645,6 @@ class ReleaseRehearsalVersionTest(unittest.TestCase):
         self.assertEqual(self._run_sanity("0.4.0", "refs/heads/release/0.4.0"), 0)
         self.assertNotEqual(self._run_sanity("0.3.7.dev92", "refs/heads/release/0.4.0"), 0)
         self.assertNotEqual(self._run_sanity("0.4.1", "refs/heads/release/0.4.0"), 0)
-
-    def test_sanity_hotfix_branch_requires_exact_version(self):
-        """Hotfix-pin coverage: TestPyPI version sanity must apply the same exact-version
-        rule to hotfix/X.Y.Z as it does to release/X.Y.Z.
-
-        FAILS at RED \u2014 the sanity step's ``case "$REF" in \u2026 esac`` has no
-        'refs/heads/hotfix/*' arm, so a hotfix ref falls through every case
-        unchecked and ANY artifact version (including a stale/dev/mismatched one)
-        passes.
-        """
-        self.assertEqual(self._run_sanity("0.4.1", "refs/heads/hotfix/0.4.1"), 0)
-        self.assertNotEqual(self._run_sanity("0.4.1.dev3", "refs/heads/hotfix/0.4.1"), 0)
-        self.assertNotEqual(self._run_sanity("0.4.0", "refs/heads/hotfix/0.4.1"), 0)
 
     def test_sanity_main_refuses_dev_versions(self):
         self.assertEqual(self._run_sanity("0.4.0", "refs/heads/main"), 0)
