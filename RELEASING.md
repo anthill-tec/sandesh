@@ -70,8 +70,8 @@ One `build` job feeds the event-gated jobs below:
 | `publish-testpypi` | **`workflow_dispatch`** only | **TestPyPI** (env `testpypi`, OIDC) |
 
 `build` checks out with `fetch-depth: 0` so hatch-vcs sees the tag → the artifact version is the
-tag's `X.Y.Z` (a `release/X.Y.Z` rehearsal dispatch instead pins `X.Y.Z` from the branch name —
-see *Versioning of the rehearsal* below).
+tag's `X.Y.Z` (a `release/X.Y.Z` or `hotfix/X.Y.Z` rehearsal dispatch instead pins `X.Y.Z` from
+the branch name — see *Versioning of the rehearsal* below).
 
 **Publish branch guard.** Before any upload, `publish-pypi` (and `publish-npm`) assert the ref is a
 `^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$` tag **and** that its commit is reachable from `origin/main`
@@ -100,12 +100,12 @@ scripts/release.sh checkpoint            # on a hotfix/* or release/* branch
 >
 > | Dispatched on | TestPyPI version | Enforced by |
 > |---|---|---|
-> | `release/X.Y.Z` | **exactly `X.Y.Z`**, pinned from the branch name (`SETUPTOOLS_SCM_PRETEND_VERSION`) | `build` refuses unless `integrations/pi/package.json` is `X.Y.Z` (run `set-version` first); `publish-testpypi` refuses any other artifact version |
+> | `release/X.Y.Z` or `hotfix/X.Y.Z` | **exactly `X.Y.Z`**, pinned from the branch name (`SETUPTOOLS_SCM_PRETEND_VERSION`) — `hotfix/X.Y.Z` is pinned the same way as `release/X.Y.Z` | `build` refuses unless the branch suffix is `X.Y.Z` and `integrations/pi/package.json` is `X.Y.Z` (run `set-version` first); `publish-testpypi` refuses any other artifact version |
 > | `main` (production) | the `vX.Y.Z` tag at HEAD, tag-derived | `publish-testpypi` refuses a `.dev` version |
-> | anything else (`hotfix/*`, `develop`, …) | a clean **`X.Y.Z.devN`** | `no-local-version` (below) |
+> | anything else (`develop`, feature branches, …) | a clean **`X.Y.Z.devN`** | `no-local-version` (below) |
 >
-> TestPyPI never accepts a re-upload of a version, so a `release/X.Y.Z` rehearsal can upload
-> `X.Y.Z` **once**; a re-rehearsal after a fix fails the upload, which is expected.
+> TestPyPI never accepts a re-upload of a version, so a `release/X.Y.Z` or `hotfix/X.Y.Z` rehearsal
+> can upload `X.Y.Z` **once**; a re-rehearsal after a fix fails the upload, which is expected.
 >
 > `pyproject.toml` sets `[tool.hatch.version] raw-options = { local_scheme = "no-local-version" }`,
 > so an untagged, unpinned build derives a clean **`X.Y.Z.devN`** (PEP 440 dev release) instead of a

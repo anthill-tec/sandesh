@@ -28,8 +28,18 @@ import type {
   ExtensionContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import registerExtension from "./index";
+import registerExtension, { __setStartSettleMs } from "./index";
 import { decodeEnvelope } from "./toon";
+
+// CR-SAN-053 \u00a7S3: the production `sandesh_notify_start` path now awaits
+// `settle(address, START_SETTLE_MS)` after a successful `start()`. This file
+// drives several scenarios with a pending (never-resolved) notify child, so
+// the settle window is forced to 0 for the whole file \u2014 otherwise those
+// `await callExecute(...)` calls would block for the real default (2000 ms)
+// before returning.
+beforeAll(() => {
+  __setStartSettleMs(0);
+});
 
 // ─── Envelope fixtures ──────────────────────────────────────────────────────
 
@@ -730,3 +740,206 @@ describe("F — stale pi.exec on relaunch through sandesh_notify_start (CR-SAN-0
     expect(watchers[0].lastExit).toBe(1);
   });
 });
+
+// ============================================================================
+// G \u2014 CR-SAN-053 \u00a7S1: each registration owns its own supervisor and UI route
+// ============================================================================
+//
+// A Pi sub-agent session loads the SAME module instance as its parent and
+// calls registerExtension() again. Today registerExtension() starts with
+// resetExtensionState(), which stops the PREVIOUS registration's supervisor
+// (the parent's), and every tool/command/session handler overwrites the
+// shared module-level `latestUi`, so a later exit from the parent's watcher
+// is either swallowed (entry already marked stopped) or routed to whichever
+// ctx was last used. These tests drive two fake `pi` registrations (A then
+// B) through the production `registerExtension` and assert A's watcher and
+// UI route survive B's registration untouched.
+
+describe("G \u2014 CR-SAN-053 \u00a7S1: per-registration supervisor + UI route isolation", () => {
+  test("AC1 \u2014 registering pi B (and running B's session_shutdown) does not stop pi A's running watcher", async () => {
+    const piA = makeFakePi();
+    registerExtension(piA.fakePi);
+    const ctxA = makeFakeCtx();
+    const startToolA = getTool(piA.capturedTools, "sandesh_notify_start");
+
+    const startEnv = decodeEnvelope(
+      text(await callExecute(startToolA, { address: "Mainline - Demo", project: "Demo" }, ctxA.fakeCtx)),
+    );
+    expect(startEnv.ok).toBe(true);
+    expect(piA.notifyDeferreds.length).toBe(1);
+
+    const piB = makeFakePi();
+    registerExtension(piB.fakePi);
+    const ctxB = makeFakeCtx();
+    const shutdownB = piB.handlers.get("session_shutdown");
+    if (!shutdownB) throw new Error('pi B never registered a "session_shutdown" handler');
+    await shutdownB({ type: "session_shutdown", reason: "quit" }, ctxB.fakeCtx);
+    await flush();
+
+    // A's own watcher must still be running: B's registration/shutdown must
+    // never touch A's supervisor.
+    const statusA = decodeEnvelope(
+      text(await callExecute(getTool(piA.capturedTools, "sandesh_notify_status"), {}, ctxA.fakeCtx)),
+    );
+    const watchersA = statusA.fields.watchers as Array<{ address: string; running: boolean }>;
+    expect(watchersA).toHaveLength(1);
+    expect(watchersA[0].address).toBe("Mainline - Demo");
+    expect(watchersA[0].running).toBe(true);
+    expect(piA.notifyDeferreds[0].signal?.aborted).toBe(false);
+
+    // B never started anything of its own.
+    const statusB = decodeEnvelope(
+      text(await callExecute(getTool(piB.capturedTools, "sandesh_notify_status"), {}, ctxB.fakeCtx)),
+    );
+    expect(statusB.fields.watchers).toEqual([]);
+  });
+
+  test("AC2 \u2014 pi B registering before A's watcher exits must not swallow or misroute A's exit-1 error", async () => {
+    const piA = makeFakePi();
+    registerExtension(piA.fakePi);
+    const ctxA = makeFakeCtx();
+    const startToolA = getTool(piA.capturedTools, "sandesh_notify_start");
+    await callExecute(startToolA, { address: "Mainline - Demo", project: "Demo" }, ctxA.fakeCtx);
+    expect(piA.notifyDeferreds.length).toBe(1);
+
+    // B registers while A's child is still pending.
+    const piB = makeFakePi();
+    registerExtension(piB.fakePi);
+    const ctxB = makeFakeCtx();
+
+    // Now A's pending notify child exits with a terminal error.
+    piA.notifyDeferreds[0].resolve({
+      stdout: notifyEnvelope({ exit: 1, address: "Mainline - Demo", project: "Demo", error: "x", ok: false }),
+      stderr: "",
+      code: 1,
+      killed: false,
+    });
+    await flush();
+
+    expect(ctxA.notifyCalls.length).toBe(1);
+    expect(ctxA.notifyCalls[0].type).toBe("error");
+    expect(ctxA.notifyCalls[0].msg).toContain("Mainline - Demo");
+    expect(ctxB.notifyCalls.length).toBe(0);
+  });
+
+  describe("AC3 \u2014 requested stops stay quiet (regression pin \u2014 may already pass today)", () => {
+    test("session_shutdown stops the watcher (running:false) and posts no notify", async () => {
+      const { fakePi, capturedTools, handlers } = makeFakePi();
+      registerExtension(fakePi);
+      const { fakeCtx, notifyCalls } = makeFakeCtx();
+      const startTool = getTool(capturedTools, "sandesh_notify_start");
+      await callExecute(startTool, { address: "Mainline - Demo", project: "Demo" }, fakeCtx);
+
+      const shutdown = handlers.get("session_shutdown");
+      if (!shutdown) throw new Error('registerExtension never registered a "session_shutdown" handler');
+      await shutdown({ type: "session_shutdown", reason: "quit" }, fakeCtx);
+      await flush();
+
+      const status = decodeEnvelope(
+        text(await callExecute(getTool(capturedTools, "sandesh_notify_status"), {}, fakeCtx)),
+      );
+      const watchers = status.fields.watchers as Array<{ running: boolean }>;
+      expect(watchers).toHaveLength(1);
+      expect(watchers[0].running).toBe(false);
+      expect(notifyCalls).toEqual([]);
+    });
+
+    test("sandesh_notify_stop({address}) stops the watcher and posts no notify", async () => {
+      const { fakePi, capturedTools } = makeFakePi();
+      registerExtension(fakePi);
+      const { fakeCtx, notifyCalls } = makeFakeCtx();
+      const startTool = getTool(capturedTools, "sandesh_notify_start");
+      const stopTool = getTool(capturedTools, "sandesh_notify_stop");
+      await callExecute(startTool, { address: "Mainline - Demo", project: "Demo" }, fakeCtx);
+
+      const stopEnv = decodeEnvelope(
+        text(await callExecute(stopTool, { address: "Mainline - Demo" }, fakeCtx)),
+      );
+      expect(stopEnv.fields.stopped).toBe(1);
+      await flush();
+      expect(notifyCalls).toEqual([]);
+    });
+
+    test("/sandesh-watcher stop posts no warning/error notify (only its own info toast)", async () => {
+      const { fakePi, capturedTools, capturedCommands } = makeFakePi();
+      registerExtension(fakePi);
+      const { fakeCtx, notifyCalls } = makeFakeCtx();
+      const startTool = getTool(capturedTools, "sandesh_notify_start");
+      await callExecute(startTool, { address: "Mainline - Demo", project: "Demo" }, fakeCtx);
+
+      const cmd = capturedCommands.get("sandesh-watcher")!;
+      await cmd.handler("stop Mainline - Demo", fakeCtx);
+      await flush();
+
+      expect(notifyCalls.some((c) => c.type === "warning" || c.type === "error")).toBe(false);
+    });
+  });
+});
+
+// ============================================================================
+// H \u2014 CR-SAN-053 \u00a7S3: sandesh_notify_start reports a watcher that dies at start
+// ============================================================================
+
+describe("H \u2014 sandesh_notify_start reports a watcher that dies at start (\u00a7S3, AC6)", () => {
+  test("notify exits 1 'is not registered' inside the settle window \u2192 ok:false naming the address, exit 1, the reason, with addressbook/register help", async () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    const scriptedExec = mock(
+      (_cmd: string, args: string[], _opts?: { signal?: AbortSignal }): Promise<ExecResult> => {
+        if (!args.includes("notify")) {
+          return Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false });
+        }
+        return Promise.resolve({
+          stdout: notifyEnvelope({
+            exit: 1,
+            ok: false,
+            address: "Mainline - Demo",
+            project: "Demo",
+            error: "address 'Mainline - Demo' is not registered",
+          }),
+          stderr: "",
+          code: 1,
+          killed: false,
+        });
+      },
+    );
+    (fakePi as unknown as { exec: typeof scriptedExec }).exec = scriptedExec;
+    registerExtension(fakePi);
+    const { fakeCtx } = makeFakeCtx();
+
+    const result = await callExecute(
+      getTool(capturedTools, "sandesh_notify_start"),
+      { address: "Mainline - Demo", project: "Demo" },
+      fakeCtx,
+    );
+    const env = decodeEnvelope(text(result));
+
+    expect(env.ok).toBe(false);
+    expect(String(env.error)).toContain("Mainline - Demo");
+    expect(String(env.error)).toContain("exit 1");
+    expect(String(env.error)).toContain("is not registered");
+    expect(env.help?.join(" ")).toContain("sandesh_addressbook");
+    expect(env.help?.join(" ")).toContain("sandesh_register");
+  });
+
+  test("notify stays running through the settle window \u2192 ok:true, already:false, watcher running:true", async () => {
+    const { fakePi, capturedTools, notifyDeferreds } = makeFakePi();
+    registerExtension(fakePi);
+    const { fakeCtx } = makeFakeCtx();
+
+    const result = await callExecute(
+      getTool(capturedTools, "sandesh_notify_start"),
+      { address: "Mainline - Demo", project: "Demo" },
+      fakeCtx,
+    );
+    const env = decodeEnvelope(text(result));
+
+    expect(env.ok).toBe(true);
+    expect(env.fields.already).toBe(false);
+    const watchers = env.fields.watchers as Array<{ address: string; running: boolean }>;
+    expect(watchers).toHaveLength(1);
+    expect(watchers[0].address).toBe("Mainline - Demo");
+    expect(watchers[0].running).toBe(true);
+    expect(notifyDeferreds.length).toBe(1); // still pending \u2014 never resolved
+  });
+});
+

@@ -538,7 +538,7 @@ describe("AC7 — one loop per address, concurrent addresses, stop/status", () =
     const { deps, execCalls, sendUserMessageMock, notifyMock } = makeDeps();
     const sup = new WakeSupervisor(deps);
     sup.start("Mainline - Demo", "Demo");
-    expect(sup.stop("Mainline - Demo")).toEqual({ stopped: 1 });
+    expect(sup.stop("Mainline - Demo", { requested: true })).toEqual({ stopped: 1 });
     expect(execCalls[0].signal.aborted).toBe(true);
 
     const restarted = sup.start("Mainline - Demo", "Demo");
@@ -614,7 +614,7 @@ describe("AC7 — one loop per address, concurrent addresses, stop/status", () =
     const { deps, execCalls, sendUserMessageMock, notifyMock } = makeDeps();
     const sup = new WakeSupervisor(deps);
     sup.start("Mainline - Demo", "Demo");
-    sup.stop("Mainline - Demo");
+    sup.stop("Mainline - Demo", { requested: true });
 
     // Simulate the child actually terminating (in response to the abort) AFTER stop() ran.
     execCalls[0].deferred.resolve({ code: null, stdout: "", stderr: "", signalCode: "SIGTERM" });
@@ -879,3 +879,121 @@ describe("AC5 (CR-SAN-052) — a halted watcher does not affect other addresses"
     expect(unhandled).toEqual([]);
   });
 });
+
+// ─── AC4 (CR-SAN-053 §S2) — a stop nobody asked for is loud ────────────────
+
+describe("AC4 (CR-SAN-053 §S2) — a stop nobody asked for is loud", () => {
+  test("stop() with no opts on two running watchers reports { stopped: 2 } and posts exactly 2 warning notifies naming each address and sandesh_notify_start", () => {
+    const { deps, notifyMock } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+    sup.start("Track 1 - Demo", "Demo");
+
+    const result = sup.stop();
+    expect(result).toEqual({ stopped: 2 });
+    expect(notifyMock.mock.calls.length).toBe(2);
+
+    const calls = notifyMock.mock.calls as unknown as [string, string][];
+    for (const [, level] of calls) {
+      expect(level).toBe("warning");
+    }
+    const texts = calls.map(([text]) => text);
+    expect(texts.some((t) => t.includes("Mainline - Demo"))).toBe(true);
+    expect(texts.some((t) => t.includes("Track 1 - Demo"))).toBe(true);
+    for (const text of texts) {
+      expect(text).toContain("sandesh_notify_start");
+    }
+  });
+
+  test("stop(undefined, { requested: true }) on two running watchers reports { stopped: 2 } and posts no notify", () => {
+    const { deps, notifyMock } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+    sup.start("Track 1 - Demo", "Demo");
+
+    const result = sup.stop(undefined, { requested: true });
+    expect(result).toEqual({ stopped: 2 });
+    expect(notifyMock.mock.calls.length).toBe(0);
+  });
+
+  test("stop('Mainline - Demo', { requested: true }) on two running watchers reports { stopped: 1 } and posts no notify", () => {
+    const { deps, notifyMock } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+    sup.start("Track 1 - Demo", "Demo");
+
+    const result = sup.stop("Mainline - Demo", { requested: true });
+    expect(result).toEqual({ stopped: 1 });
+    expect(notifyMock.mock.calls.length).toBe(0);
+  });
+});
+
+// ─── AC5 (CR-SAN-053 §S3) — settle() reports a watcher that dies at start ──
+
+describe("AC5 (CR-SAN-053 §S3) — settle() reports a watcher that dies at start", () => {
+  test("settle() called after an exit-1 'not registered' failure has already been handled returns running:false, lastExit:1, lastError from the envelope — without waiting for the injected sleep to resolve", async () => {
+    const { deps, execCalls } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+
+    execCalls[0].deferred.resolve({
+      code: 1,
+      stdout: notifyEnvelope({
+        exit: 1,
+        ok: false,
+        address: "Mainline - Demo",
+        project: "Demo",
+        error: "address 'Mainline - Demo' is not registered",
+      }),
+      stderr: "",
+      signalCode: null,
+    });
+    await flush();
+    expect(sup.status()[0].running).toBe(false);
+
+    // Called directly (not inside a `.then`/flush dance): if a correct
+    // implementation races the already-handled exit against `deps.sleep(2000)`,
+    // this `await` resolves at once because the exit promise is already
+    // settled. An implementation that unconditionally awaits the sleep first
+    // would hang here until bun's test timeout, since this test never
+    // resolves the injected sleep deferred.
+    const settled = await sup.settle("Mainline - Demo", 2000);
+
+    expect(settled?.running).toBe(false);
+    expect(settled?.lastExit).toBe(1);
+    expect(settled?.lastError).toBe("address 'Mainline - Demo' is not registered");
+    expect(execCalls.length).toBe(1); // no relaunch — exit 1 is terminal
+  });
+
+  test("settle() with a still-pending child resolves only once the injected sleep(ms) resolves, reporting running:true", async () => {
+    const { deps, sleepCalls, sleepDeferreds } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+
+    let settled: WatcherStatus | undefined;
+    let done = false;
+    void sup.settle("Mainline - Demo", 2000).then((s) => {
+      settled = s;
+      done = true;
+    });
+    await flush();
+
+    expect(done).toBe(false); // the child never exited — settle is still waiting
+    expect(sleepCalls).toEqual([2000]); // the settle window's own sleep call
+
+    sleepDeferreds[0].resolve();
+    await flush();
+
+    expect(done).toBe(true);
+    expect(settled?.running).toBe(true);
+  });
+
+  test("status()[0].lastError is null for a fresh running watcher", () => {
+    const { deps } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+
+    expect(sup.status()[0].lastError).toBeNull();
+  });
+});
+

@@ -68,7 +68,7 @@ first turn.
 | `sandesh_unarchive`     | restore an archived project to active (`dry_run`).                               |
 | `sandesh_search`        | FTS5 full-text search over subjects/bodies (`limit`).                            |
 | `sandesh_status`        | home view: address, listening, unread — plus `watcher: running\|stopped`.        |
-| `sandesh_notify_start`  | start the supervised wake watcher for an address (idempotent, one per address); returns the watcher table. |
+| `sandesh_notify_start`  | start the supervised wake watcher for an address (idempotent, one per address); returns the watcher table. A new watcher that exits within 2 s (e.g. an unregistered address) returns `ok:false` with the exit code and reason. |
 | `sandesh_notify_status` | list in-session watchers: address, running, last exit by default; `project` scopes the list, and is required when watchers span projects; `fields` selects watcher columns. |
 | `sandesh_notify_stop`   | stop one watcher by address or an aggregate scoped by `project`; unscoped multi-project stops return an error. |
 
@@ -107,7 +107,15 @@ pre-0.4.0 auto-arm at session start (both identity vars must then be set). Super
   `already: true` and spawns nothing; different addresses run concurrently. After a
   `stop`, a `start` for the same address is accepted at once but spawns its child only
   when the stopped one has exited, so it never loses the address to it.
-- `session_shutdown` stops every watcher.
+- **Exit at start** → `sandesh_notify_start` waits up to 2 s for a new watcher; if it
+  exits in that window (e.g. an unregistered address) the call returns `ok:false` with the
+  exit code and the envelope's `error` instead of `ok:true`.
+- **Watchers belong to the Pi session that started them.** A sub-agent session loads the
+  extension again but never stops, takes over or reads the parent's watchers (nor routes
+  their notices to its own UI); only the owning session's `session_shutdown` stops them.
+- **A stop nobody requested** (anything but `sandesh_notify_stop`, `/sandesh-watcher stop`
+  or `session_shutdown`) still stops the watcher, but posts a warning naming the address
+  and `sandesh_notify_start` so the wake is not lost silently.
 
 Inspect or stop from the prompt with `/sandesh-watcher status [--project <id>]` and
 `/sandesh-watcher stop [address] [--project <id>]`; mixed-project aggregates require the
