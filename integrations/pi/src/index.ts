@@ -42,9 +42,11 @@ import { WakeSupervisor, type WatcherStatus } from "./wake";
 // ---------------------------------------------------------------------------
 
 /**
- * Every supervisor created since the last {@link resetExtensionState}. Used
+ * Every supervisor created since the last {@link resetExtensionState}. Read
  * ONLY by that test seam: production code never reads it, and no registration
  * ever stops or reads another registration's supervisor (CR-SAN-053 §S1).
+ * A registration's `session_shutdown` removes its own supervisor, so ended
+ * sessions (sub-agents included) do not accumulate for the process lifetime.
  */
 const registeredSupervisors = new Set<WakeSupervisor>();
 
@@ -54,7 +56,7 @@ const registeredSupervisors = new Set<WakeSupervisor>();
  * the resolved binary choice so a fresh `session_start` re-probes.
  */
 export function resetExtensionState(): void {
-  for (const s of registeredSupervisors) s.stop();
+  for (const s of registeredSupervisors) s.stop(undefined, { requested: true });
   registeredSupervisors.clear();
   resetBinaryResolution();
 }
@@ -462,10 +464,10 @@ function stopWatchers(
   if (address !== undefined) {
     const watcher = watchers.find((entry) => entry.address === address);
     if (project !== undefined && watcher?.project !== project) return { stopped: 0 };
-    return sup.stop(address);
+    return sup.stop(address, { requested: true });
   }
   const stopped = scopedWatchers(watchers, project)
-    .reduce((count, watcher) => count + sup.stop(watcher.address).stopped, 0);
+    .reduce((count, watcher) => count + sup.stop(watcher.address, { requested: true }).stopped, 0);
   return { stopped };
 }
 
@@ -1330,8 +1332,10 @@ export default function registerExtension(pi: ExtensionAPI): void {
   });
 
   // session_shutdown — stop every watcher of THIS registration's supervisor
-  // only (children aborted; no relaunch). Other registrations are untouched.
+  // only (children aborted; no relaunch; a requested, quiet stop), then drop it
+  // from the test-seam registry. Other registrations are untouched.
   pi.on("session_shutdown", async (_event: SessionShutdownEvent, _ctx: ExtensionContext): Promise<void> => {
-    sup.stop();
+    sup.stop(undefined, { requested: true });
+    registeredSupervisors.delete(sup);
   });
 }

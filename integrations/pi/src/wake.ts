@@ -147,8 +147,15 @@ export class WakeSupervisor {
    * no-op in `onExit`, so a stopped watcher is never relaunched. The entry keeps
    * its `child` promise until the process exits; `start()` on the same address
    * defers its spawn to that exit.
+   *
+   * Pass `{ requested: true }` for a stop someone asked for (the stop tool, the
+   * `/sandesh-watcher stop` command, `session_shutdown`) — those stay quiet.
+   * Any other stop is unrequested and loud: each entry it stops posts one
+   * `"warning"` notify naming the address and `sandesh_notify_start`
+   * (CR-SAN-053 §S2). `halt()` is separate and always quiet.
    */
-  stop(address?: string): { stopped: number } {
+  stop(address?: string, opts?: { requested?: boolean }): { stopped: number } {
+    const requested = opts?.requested === true;
     let stopped = 0;
     for (const entry of this.entries.values()) {
       if (address !== undefined && entry.address !== address) continue;
@@ -157,6 +164,12 @@ export class WakeSupervisor {
       entry.running = false;
       entry.controller.abort();
       stopped += 1;
+      if (!requested) {
+        this.deps.notify(
+          `Sandesh watcher for ${entry.address} was stopped without a request — restart it with sandesh_notify_start`,
+          "warning",
+        );
+      }
     }
     return { stopped };
   }
