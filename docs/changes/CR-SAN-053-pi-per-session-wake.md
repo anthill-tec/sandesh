@@ -52,9 +52,15 @@ run, and the exit-1 report is a `ctx.ui.notify` toast the agent never sees.
 - `WakeSupervisor.stop(address?: string, opts?: { requested?: boolean })`. When `opts?.requested` is not
   `true`, every entry it stops posts exactly one `notify(…, "warning")` whose text contains the entry's
   address and `sandesh_notify_start`.
-- The requested stops pass `{ requested: true }` and stay quiet: `sandesh_notify_stop`,
-  `/sandesh-watcher stop`, `session_shutdown`, and the `resetExtensionState()` test seam.
+- The requested stops pass `{ requested: true }` and stay quiet: the shared `stopWatchers()` helper (behind
+  both `sandesh_notify_stop` and `/sandesh-watcher stop`), `session_shutdown`, and the
+  `resetExtensionState()` test seam.
 - `halt()` (CR-SAN-052, stale host deps) is unchanged and stays quiet — its host deps are unusable.
+- Existing unit tests that model a requested stop pass `{ requested: true }`:
+  `wake_supervisor.test.ts` "stop() → start() before the old child exits …" and "a stopped loop's pending
+  exit resolves after the abort but must NOT relaunch or message".
+
+**Surfaces (verified 2026-10-03):** `index.ts` `stopWatchers()` (l.450–462).
 
 ### §S3 — `sandesh_notify_start` reports a watcher that dies at start (bun)
 
@@ -70,6 +76,10 @@ run, and the exit-1 report is a `ctx.ui.notify` toast the agent never sees.
   `sandesh_register`. Otherwise it returns the existing `ok:true` envelope. `already:true` returns at once.
 - A watcher still `running` after the window (no exit yet, an exit-0/exit-2 relaunch, or the exit-5 retry
   wait) is reported `ok:true` as today.
+- Test seam: `index.ts` exports `__setStartSettleMs(ms: number)`; `resetExtensionState()` restores
+  `START_SETTLE_MS`. The integration harnesses that start watchers with a pending child
+  (`wake.test.ts`, `wake_lifecycle.test.ts`, `notify_fields.test.ts`) set it to `0`, so they do not wait
+  the real window; `smoke.test.ts` keeps the default.
 
 **Surfaces (verified 2026-10-03):** `integrations/pi/src/wake.ts` `WatcherStatus` (l.44–53), `start()`
 (l.102–138), `stop()` (l.151–162), `launch()` (l.168–211), `onExit()` (l.223–287);
@@ -109,8 +119,8 @@ run, and the exit-1 report is a `ctx.ui.notify` toast the agent never sees.
   `sandesh_notify_start` returns `ok:false`, `error` containing `Mainline - Demo`, `exit 1` and
   `is not registered`, and `help[]` containing `sandesh_addressbook` and `sandesh_register`. With `exec`
   pending it returns `ok:true` `already:false` and the watcher `running:true`.
-- [ ] **AC7** — caller-existence: `grep -n "requested: true" integrations/pi/src/index.ts` returns ≥3
-  non-test lines (notify_stop, the command, session_shutdown); `grep -n "\.settle(" integrations/pi/src/index.ts`
+- [ ] **AC7** — caller-existence: `grep -n "requested: true" integrations/pi/src/index.ts` returns ≥2
+  non-test lines (`stopWatchers()`, `session_shutdown`); `grep -n "\.settle(" integrations/pi/src/index.ts`
   returns ≥1; `grep -nE "^let (supervisor|latestUi)\b" integrations/pi/src/index.ts` returns nothing.
 - [ ] **AC8** — docs pins (`src/docs.test.ts`): PRD-axi-toon §4.7 contains `per registration` and
   `unrequested`; the README §Wake contains `sub-agent`. Full `bun test` green; python gate green.
