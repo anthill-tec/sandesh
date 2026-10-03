@@ -123,7 +123,8 @@ run, and the exit-1 report is a `ctx.ui.notify` toast the agent never sees.
   non-test lines (`stopWatchers()`, `session_shutdown`); `grep -n "\.settle(" integrations/pi/src/index.ts`
   returns ≥1; `grep -nE "^let (supervisor|latestUi)\b" integrations/pi/src/index.ts` returns nothing.
 - [ ] **AC8** — docs pins (`src/docs.test.ts`): PRD-axi-toon §4.7 contains `per registration` and
-  `unrequested`; the README §Wake contains `sub-agent`. Full `bun test` green; python gate green.
+  `unrequested`; the README §Wake contains `sub-agent` and its `sandesh_notify_start` row contains `ok:false`.
+  Full `bun test` green; python gate green.
 
 ## Estimated size
 
