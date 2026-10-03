@@ -42,31 +42,37 @@ import { WakeSupervisor, type WatcherStatus } from "./wake";
 // ---------------------------------------------------------------------------
 
 /**
- * The latest `ctx.ui` seen by a session handler / tool / command. `ctx` only
- * exists inside those, so the supervisor's `notify` dep routes through this
- * holder and no-ops until one has been captured.
+ * Every supervisor created since the last {@link resetExtensionState}. Used
+ * ONLY by that test seam: production code never reads it, and no registration
+ * ever stops or reads another registration's supervisor (CR-SAN-053 §S1).
  */
-let latestUi: ExtensionContext["ui"] | undefined;
-
-/** The supervisor of the current registration (one per `registerExtension`). */
-let supervisor: WakeSupervisor | undefined;
+const registeredSupervisors = new Set<WakeSupervisor>();
 
 /**
- * Test seam (also called at the top of {@link registerExtension}): stop every
- * watcher of the current supervisor and reset the resolved binary choice so a
- * fresh `session_start` re-probes.
+ * Test seam (never called by production code): stop every watcher of every
+ * supervisor registered since the last reset, clear that registry, and reset
+ * the resolved binary choice so a fresh `session_start` re-probes.
  */
 export function resetExtensionState(): void {
-  supervisor?.stop();
+  for (const s of registeredSupervisors) s.stop();
+  registeredSupervisors.clear();
   resetBinaryResolution();
 }
 
-/** Wire a supervisor to this extension's real host effects (§S3 deps). */
-function makeSupervisor(pi: ExtensionAPI): WakeSupervisor {
+/**
+ * Wire a supervisor to this extension's real host effects (§S3 deps). `getUi`
+ * returns the owning registration's latest `ctx.ui`: `ctx` only exists inside
+ * session handlers / tools / commands, so `notify` routes through it and
+ * no-ops until that registration has captured one.
+ */
+function makeSupervisor(
+  pi: ExtensionAPI,
+  getUi: () => ExtensionContext["ui"] | undefined,
+): WakeSupervisor {
   return new WakeSupervisor({
     exec: (cmd, args, { signal }) => pi.exec(cmd, args, { signal }),
     sendUserMessage: (text, opts) => pi.sendUserMessage(text, opts),
-    notify: (text, level) => latestUi?.notify(text, level),
+    notify: (text, level) => getUi()?.notify(text, level),
     now: Date.now,
     sleep: (ms) => new Promise<void>((res) => setTimeout(res, ms)),
     resolve: resolveSandesh,
@@ -683,10 +689,15 @@ interface NotifyStopParams {
 // ---------------------------------------------------------------------------
 
 export default function registerExtension(pi: ExtensionAPI): void {
-  // Each registration owns a fresh supervisor and re-probes the binary.
-  resetExtensionState();
-  const sup = makeSupervisor(pi);
-  supervisor = sup;
+  // Each registration owns its supervisor and its UI route (CR-SAN-053 §S1):
+  // it never stops, replaces or reads another registration's, so a sub-agent
+  // session's registration leaves the parent's watchers alone. `latestUi` is
+  // THIS registration's latest `ctx.ui`, set by its tools, its
+  // `/sandesh-watcher` command and its `session_start` handler.
+  let latestUi: ExtensionContext["ui"] | undefined;
+  resetBinaryResolution(); // re-probe the binary at session_start
+  const sup = makeSupervisor(pi, () => latestUi);
+  registeredSupervisors.add(sup);
 
   // sandesh_setup — provision a project's store (idempotent).
   pi.registerTool({
@@ -1318,7 +1329,8 @@ export default function registerExtension(pi: ExtensionAPI): void {
     }
   });
 
-  // session_shutdown — stop every watcher (children aborted; no relaunch).
+  // session_shutdown — stop every watcher of THIS registration's supervisor
+  // only (children aborted; no relaunch). Other registrations are untouched.
   pi.on("session_shutdown", async (_event: SessionShutdownEvent, _ctx: ExtensionContext): Promise<void> => {
     sup.stop();
   });
