@@ -28,8 +28,18 @@ import type {
   ExtensionContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import registerExtension from "./index";
+import registerExtension, { __setStartSettleMs } from "./index";
 import { decodeEnvelope } from "./toon";
+
+// CR-SAN-053 \u00a7S3: the production `sandesh_notify_start` path now awaits
+// `settle(address, START_SETTLE_MS)` after a successful `start()`. This file
+// drives several scenarios with a pending (never-resolved) notify child, so
+// the settle window is forced to 0 for the whole file \u2014 otherwise those
+// `await callExecute(...)` calls would block for the real default (2000 ms)
+// before returning.
+beforeAll(() => {
+  __setStartSettleMs(0);
+});
 
 // ─── Envelope fixtures ──────────────────────────────────────────────────────
 
@@ -865,3 +875,71 @@ describe("G \u2014 CR-SAN-053 \u00a7S1: per-registration supervisor + UI route i
     });
   });
 });
+
+// ============================================================================
+// H \u2014 CR-SAN-053 \u00a7S3: sandesh_notify_start reports a watcher that dies at start
+// ============================================================================
+
+describe("H \u2014 sandesh_notify_start reports a watcher that dies at start (\u00a7S3, AC6)", () => {
+  test("notify exits 1 'is not registered' inside the settle window \u2192 ok:false naming the address, exit 1, the reason, with addressbook/register help", async () => {
+    const { fakePi, capturedTools } = makeFakePi();
+    const scriptedExec = mock(
+      (_cmd: string, args: string[], _opts?: { signal?: AbortSignal }): Promise<ExecResult> => {
+        if (!args.includes("notify")) {
+          return Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false });
+        }
+        return Promise.resolve({
+          stdout: notifyEnvelope({
+            exit: 1,
+            ok: false,
+            address: "Mainline - Demo",
+            project: "Demo",
+            error: "address 'Mainline - Demo' is not registered",
+          }),
+          stderr: "",
+          code: 1,
+          killed: false,
+        });
+      },
+    );
+    (fakePi as unknown as { exec: typeof scriptedExec }).exec = scriptedExec;
+    registerExtension(fakePi);
+    const { fakeCtx } = makeFakeCtx();
+
+    const result = await callExecute(
+      getTool(capturedTools, "sandesh_notify_start"),
+      { address: "Mainline - Demo", project: "Demo" },
+      fakeCtx,
+    );
+    const env = decodeEnvelope(text(result));
+
+    expect(env.ok).toBe(false);
+    expect(String(env.error)).toContain("Mainline - Demo");
+    expect(String(env.error)).toContain("exit 1");
+    expect(String(env.error)).toContain("is not registered");
+    expect(env.help?.join(" ")).toContain("sandesh_addressbook");
+    expect(env.help?.join(" ")).toContain("sandesh_register");
+  });
+
+  test("notify stays running through the settle window \u2192 ok:true, already:false, watcher running:true", async () => {
+    const { fakePi, capturedTools, notifyDeferreds } = makeFakePi();
+    registerExtension(fakePi);
+    const { fakeCtx } = makeFakeCtx();
+
+    const result = await callExecute(
+      getTool(capturedTools, "sandesh_notify_start"),
+      { address: "Mainline - Demo", project: "Demo" },
+      fakeCtx,
+    );
+    const env = decodeEnvelope(text(result));
+
+    expect(env.ok).toBe(true);
+    expect(env.fields.already).toBe(false);
+    const watchers = env.fields.watchers as Array<{ address: string; running: boolean }>;
+    expect(watchers).toHaveLength(1);
+    expect(watchers[0].address).toBe("Mainline - Demo");
+    expect(watchers[0].running).toBe(true);
+    expect(notifyDeferreds.length).toBe(1); // still pending \u2014 never resolved
+  });
+});
+

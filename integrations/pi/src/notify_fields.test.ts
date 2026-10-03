@@ -4,15 +4,23 @@
  * checks the returned watcher rows and module exports.
  */
 
-import { test, expect, describe, mock } from "bun:test";
+import { test, expect, describe, mock, beforeAll } from "bun:test";
 import type {
   ExecResult,
   ExtensionAPI,
   ExtensionContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import registerExtension from "./index";
+import registerExtension, { __setStartSettleMs } from "./index";
 import { decodeEnvelope } from "./toon";
+
+// CR-SAN-053 \u00a7S3: force the settle window to 0 for this file \u2014 the fields
+// tests start a watcher with a pending (never-resolved) notify child, and the
+// production `sandesh_notify_start` path now awaits
+// `settle(address, START_SETTLE_MS)` after a successful start.
+beforeAll(() => {
+  __setStartSettleMs(0);
+});
 
 // ─── Fake pi harness (mirrors wake.test.ts's makeFakeExec/makeFakePi/makeFakeCtx) ──
 

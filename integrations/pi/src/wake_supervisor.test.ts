@@ -927,3 +927,73 @@ describe("AC4 (CR-SAN-053 §S2) — a stop nobody asked for is loud", () => {
     expect(notifyMock.mock.calls.length).toBe(0);
   });
 });
+
+// ─── AC5 (CR-SAN-053 §S3) — settle() reports a watcher that dies at start ──
+
+describe("AC5 (CR-SAN-053 §S3) — settle() reports a watcher that dies at start", () => {
+  test("settle() called after an exit-1 'not registered' failure has already been handled returns running:false, lastExit:1, lastError from the envelope — without waiting for the injected sleep to resolve", async () => {
+    const { deps, execCalls } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+
+    execCalls[0].deferred.resolve({
+      code: 1,
+      stdout: notifyEnvelope({
+        exit: 1,
+        ok: false,
+        address: "Mainline - Demo",
+        project: "Demo",
+        error: "address 'Mainline - Demo' is not registered",
+      }),
+      stderr: "",
+      signalCode: null,
+    });
+    await flush();
+    expect(sup.status()[0].running).toBe(false);
+
+    // Called directly (not inside a `.then`/flush dance): if a correct
+    // implementation races the already-handled exit against `deps.sleep(2000)`,
+    // this `await` resolves at once because the exit promise is already
+    // settled. An implementation that unconditionally awaits the sleep first
+    // would hang here until bun's test timeout, since this test never
+    // resolves the injected sleep deferred.
+    const settled = await sup.settle("Mainline - Demo", 2000);
+
+    expect(settled?.running).toBe(false);
+    expect(settled?.lastExit).toBe(1);
+    expect(settled?.lastError).toBe("address 'Mainline - Demo' is not registered");
+    expect(execCalls.length).toBe(1); // no relaunch — exit 1 is terminal
+  });
+
+  test("settle() with a still-pending child resolves only once the injected sleep(ms) resolves, reporting running:true", async () => {
+    const { deps, sleepCalls, sleepDeferreds } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+
+    let settled: WatcherStatus | undefined;
+    let done = false;
+    void sup.settle("Mainline - Demo", 2000).then((s) => {
+      settled = s;
+      done = true;
+    });
+    await flush();
+
+    expect(done).toBe(false); // the child never exited — settle is still waiting
+    expect(sleepCalls).toEqual([2000]); // the settle window's own sleep call
+
+    sleepDeferreds[0].resolve();
+    await flush();
+
+    expect(done).toBe(true);
+    expect(settled?.running).toBe(true);
+  });
+
+  test("status()[0].lastError is null for a fresh running watcher", () => {
+    const { deps } = makeDeps();
+    const sup = new WakeSupervisor(deps);
+    sup.start("Mainline - Demo", "Demo");
+
+    expect(sup.status()[0].lastError).toBeNull();
+  });
+});
+
