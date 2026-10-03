@@ -42,31 +42,54 @@ import { WakeSupervisor, type WatcherStatus } from "./wake";
 // ---------------------------------------------------------------------------
 
 /**
- * The latest `ctx.ui` seen by a session handler / tool / command. `ctx` only
- * exists inside those, so the supervisor's `notify` dep routes through this
- * holder and no-ops until one has been captured.
+ * Every supervisor created since the last {@link resetExtensionState}. Read
+ * ONLY by that test seam: production code never reads it, and no registration
+ * ever stops or reads another registration's supervisor (CR-SAN-053 §S1).
+ * A registration's `session_shutdown` removes its own supervisor, so ended
+ * sessions (sub-agents included) do not accumulate for the process lifetime.
  */
-let latestUi: ExtensionContext["ui"] | undefined;
-
-/** The supervisor of the current registration (one per `registerExtension`). */
-let supervisor: WakeSupervisor | undefined;
+const registeredSupervisors = new Set<WakeSupervisor>();
 
 /**
- * Test seam (also called at the top of {@link registerExtension}): stop every
- * watcher of the current supervisor and reset the resolved binary choice so a
- * fresh `session_start` re-probes.
+ * How long `sandesh_notify_start` waits after a fresh `start()` for the new
+ * watcher to exit (CR-SAN-053 §S3): an exit inside the window is reported as an
+ * `ok:false` error instead of a misleading `ok:true`.
  */
-export function resetExtensionState(): void {
-  supervisor?.stop();
-  resetBinaryResolution();
+const START_SETTLE_MS = 2000;
+let startSettleMs = START_SETTLE_MS;
+
+/** Test seam (never called by production code): override the start settle window. */
+export function __setStartSettleMs(ms: number): void {
+  startSettleMs = ms;
 }
 
-/** Wire a supervisor to this extension's real host effects (§S3 deps). */
-function makeSupervisor(pi: ExtensionAPI): WakeSupervisor {
+/**
+ * Test seam (never called by production code): stop every watcher of every
+ * supervisor registered since the last reset, clear that registry, reset
+ * the resolved binary choice so a fresh `session_start` re-probes, and restore
+ * the default start settle window.
+ */
+export function resetExtensionState(): void {
+  for (const s of registeredSupervisors) s.stop(undefined, { requested: true });
+  registeredSupervisors.clear();
+  resetBinaryResolution();
+  startSettleMs = START_SETTLE_MS;
+}
+
+/**
+ * Wire a supervisor to this extension's real host effects (§S3 deps). `getUi`
+ * returns the owning registration's latest `ctx.ui`: `ctx` only exists inside
+ * session handlers / tools / commands, so `notify` routes through it and
+ * no-ops until that registration has captured one.
+ */
+function makeSupervisor(
+  pi: ExtensionAPI,
+  getUi: () => ExtensionContext["ui"] | undefined,
+): WakeSupervisor {
   return new WakeSupervisor({
     exec: (cmd, args, { signal }) => pi.exec(cmd, args, { signal }),
     sendUserMessage: (text, opts) => pi.sendUserMessage(text, opts),
-    notify: (text, level) => latestUi?.notify(text, level),
+    notify: (text, level) => getUi()?.notify(text, level),
     now: Date.now,
     sleep: (ms) => new Promise<void>((res) => setTimeout(res, ms)),
     resolve: resolveSandesh,
@@ -456,10 +479,10 @@ function stopWatchers(
   if (address !== undefined) {
     const watcher = watchers.find((entry) => entry.address === address);
     if (project !== undefined && watcher?.project !== project) return { stopped: 0 };
-    return sup.stop(address);
+    return sup.stop(address, { requested: true });
   }
   const stopped = scopedWatchers(watchers, project)
-    .reduce((count, watcher) => count + sup.stop(watcher.address).stopped, 0);
+    .reduce((count, watcher) => count + sup.stop(watcher.address, { requested: true }).stopped, 0);
   return { stopped };
 }
 
@@ -683,10 +706,15 @@ interface NotifyStopParams {
 // ---------------------------------------------------------------------------
 
 export default function registerExtension(pi: ExtensionAPI): void {
-  // Each registration owns a fresh supervisor and re-probes the binary.
-  resetExtensionState();
-  const sup = makeSupervisor(pi);
-  supervisor = sup;
+  // Each registration owns its supervisor and its UI route (CR-SAN-053 §S1):
+  // it never stops, replaces or reads another registration's, so a sub-agent
+  // session's registration leaves the parent's watchers alone. `latestUi` is
+  // THIS registration's latest `ctx.ui`, set by its tools, its
+  // `/sandesh-watcher` command and its `session_start` handler.
+  let latestUi: ExtensionContext["ui"] | undefined;
+  resetBinaryResolution(); // re-probe the binary at session_start
+  const sup = makeSupervisor(pi, () => latestUi);
+  registeredSupervisors.add(sup);
 
   // sandesh_setup — provision a project's store (idempotent).
   pi.registerTool({
@@ -1076,7 +1104,8 @@ export default function registerExtension(pi: ExtensionAPI): void {
     label: "Sandesh: Notify Start",
     description:
       "Start the supervised wake watcher for an address (defaults to $SANDESH_ADDRESS / $SANDESH_PROJECT). " +
-      "One watcher per address: starting an already-running address returns already:true and spawns nothing.",
+      "One watcher per address: starting an already-running address returns already:true and spawns nothing. " +
+      "A new watcher that exits within the first 2 s (e.g. an unregistered address) returns ok:false with the reason.",
     promptSnippet: "Start your wake watcher so unread mail wakes you (one per address; idempotent).",
     parameters: Type.Object({
       address: Type.Optional(
@@ -1111,6 +1140,24 @@ export default function registerExtension(pi: ExtensionAPI): void {
             "Pass an `address` whose project part matches `project`, then retry sandesh_notify_start.",
           ]),
         );
+      }
+      // CR-SAN-053 §S3: give a fresh watcher the settle window to fail at start
+      // (unregistered address, bad store, …) and report that instead of ok:true.
+      if (!r.already) {
+        const settled = await sup.settle(address, startSettleMs);
+        if (settled !== undefined && !settled.running && settled.lastExit !== null) {
+          return textResult(
+            errorEnvelopeText(
+              "notify_start",
+              `watcher for ${address} exited at start (exit ${settled.lastExit}): ${settled.lastError ?? "no error reported"}`,
+              [
+                `Call sandesh_addressbook and check the status of '${address}'.`,
+                "If it is not registered, call sandesh_register for it, then retry sandesh_notify_start.",
+              ],
+              { project, address },
+            ),
+          );
+        }
       }
       return textResult(
         envelopeText(
@@ -1318,8 +1365,11 @@ export default function registerExtension(pi: ExtensionAPI): void {
     }
   });
 
-  // session_shutdown — stop every watcher (children aborted; no relaunch).
+  // session_shutdown — stop every watcher of THIS registration's supervisor
+  // only (children aborted; no relaunch; a requested, quiet stop), then drop it
+  // from the test-seam registry. Other registrations are untouched.
   pi.on("session_shutdown", async (_event: SessionShutdownEvent, _ctx: ExtensionContext): Promise<void> => {
-    sup.stop();
+    sup.stop(undefined, { requested: true });
+    registeredSupervisors.delete(sup);
   });
 }

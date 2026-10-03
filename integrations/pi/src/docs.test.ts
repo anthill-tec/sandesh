@@ -189,3 +189,45 @@ describe("docs/research/PRD-axi-toon.md §4.7 — throwing-host-dep transition (
     expect(match.length).toBe(1);
   });
 });
+
+// ============================================================================
+// CR-SAN-053 §AC8 — per-session wake: docs pins
+// ============================================================================
+
+describe("docs/research/PRD-axi-toon.md §4.7 — per-registration wake docs (CR-SAN-053, AC8)", () => {
+  const section = extractPrdSection47(fs.readFileSync(PRD_AXI_TOON_PATH, "utf-8"));
+
+  test("documents the wake as scoped per registration", () => {
+    expect(section).toContain("per registration");
+  });
+
+  test("documents the unrequested-stop UI notify", () => {
+    expect(section).toContain("unrequested");
+  });
+});
+
+/** Slice out the "## Wake" section (up to the next level-2 heading). */
+function extractWakeSection(markdown: string): string {
+  const heading = "## Wake";
+  const start = markdown.indexOf(heading);
+  if (start === -1) throw new Error("README.md is missing the '## Wake' section");
+  const rest = markdown.slice(start + heading.length);
+  const next = rest.search(/\n## /);
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
+describe("integrations/pi/README.md §Wake — sub-agent wording (CR-SAN-053, AC8)", () => {
+  const readme = fs.readFileSync(README_PATH, "utf-8");
+  const wakeSection = extractWakeSection(readme);
+
+  test("mentions a sub-agent session in the wake-scope explanation", () => {
+    expect(wakeSection).toContain("sub-agent");
+  });
+
+  test("the sandesh_notify_start tool-table row documents its ok:false error case", () => {
+    const row = readme.split("\n").find((line) => line.startsWith("| `sandesh_notify_start`"));
+    expect(row).toBeDefined();
+    expect(row as string).toContain("ok:false");
+  });
+});
+

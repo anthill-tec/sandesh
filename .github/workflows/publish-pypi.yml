@@ -21,19 +21,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-      # Release rehearsal: a workflow_dispatch on release/X.Y.Z builds the
-      # EXACT release version (from the branch name), not X.Y.Z.devN. main is
-      # tag-derived (checked in publish-testpypi); other refs keep devN.
-      - name: Pin release version (dispatch on release/X.Y.Z only)
+      # Release rehearsal: a workflow_dispatch on release/X.Y.Z or hotfix/X.Y.Z
+      # builds the EXACT release version (from the branch name), not
+      # X.Y.Z.devN. main is tag-derived (checked in publish-testpypi); other
+      # refs keep devN.
+      - name: Pin release version (dispatch on release/X.Y.Z or hotfix/X.Y.Z only)
         if: >-
           github.event_name == 'workflow_dispatch' &&
-          startsWith(github.ref, 'refs/heads/release/')
+          (startsWith(github.ref, 'refs/heads/release/') ||
+          startsWith(github.ref, 'refs/heads/hotfix/'))
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
-          V="${REF_NAME#release/}"
+          case "$REF_NAME" in
+            release/*) V="${REF_NAME#release/}" ;;
+            hotfix/*) V="${REF_NAME#hotfix/}" ;;
+            *) V="" ;;
+          esac
           if ! echo "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::'$REF_NAME' is not release/X.Y.Z"
+            echo "::error::'$REF_NAME' is not release/X.Y.Z or hotfix/X.Y.Z"
             exit 1
           fi
           PKG=$(jq -r .version integrations/pi/package.json)
@@ -127,7 +133,7 @@ jobs:
           name: dist
           path: dist/
       # Check the artifact that is actually uploaded (no rebuild).
-      - name: Version sanity - no '+' local segment; exact on release/main
+      - name: Version sanity - no '+' segment; exact on release/hotfix/main
         env:
           REF: ${{ github.ref }}
           REF_NAME: ${{ github.ref_name }}
@@ -148,6 +154,12 @@ jobs:
             refs/heads/release/*)
               if [ "$VER" != "${REF_NAME#release/}" ]; then
                 echo "::error::rehearsal must be ${REF_NAME#release/}," \
+                     "artifact is $VER"
+                exit 1
+              fi ;;
+            refs/heads/hotfix/*)
+              if [ "$VER" != "${REF_NAME#hotfix/}" ]; then
+                echo "::error::rehearsal must be ${REF_NAME#hotfix/}," \
                      "artifact is $VER"
                 exit 1
               fi ;;
