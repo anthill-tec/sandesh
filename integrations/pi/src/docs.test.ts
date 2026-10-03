@@ -191,7 +191,7 @@ describe("docs/research/PRD-axi-toon.md §4.7 — throwing-host-dep transition (
 });
 
 // ============================================================================
-// CR-SAN-053 §AC7/AC8 — per-session wake: caller-existence + docs pins
+// CR-SAN-053 §AC8 — per-session wake: docs pins
 // ============================================================================
 
 describe("docs/research/PRD-axi-toon.md §4.7 — per-registration wake docs (CR-SAN-053, AC8)", () => {
