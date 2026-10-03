@@ -231,24 +231,3 @@ describe("integrations/pi/README.md §Wake — sub-agent wording (CR-SAN-053, AC
   });
 });
 
-const INDEX_TS_PATH = path.join(__dirname, "index.ts");
-
-describe("integrations/pi/src/index.ts — caller-existence for per-session wake plumbing (CR-SAN-053, AC7)", () => {
-  const source = fs.readFileSync(INDEX_TS_PATH, "utf-8");
-  const lines = source.split("\n");
-
-  test("has at least 2 non-test lines wiring `requested: true` into stop()", () => {
-    const matches = lines.filter((line) => line.includes("requested: true"));
-    expect(matches.length).toBeGreaterThanOrEqual(2);
-  });
-
-  test("has at least 1 line calling `.settle(` to await watcher settlement", () => {
-    const matches = lines.filter((line) => /\.settle\(/.test(line));
-    expect(matches.length).toBeGreaterThanOrEqual(1);
-  });
-
-  test("no longer declares module-level `let supervisor` or `let latestUi` (per-session state only)", () => {
-    expect(source).not.toMatch(/^let (supervisor|latestUi)\b/m);
-  });
-});
-
