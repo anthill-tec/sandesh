@@ -189,3 +189,66 @@ describe("docs/research/PRD-axi-toon.md §4.7 — throwing-host-dep transition (
     expect(match.length).toBe(1);
   });
 });
+
+// ============================================================================
+// CR-SAN-053 §AC7/AC8 — per-session wake: caller-existence + docs pins
+// ============================================================================
+
+describe("docs/research/PRD-axi-toon.md §4.7 — per-registration wake docs (CR-SAN-053, AC8)", () => {
+  const section = extractPrdSection47(fs.readFileSync(PRD_AXI_TOON_PATH, "utf-8"));
+
+  test("documents the wake as scoped per registration", () => {
+    expect(section).toContain("per registration");
+  });
+
+  test("documents the unrequested-stop UI notify", () => {
+    expect(section).toContain("unrequested");
+  });
+});
+
+/** Slice out the "## Wake" section (up to the next level-2 heading). */
+function extractWakeSection(markdown: string): string {
+  const heading = "## Wake";
+  const start = markdown.indexOf(heading);
+  if (start === -1) throw new Error("README.md is missing the '## Wake' section");
+  const rest = markdown.slice(start + heading.length);
+  const next = rest.search(/\n## /);
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
+describe("integrations/pi/README.md §Wake — sub-agent wording (CR-SAN-053, AC8)", () => {
+  const readme = fs.readFileSync(README_PATH, "utf-8");
+  const wakeSection = extractWakeSection(readme);
+
+  test("mentions a sub-agent session in the wake-scope explanation", () => {
+    expect(wakeSection).toContain("sub-agent");
+  });
+
+  test("the sandesh_notify_start tool-table row documents its ok:false error case", () => {
+    const row = readme.split("\n").find((line) => line.startsWith("| `sandesh_notify_start`"));
+    expect(row).toBeDefined();
+    expect(row as string).toContain("ok:false");
+  });
+});
+
+const INDEX_TS_PATH = path.join(__dirname, "index.ts");
+
+describe("integrations/pi/src/index.ts — caller-existence for per-session wake plumbing (CR-SAN-053, AC7)", () => {
+  const source = fs.readFileSync(INDEX_TS_PATH, "utf-8");
+  const lines = source.split("\n");
+
+  test("has at least 2 non-test lines wiring `requested: true` into stop()", () => {
+    const matches = lines.filter((line) => line.includes("requested: true"));
+    expect(matches.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("has at least 1 line calling `.settle(` to await watcher settlement", () => {
+    const matches = lines.filter((line) => /\.settle\(/.test(line));
+    expect(matches.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("no longer declares module-level `let supervisor` or `let latestUi` (per-session state only)", () => {
+    expect(source).not.toMatch(/^let (supervisor|latestUi)\b/m);
+  });
+});
+
