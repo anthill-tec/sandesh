@@ -18,6 +18,9 @@
  * `stop()` reports the entry stopped at once but remembers its child until the
  * process exits; a `start()` for the same address in that window spawns only
  * after that exit, so the new child never loses the CLI dedup to the old one.
+ * `settle()` waits (bounded by `deps.sleep`) for the current child's exit to be
+ * handled and returns the snapshot, whose `lastError` carries the terminal
+ * exit's envelope error (CR-SAN-053 §S3).
  *
  * All host effects (exec, messaging, notify, clock, sleep, CLI resolution) are
  * constructor-injected via `WakeDeps` so the state machine is unit-testable.
@@ -48,6 +51,12 @@ export interface WatcherStatus {
   pid?: number;
   startedAt: number;
   lastExit: number | null;
+  /**
+   * The envelope `error` (or `"no envelope"`) of the last terminal exit
+   * (exit 1/3/4, a signal, or the second exit 5 in a row); `null` while the
+   * watcher is fresh or running (CR-SAN-053 §S3).
+   */
+  lastError: string | null;
   lastIds: number[];
   timeoutExits: number[];
 }
@@ -63,6 +72,8 @@ interface Entry extends WatcherStatus {
   controller: AbortController;
   child: Promise<void> | null;
   dedupRetried: boolean;
+  /** `settle()` callers waiting for the current child's exit to be handled. */
+  exitWaiters: Array<(s: WatcherStatus) => void>;
 }
 
 const SAME_IDS_DELAY_MS = 30_000;
@@ -78,6 +89,7 @@ function snapshot(e: Entry): WatcherStatus {
     pid: e.pid,
     startedAt: e.startedAt,
     lastExit: e.lastExit,
+    lastError: e.lastError,
     lastIds: [...e.lastIds],
     timeoutExits: [...e.timeoutExits],
   };
@@ -113,6 +125,7 @@ export class WakeSupervisor {
       running: false,
       startedAt: this.deps.now(),
       lastExit: null,
+      lastError: null,
       lastIds: [],
       timeoutExits: [],
       stopped: false,
@@ -120,6 +133,7 @@ export class WakeSupervisor {
       controller: new AbortController(),
       child: null,
       dedupRetried: false,
+      exitWaiters: [],
     };
     this.entries.set(address, entry);
     const previous = existing?.child ?? null;
@@ -132,7 +146,10 @@ export class WakeSupervisor {
         .then(() => {
           if (!entry.stopped && this.entries.get(address) === entry) this.launch(entry);
         })
-        .catch(() => this.halt(entry));
+        .catch(() => {
+          this.halt(entry);
+          this.exitHandled(entry);
+        });
     }
     return { already: false, status: snapshot(entry) };
   }
@@ -176,6 +193,28 @@ export class WakeSupervisor {
 
   status(): WatcherStatus[] {
     return [...this.entries.values()].map(snapshot);
+  }
+
+  /**
+   * Wait until `address`'s current child has exited AND that exit has been
+   * handled (state final for it), or until `deps.sleep(ms)` resolves —
+   * whichever comes first — then return the address's snapshot taken at that
+   * moment (`undefined` for an unknown address). A watcher that is already not
+   * running (its terminal exit handled, or stopped) resolves at once without
+   * sleeping (CR-SAN-053 §S3).
+   */
+  async settle(address: string, ms: number): Promise<WatcherStatus | undefined> {
+    const entry = this.entries.get(address);
+    if (entry === undefined) return undefined;
+    if (!entry.running) return snapshot(entry);
+    const handled = new Promise<WatcherStatus>((res) => {
+      entry.exitWaiters.push(res);
+    });
+    const window = this.deps.sleep(ms).then(() => {
+      const current = this.entries.get(address);
+      return current === undefined ? undefined : snapshot(current);
+    });
+    return Promise.race([handled, window]);
   }
 
   private launch(entry: Entry): void {
@@ -224,6 +263,16 @@ export class WakeSupervisor {
   }
 
   /**
+   * Release every `settle()` caller waiting on this entry's exit handling,
+   * each with the entry's snapshot as of now (state final for that exit).
+   */
+  private exitHandled(entry: Entry): void {
+    const waiters = entry.exitWaiters;
+    entry.exitWaiters = [];
+    for (const w of waiters) w(snapshot(entry));
+  }
+
+  /**
    * Terminal transition for a watcher whose exit handling threw: mark it
    * stopped, abort its signal, never relaunch, make no further host call.
    */
@@ -233,69 +282,85 @@ export class WakeSupervisor {
     entry.controller.abort();
   }
 
+  /**
+   * Handle one child exit for generation `gen`. The `finally` releases any
+   * `settle()` callers at the end of THIS generation's handling (relaunched,
+   * waiting, or terminal). It is inline in this body on purpose: an extra
+   * `await` hop would let a relaunched child's own exit be handled first and
+   * leak into the snapshot. A throw halts the watcher before the release and
+   * is rethrown to the launch chain's catch.
+   */
   private async onExit(entry: Entry, gen: number, r: WakeExecResult): Promise<void> {
-    if (entry.stopped || gen !== entry.generation) return;
-
-    let exit: number | null = r.code;
-    let ids: number[] = [];
-    let err: string | undefined;
     try {
-      const env = decodeEnvelope(r.stdout);
-      if (typeof env.fields.exit === "number") exit = env.fields.exit;
-      if (isNumberArray(env.fields.unread)) ids = env.fields.unread;
-      err = env.error;
-    } catch {
-      exit = 1;
-      err = "no envelope";
-    }
-    const signal = r.code === null && r.signalCode ? r.signalCode : undefined;
-    entry.lastExit = exit;
-
-    if (signal === undefined && exit === 0) {
-      entry.dedupRetried = false;
-      if (sameIdSet(ids, entry.lastIds)) {
-        await this.deps.sleep(SAME_IDS_DELAY_MS);
-        if (entry.stopped || gen !== entry.generation) return;
-      } else {
-        this.deps.sendUserMessage(
-          `Unread Sandesh mail for ${entry.address}: ${ids.join(", ")}. Call sandesh_fetch for it.`,
-          { deliverAs: "followUp" },
-        );
-        entry.lastIds = ids;
-      }
-      this.launch(entry);
-      return;
-    }
-
-    if (signal === undefined && exit === 2) {
-      entry.dedupRetried = false;
-      const now = this.deps.now();
-      entry.timeoutExits.push(now);
-      entry.timeoutExits = entry.timeoutExits.filter((t) => t >= now - TIMEOUT_WINDOW_MS);
-      if (entry.timeoutExits.length === TIMEOUT_BURST) {
-        this.deps.notify(
-          `Sandesh watcher for ${entry.address}: ${TIMEOUT_BURST} timeouts in 60s — check the CLI/store`,
-          "warning",
-        );
-      }
-      this.launch(entry);
-      return;
-    }
-
-    if (signal === undefined && exit === 5 && !entry.dedupRetried) {
-      entry.dedupRetried = true;
-      await this.deps.sleep(DEDUP_RETRY_DELAY_MS);
       if (entry.stopped || gen !== entry.generation) return;
-      this.launch(entry);
-      return;
-    }
 
-    entry.running = false;
-    if (signal === undefined && exit === 5) return; // dedup — another watcher owns it
-    const label = signal !== undefined ? `signal ${signal}` : `exit ${exit}`;
-    this.deps.notify(
-      `Sandesh watcher for ${entry.address} stopped (${label}): ${err ?? ""}`.trim(),
-      "error",
-    );
+      let exit: number | null = r.code;
+      let ids: number[] = [];
+      let err: string | undefined;
+      try {
+        const env = decodeEnvelope(r.stdout);
+        if (typeof env.fields.exit === "number") exit = env.fields.exit;
+        if (isNumberArray(env.fields.unread)) ids = env.fields.unread;
+        err = env.error;
+      } catch {
+        exit = 1;
+        err = "no envelope";
+      }
+      const signal = r.code === null && r.signalCode ? r.signalCode : undefined;
+      entry.lastExit = exit;
+
+      if (signal === undefined && exit === 0) {
+        entry.dedupRetried = false;
+        if (sameIdSet(ids, entry.lastIds)) {
+          await this.deps.sleep(SAME_IDS_DELAY_MS);
+          if (entry.stopped || gen !== entry.generation) return;
+        } else {
+          this.deps.sendUserMessage(
+            `Unread Sandesh mail for ${entry.address}: ${ids.join(", ")}. Call sandesh_fetch for it.`,
+            { deliverAs: "followUp" },
+          );
+          entry.lastIds = ids;
+        }
+        this.launch(entry);
+        return;
+      }
+
+      if (signal === undefined && exit === 2) {
+        entry.dedupRetried = false;
+        const now = this.deps.now();
+        entry.timeoutExits.push(now);
+        entry.timeoutExits = entry.timeoutExits.filter((t) => t >= now - TIMEOUT_WINDOW_MS);
+        if (entry.timeoutExits.length === TIMEOUT_BURST) {
+          this.deps.notify(
+            `Sandesh watcher for ${entry.address}: ${TIMEOUT_BURST} timeouts in 60s — check the CLI/store`,
+            "warning",
+          );
+        }
+        this.launch(entry);
+        return;
+      }
+
+      if (signal === undefined && exit === 5 && !entry.dedupRetried) {
+        entry.dedupRetried = true;
+        await this.deps.sleep(DEDUP_RETRY_DELAY_MS);
+        if (entry.stopped || gen !== entry.generation) return;
+        this.launch(entry);
+        return;
+      }
+
+      entry.running = false;
+      entry.lastError = err ?? null;
+      if (signal === undefined && exit === 5) return; // dedup — another watcher owns it
+      const label = signal !== undefined ? `signal ${signal}` : `exit ${exit}`;
+      this.deps.notify(
+        `Sandesh watcher for ${entry.address} stopped (${label}): ${err ?? ""}`.trim(),
+        "error",
+      );
+    } catch (e) {
+      this.halt(entry);
+      throw e;
+    } finally {
+      this.exitHandled(entry);
+    }
   }
 }

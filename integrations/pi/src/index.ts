@@ -51,14 +51,29 @@ import { WakeSupervisor, type WatcherStatus } from "./wake";
 const registeredSupervisors = new Set<WakeSupervisor>();
 
 /**
+ * How long `sandesh_notify_start` waits after a fresh `start()` for the new
+ * watcher to exit (CR-SAN-053 §S3): an exit inside the window is reported as an
+ * `ok:false` error instead of a misleading `ok:true`.
+ */
+const START_SETTLE_MS = 2000;
+let startSettleMs = START_SETTLE_MS;
+
+/** Test seam (never called by production code): override the start settle window. */
+export function __setStartSettleMs(ms: number): void {
+  startSettleMs = ms;
+}
+
+/**
  * Test seam (never called by production code): stop every watcher of every
- * supervisor registered since the last reset, clear that registry, and reset
- * the resolved binary choice so a fresh `session_start` re-probes.
+ * supervisor registered since the last reset, clear that registry, reset
+ * the resolved binary choice so a fresh `session_start` re-probes, and restore
+ * the default start settle window.
  */
 export function resetExtensionState(): void {
   for (const s of registeredSupervisors) s.stop(undefined, { requested: true });
   registeredSupervisors.clear();
   resetBinaryResolution();
+  startSettleMs = START_SETTLE_MS;
 }
 
 /**
@@ -1089,7 +1104,8 @@ export default function registerExtension(pi: ExtensionAPI): void {
     label: "Sandesh: Notify Start",
     description:
       "Start the supervised wake watcher for an address (defaults to $SANDESH_ADDRESS / $SANDESH_PROJECT). " +
-      "One watcher per address: starting an already-running address returns already:true and spawns nothing.",
+      "One watcher per address: starting an already-running address returns already:true and spawns nothing. " +
+      "A new watcher that exits within the first 2 s (e.g. an unregistered address) returns ok:false with the reason.",
     promptSnippet: "Start your wake watcher so unread mail wakes you (one per address; idempotent).",
     parameters: Type.Object({
       address: Type.Optional(
@@ -1124,6 +1140,24 @@ export default function registerExtension(pi: ExtensionAPI): void {
             "Pass an `address` whose project part matches `project`, then retry sandesh_notify_start.",
           ]),
         );
+      }
+      // CR-SAN-053 §S3: give a fresh watcher the settle window to fail at start
+      // (unregistered address, bad store, …) and report that instead of ok:true.
+      if (!r.already) {
+        const settled = await sup.settle(address, startSettleMs);
+        if (settled !== undefined && !settled.running && settled.lastExit !== null) {
+          return textResult(
+            errorEnvelopeText(
+              "notify_start",
+              `watcher for ${address} exited at start (exit ${settled.lastExit}): ${settled.lastError ?? "no error reported"}`,
+              [
+                `Call sandesh_addressbook and check the status of '${address}'.`,
+                "If it is not registered, call sandesh_register for it, then retry sandesh_notify_start.",
+              ],
+              { project, address },
+            ),
+          );
+        }
       }
       return textResult(
         envelopeText(
