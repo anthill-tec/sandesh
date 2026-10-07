@@ -130,7 +130,7 @@ once, and start pi from that directory. If the identity is in `./.env` but not e
 the extension warns at session start — until you fix that there is no ambient status
 and no wake.
 
-> Pi needs the `sandesh` CLI **≥ 0.4.0** available on the machine (installed, or run
+> Pi needs the `sandesh` CLI **≥ 0.4.2** available on the machine (installed, or run
 > on demand via `uvx`) — the extension shells out to it and refuses an older CLI at
 > session start. See [docs/INSTALL.md](INSTALL.md).
 

@@ -18,9 +18,9 @@ pi install npm:@anthill-tec/sandesh-pi
 pi install ./integrations/pi
 ```
 
-## Prerequisite — the `sandesh` CLI (≥ 0.4.0)
+## Prerequisite — the `sandesh` CLI (≥ 0.4.2)
 
-The extension calls the `sandesh` binary — **CLI ≥ 0.4.0 is required** (the tools speak the
+The extension calls the `sandesh` binary — **CLI ≥ 0.4.2 is required** (the tools speak the
 `--format toon` AXI envelope; an older CLI is refused at session start with a too-old
 notice). It is resolved from `PATH`, else run on demand via
 `uvx --from sandesh-relay[migrate] sandesh`. Install it via any of:
