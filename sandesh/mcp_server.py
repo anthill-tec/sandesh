@@ -66,6 +66,27 @@ def _derive_or_resolve(project_id, addr):
     return proj
 
 
+def _attach_thread_bodies(con, chain, requester):
+    """Add `body` (the full text) to each chain dict whose message has a body and to
+    which `requester` is a party (its sender, or a `message_recipient` row) — the
+    same party rule as the CLI `thread --as` (CR-SAN-054 §S3). A missing body file
+    yields the CLI's `(body file missing: <path>)` text. Never marks anything read."""
+    projects_dir = os.path.join(sandesh_db.root_dir(), "projects")
+    for message in chain:
+        if "warning" in message or not message.get("body_path"):
+            continue
+        if requester != message["from_addr"] and not con.execute(
+                "SELECT 1 FROM message_recipient WHERE message_id=? AND recipient=?",
+                (message["id"], requester)).fetchone():
+            continue
+        path = sandesh_db.message_body_path(con, projects_dir, message)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                message["body"] = fh.read()
+        except FileNotFoundError:
+            message["body"] = f"(body file missing: {path})"
+
+
 if _MCP_AVAILABLE:
     SANDESH_INSTRUCTIONS = """Sandesh relays messages between cooperating agent orchestrators in the Model-B
 workflow: a Mainline coordinator session plus parallel Track worker sessions that
@@ -319,25 +340,45 @@ was lazily rebuilt first (harmless)."""
     def sandesh_thread(
         project_id: Annotated[
             str | None,
-            Field(description="Accepted for compatibility but unused — thread is "
-                  "msg_id-keyed on the global DB and needs no project routing."),
+            Field(description="Optional project check for `requester` (like the CLI's "
+                  "--project): when given, `requester` must belong to this project. The "
+                  "thread itself is msg_id-keyed on the global DB and needs no project "
+                  "routing."),
         ] = None,
         msg_id: Annotated[
             int,
             Field(description="Any message id within the thread; the full chain it belongs "
                   "to is returned root to leaf."),
         ] = 0,
+        requester: Annotated[
+            str | None,
+            Field(description="Your own address, format '<Orchestrator> - <Project>' "
+                  "(e.g. 'Mainline - Nai'). Needed to receive message bodies: each "
+                  "message you sent or received that has a body gains `body` (the full "
+                  "text). Omit it and no bodies are returned."),
+        ] = None,
     ) -> list[dict]:
         """Print a message's full reply chain (root to leaf), following in_reply_to links, so
         any party can reconstruct a conversation's context.
 
         Called by anyone to reconstruct a request→reply exchange — pass any message id in the
-        thread and get the whole conversation in order. Read-only. Returns list[dict].
+        thread and get the whole conversation in order. Bodies need `requester` (your own
+        address): a message with a body whose sender or recipient is `requester` gains `body`
+        (the full text); other and subject-only messages get no `body`. Read-only — nothing
+        is marked read. Returns list[dict].
         """
         con = None
         try:
+            if requester is not None:
+                if project_id:
+                    sandesh_db.validate_address(requester, project_id)
+                else:
+                    sandesh_db.validate_address(requester)
             con = sandesh_db.connect()
-            return [dict(r) for r in sandesh_db.thread(con, msg_id)]
+            chain = [dict(r) for r in sandesh_db.thread(con, msg_id)]
+            if requester is not None:
+                _attach_thread_bodies(con, chain, requester)
+            return chain
         except (ValueError, PermissionError) as e:
             raise ToolError(str(e)) from e
         finally:
