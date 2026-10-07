@@ -72,11 +72,7 @@ def _read_body_text(con, message):
     text. Never marks anything read (shared by thread + inbox body disclosure)."""
     projects_dir = os.path.join(sandesh_db.root_dir(), "projects")
     path = sandesh_db.message_body_path(con, projects_dir, message)
-    try:
-        with open(path, encoding="utf-8") as fh:
-            return fh.read()
-    except FileNotFoundError:
-        return f"(body file missing: {path})"
+    return sandesh_db.read_body(path)
 
 
 def _attach_thread_bodies(con, chain, requester):

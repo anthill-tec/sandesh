@@ -524,8 +524,16 @@ def message_body_path(con, projects_dir, message):
     return path
 
 
-# --------------------------------------------------------------------------- #
-# sending
+def read_body(path):
+    """The text (utf-8) of the body file at `path`, or `(body file missing: <path>)`
+    when it does not exist. File I/O only — no DB access; never marks anything read.
+    The one body-read idiom shared by `fetch()`, the CLI and the MCP server."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return f"(body file missing: {path})"
+
 
 def _expand_recipients(con, to_list, cc_list, sender, sender_project):
     """(recipient, role) pairs: expand `all-tracks` (within the sender's project),
@@ -757,12 +765,7 @@ def fetch(con, store, recipient, mark=True, *, sender=None, sender_project=None,
     for r in rows:
         body = None
         if r["body_path"]:
-            path = message_body_path(con, projects_dir, r)
-            try:
-                with open(path, encoding="utf-8") as fh:   # compiled from the full path
-                    body = fh.read()
-            except FileNotFoundError:
-                body = f"(body file missing: {path})"
+            body = read_body(message_body_path(con, projects_dir, r))   # the full path
         parent = None
         if r["in_reply_to"]:
             p = con.execute("SELECT subject FROM message WHERE id=?", (r["in_reply_to"],)).fetchone()

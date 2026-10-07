@@ -964,11 +964,7 @@ def _read_body_text(con, projects_dir, message):
     resolved path; a missing file yields `(body file missing: <path>)`.
     Never marks anything read (shared by `thread` and `inbox --with-body`)."""
     path = sdb.message_body_path(con, projects_dir, message)
-    try:
-        with open(path, encoding="utf-8") as fh:
-            return fh.read()
-    except FileNotFoundError:
-        return f"(body file missing: {path})"
+    return sdb.read_body(path)
 
 
 def _fields_arg(valid):
