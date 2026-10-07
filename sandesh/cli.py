@@ -1168,24 +1168,32 @@ def axi_thread(args):
         raise ValueError(f"no such message #{args.id}")
     _print_thread(chain)
     projects_dir = os.path.dirname(os.path.normpath(store))
-    caller = os.environ.get("SANDESH_ADDRESS") or os.environ.get("WF_TRACK")
+    caller = getattr(args, "as_", None)
     if caller:
         try:
             sdb.validate_address(caller, project)
-        except ValueError:
-            caller = None
-    rows, bodies, cut = [], {}, False
+        except ValueError as e:
+            raise ValueError(f"--as {caller!r}: {e}") from e
+    else:
+        caller = os.environ.get("SANDESH_ADDRESS") or os.environ.get("WF_TRACK")
+        if caller:
+            try:
+                sdb.validate_address(caller, project)
+            except ValueError:
+                caller = None  # an invalid env caller is treated as absent (0.4.0 rule)
+    rows, bodies, cut, withheld = [], {}, False, 0
     for message in chain:
         if _is_hole(message):
             continue
         rows.append(_pick({"id": message["id"], "from": message["from_addr"],
                            "subject": message["subject"], "created": message["created_at"],
                            "re": message["in_reply_to"]}, cols))
-        if not message["body_path"] or not caller:
+        if not message["body_path"]:
             continue
-        if caller != message["from_addr"] and not con.execute(
+        if not caller or (caller != message["from_addr"] and not con.execute(
                 "SELECT 1 FROM message_recipient WHERE message_id=? AND recipient=?",
-                (message["id"], caller)).fetchone():
+                (message["id"], caller)).fetchone()):
+            withheld += 1
             continue
         path = sdb.message_body_path(con, projects_dir, message)
         try:
@@ -1197,8 +1205,12 @@ def axi_thread(args):
         bodies[str(message["id"])] = text
         cut = cut or was_cut
     help_ = [_tmpl(project, "thread --id <id> --full  (complete bodies)")] if cut else []
-    return 0, {"chain": rows, "bodies": bodies,
-               "incomplete": any(_is_hole(m) for m in chain)}, help_
+    payload = {"chain": rows, "bodies": bodies,
+               "incomplete": any(_is_hole(m) for m in chain)}
+    if withheld:
+        payload["withheld"] = withheld
+        help_.append(_tmpl(project, "thread --id <id> --as '<your address>'"))
+    return 0, payload, help_
 
 
 def axi_projects(args):
@@ -1455,6 +1467,8 @@ def build_parser(axi_format="human", axi_context=None):
                         f"{','.join(THREAD_FIELDS)}; default {','.join(THREAD_DEFAULT)})")
     p.add_argument("--full", action="store_true",
                    help=f"machine-mode: complete bodies (default: first {BODY_LIMIT} chars)")
+    p.add_argument("--as", dest="as_",
+                   help="your address (default $SANDESH_ADDRESS, then $WF_TRACK)")
     p.set_defaults(fn=cmd_thread)
 
     p = sub.add_parser(
