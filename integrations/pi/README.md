@@ -61,12 +61,12 @@ first turn.
 | `sandesh_addressbook`   | list the project's registered addresses.                                         |
 | `sandesh_send`          | send a message (subject, optional body, `to`/`cc`, kind).                        |
 | `sandesh_reply`         | reply to a message (threads on the parent; subject defaults to `Re: …`).         |
-| `sandesh_inbox`         | list messages addressed to an address (filters, `limit`).                        |
+| `sandesh_inbox`         | list messages addressed to an address (filters, `limit`); `with_body` adds the listed rows' bodies without marking read (`full` uncut — pair with `limit`). |
 | `sandesh_fetch`         | fetch + mark-read messages for an address (`full` for bodies).                   |
-| `sandesh_thread`        | walk the reply chain of a message (`full` for bodies).                           |
+| `sandesh_thread`        | walk the reply chain of a message; `requester` (your own address) returns the bodies of messages you sent or received, else they are counted as `withheld` (`full` uncut). |
 | `sandesh_archive`       | archive a project (read-only, reversible; `dry_run`).                            |
 | `sandesh_unarchive`     | restore an archived project to active (`dry_run`).                               |
-| `sandesh_search`        | FTS5 full-text search over subjects/bodies (`limit`).                            |
+| `sandesh_search`        | FTS5 full-text search over subjects/bodies (`limit`); hits carry a `snippet`, `fields` selects columns. |
 | `sandesh_status`        | home view: address, listening, unread — plus `watcher: running\|stopped`.        |
 | `sandesh_notify_start`  | start the supervised wake watcher for an address (idempotent, one per address); returns the watcher table. A new watcher that exits within 2 s (e.g. an unregistered address) returns `ok:false` with the exit code and reason. |
 | `sandesh_notify_status` | list in-session watchers: address, running, last exit by default; `project` scopes the list, and is required when watchers span projects; `fields` selects watcher columns. |
