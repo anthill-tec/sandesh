@@ -647,6 +647,8 @@ interface InboxParams extends MessageFilterParams {
   unread_only?: boolean;
   fields?: string[];
   limit?: number;
+  with_body?: boolean;
+  full?: boolean;
   project_id?: string;
 }
 
@@ -661,6 +663,7 @@ interface ThreadParams {
   msg_id: number;
   fields?: string[];
   full?: boolean;
+  requester?: string;
   project_id?: string;
 }
 
@@ -683,6 +686,7 @@ interface SearchParams {
   limit?: number;
   offset?: number;
   sender_project?: string;
+  fields?: string[];
 }
 
 interface NotifyStartParams {
@@ -895,10 +899,12 @@ export default function registerExtension(pi: ExtensionAPI): void {
     description:
       "List messages addressed to a recipient (unread only by default; unread_only=false shows all). " +
       "Filters: sender, kind, since/until, subject, or sender_project (cross-project proxy stream). " +
-      "fields selects the columns returned; limit caps the number of messages.",
+      "fields selects the columns returned; limit caps the number of messages. " +
+      "with_body=true adds bodies, never marking read (full: uncut).",
     promptSnippet:
       "List an address's messages without consuming them (triage; does not mark read). " +
-      "Filter by sender, kind, time, subject, or sender_project (the cross-project proxy stream).",
+      "Filter by sender, kind, time, subject, or sender_project (the cross-project proxy stream); " +
+      "with_body re-reads bodies without marking read.",
     parameters: Type.Object({
       recipient: Type.String({ description: "Address whose inbox to list." }),
       unread_only: Type.Optional(
@@ -914,6 +920,18 @@ export default function registerExtension(pi: ExtensionAPI): void {
           description: "Max number of messages to list (maps to --limit).",
         }),
       ),
+      with_body: Type.Optional(
+        Type.Boolean({
+          description:
+            "When true, include the listed messages' bodies — re-reads them in batch without marking anything read; pair with limit (maps to --with-body).",
+        }),
+      ),
+      full: Type.Optional(
+        Type.Boolean({
+          description:
+            "With with_body, return the bodies untruncated (maps to --full).",
+        }),
+      ),
       project_id: projectIdParam,
     }),
     execute: async (_callId, params: InboxParams, signal) => {
@@ -922,6 +940,8 @@ export default function registerExtension(pi: ExtensionAPI): void {
       pushMessageFilters(args, params);
       pushFields(args, params.fields);
       if (params.limit !== undefined) args.push("--limit", String(params.limit));
+      if (params.with_body === true) args.push("--with-body");
+      if (params.full === true) args.push("--full");
       return runSandesh(pi, "inbox", args, signal);
     },
   });
@@ -967,19 +987,28 @@ export default function registerExtension(pi: ExtensionAPI): void {
     label: "Sandesh: Thread",
     description:
       "Walk the reply chain of a message, showing the full conversation thread. " +
-      "fields selects the columns returned; full=true includes complete message bodies.",
+      "fields selects the columns returned; full=true includes complete message bodies. " +
+      "Bodies are shown only to a party of the message — pass requester (your own address); " +
+      "withheld bodies are counted in the result.",
     promptSnippet:
-      "Print a message's full reply chain (root → leaf) to reconstruct a conversation.",
+      "Print a message's full reply chain (root → leaf) to reconstruct a conversation; pass requester to see bodies.",
     parameters: Type.Object({
       msg_id: Type.Number({ description: "Id of a message in the thread to walk." }),
       fields: fieldsParam,
       full: fullParam,
+      requester: Type.Optional(
+        Type.String({
+          description:
+            "Your own address — bodies are shown only to the message's sender or recipients, so they need it (maps to --as). Omitted → the CLI uses $SANDESH_ADDRESS.",
+        }),
+      ),
       project_id: projectIdParam,
     }),
     execute: async (_callId, params: ThreadParams, signal) => {
       const args = [...projectPrefix(params.project_id), "thread", "--id", String(params.msg_id)];
       pushFields(args, params.fields);
       if (params.full === true) args.push("--full");
+      if (params.requester !== undefined) args.push("--as", params.requester);
       return runSandesh(pi, "thread", args, signal);
     },
   });
@@ -1047,7 +1076,7 @@ export default function registerExtension(pi: ExtensionAPI): void {
     name: "sandesh_search",
     label: "Sandesh: Search",
     description:
-      "Full-text search the messages addressed to you (own-mailbox only). Query uses FTS5 syntax: quoted phrases, AND/OR/NOT. Results are bm25-ranked with snippets; paginate with limit/offset (CLI defaults: limit 20, offset 0). Never marks anything read. A lazy-reindex notice from the CLI is passed through verbatim.",
+      "Full-text search the messages addressed to you (own-mailbox only). Query uses FTS5 syntax: quoted phrases, AND/OR/NOT. Results are bm25-ranked with snippets; paginate with limit/offset (CLI defaults: limit 20, offset 0); fields picks columns. Never marks read. A lazy-reindex notice from the CLI is passed through.",
     promptSnippet:
       "Full-text search your own mailbox (FTS5 syntax; bm25-ranked snippets; paginate with limit/offset; never marks read).",
     parameters: Type.Object({
@@ -1073,12 +1102,19 @@ export default function registerExtension(pi: ExtensionAPI): void {
             "Filter: the cross-project proxy-stream filter — only messages whose sender belongs to this project (maps to --from-project).",
         }),
       ),
+      fields: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "Select the columns returned per hit (maps to --fields, comma-joined). Columns: id,from,subject,kind,created,role,snippet; default id,from,subject,snippet.",
+        }),
+      ),
     }),
     execute: async (_callId, params: SearchParams, signal) => {
       const args = ["search", params.query, "--to", params.recipient];
       if (params.limit !== undefined) args.push("--limit", String(params.limit));
       if (params.offset !== undefined) args.push("--offset", String(params.offset));
       if (params.sender_project !== undefined) args.push("--from-project", params.sender_project);
+      pushFields(args, params.fields);
       return runSandesh(pi, "search", args, signal);
     },
   });
