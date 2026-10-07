@@ -55,24 +55,27 @@ unknown-project refusal and `inbox --with-body`.
   or one of its recipients (to or cc, read or unread).
 - When at least one message in the chain has a body that is not shown, the payload gains
   `withheld: <n>` (the count), and `help[]` gains the template
-  `sandesh --project <P> thread --id <id> --as '<your address>'`. If a caller was given but is not a valid
-  address for `--project`, the verb fails (`ok:false`) with the `validate_address` error instead of
-  silently ignoring it. With nothing withheld there is no `withheld` key (the payload shape is unchanged).
-- The Pi `sandesh_thread` tool gains an optional `as: string` parameter, passed as `--as`.
+  `sandesh --project <P> thread --id <id> --as '<your address>'`. With nothing withheld there is no
+  `withheld` key (the payload shape is unchanged).
+- An explicit `--as` that is not a valid address for `--project` fails the verb (`ok:false`, the
+  `validate_address` error). A caller taken from the environment that is not valid for `--project` is
+  treated as absent, as today: metadata is returned with `rc 0`, and its bodies count as withheld
+  (the 0.4.0 body-authorization rule, pinned by `tests/test_axi_disclosure.py` l.287–306, is kept).
+- The Pi `sandesh_thread` tool gains an optional `requester: string` parameter, passed as `--as` (the
+  same name `sandesh_unregister` already uses for its `--as`).
 
 **Surfaces (verified 2026-10-07):** `cli.py` `axi_thread` (l.1158–1196), `thread` parser (l.1446–);
 `index.ts` `sandesh_thread` (l.965–).
 
 ### §S3 — the MCP `sandesh_thread` returns bodies to a named caller (MCP)
 
-- `sandesh_thread` gains an optional `caller: str | None = None` parameter (**PROPOSED — pending
-  decision:** the owner chose an "`as`" parameter, but `as` is a Python keyword and cannot be a FastMCP
-  parameter name; `caller` is the proposed name).
-- With `caller` set and valid, each returned chain dict for a message whose sender or recipient is
-  `caller` and which has a body gains `body` (the full text). Subject-only messages get no `body` key.
-  An invalid `caller` raises `ToolError` with the `validate_address` message. Without `caller` the result
-  is unchanged.
-- The docstring states that bodies need `caller`.
+- `sandesh_thread` gains an optional `requester: str | None = None` parameter (owner ruling 2026-10-07:
+  the name `sandesh_unregister` already uses for the caller's own address; `as` is a Python keyword).
+- With `requester` set and valid, each returned chain dict for a message whose sender or recipient is
+  `requester` and which has a body gains `body` (the full text). Subject-only messages get no `body` key.
+  An invalid `requester` raises `ToolError` with the `validate_address` message. Without `requester` the
+  result is unchanged.
+- The docstring states that bodies need `requester`.
 
 **Surfaces (verified 2026-10-07):** `sandesh/mcp_server.py` `sandesh_thread` (l.318–345).
 
@@ -92,12 +95,17 @@ unknown-project refusal and `inbox --with-body`.
 
 ### §S5 — an unknown project id is refused, naming the known ones (CLI + MCP)
 
-- The read verbs `addressbook`, `inbox`, `fetch`, `thread` and `status` refuse a `--project` /
-  `$SANDESH_PROJECT` id that has no tracker row (`project_state()` is `None`), with the error
+- `sandesh_db` gains `require_known_project(con, project_id)`: pure, raises `ValueError` when
+  `project_state()` is `None`, returns otherwise. It reuses the existing `unknown project '<id>'` wording
+  (as `register`/`send`/`grant` raise it) and accepts archived projects (unlike
+  `_require_active_project`, which rejects them).
+- The read verbs `addressbook`, `inbox`, `fetch`, `thread` and `status` call it for their `--project` /
+  `$SANDESH_PROJECT` id, with the error
   `unknown project '<id>' — known projects: <A, B, …>` (active and archived ids, sorted, from
   `list_projects()`). When exactly one known id matches case-insensitively, the error adds
   `— did you mean '<Id>'?`. Machine mode returns `ok:false` with `help[]` naming `projects`. Human mode
-  keeps the house `[sandesh] ERROR: …` exit.
+  keeps the house `[sandesh] ERROR: …` exit. `status` checks the project before `validate_address`, so
+  the unknown-project error wins.
 - An archived project is known (reads stay allowed); a tombstoned one keeps its current behaviour.
 - The MCP `sandesh_addressbook` raises `ToolError` with the same message for an unknown `project_id`.
 - `setup` (which enrolls) is unaffected.
@@ -109,11 +117,18 @@ unknown-project refusal and `inbox --with-body`.
 
 - PRD-inbox-search gains a Change Control line: machine-mode hits carry `snippet` by default, with
   `--fields`.
-- PRD-axi-toon §4.0 lists the `search` / `thread` / `inbox` defaults and the `withheld` count.
+- PRD-axi-toon gains Change Control 1.6 and updates: the P2 row (`search` default
+  `id,from,subject,snippet`), the P3 row (the caller is `--as`, else `$SANDESH_ADDRESS`; withheld bodies
+  are counted as `withheld` with an `--as` hint), the §4.4 `inbox` row (no bodies unless `--with-body`),
+  and new §4.4 rows for `search` (full set `id,from,subject,kind,created,role,snippet`) and `thread`
+  (`chain` + `bodies` + `withheld` + `incomplete`).
 - `docs/USER_GUIDE.md`, `sandesh/data/usage-scenarios.md` (the `sandesh://usage` resource) and
   `integrations/pi/README.md` (the three tool rows) document re-reading read mail: `thread --as`,
-  `inbox --with-body`, the search snippet.
-- The Pi `MIN_CLI_VERSION` becomes `[0, 4, 2]` (the extension now passes flags 0.4.1 does not know).
+  `inbox --with-body` (pair it with `--limit`: 50 rows × 500 chars by default), the search snippet.
+- The Pi `MIN_CLI_VERSION` becomes `[0, 4, 2]` (owner ruling 2026-10-07: the extension now passes flags
+  0.4.1 does not know). The version fixtures that use `sandesh 0.4.0` / `sandesh 0.4.1` as a passing
+  probe move to `sandesh 0.4.2`: `src/version_gate.test.ts`, `src/version_gate_040.test.ts`,
+  `src/uvx_provision.test.ts` (and any other probe fixture the RED run finds).
 
 **Surfaces (verified 2026-10-07):** `integrations/pi/src/index.ts` `MIN_CLI_VERSION` (l.141).
 
@@ -125,18 +140,22 @@ from `Track 1 - Demo` to `Mainline - Demo` with a body containing `gateway timeo
 
 - [ ] **AC1** — `search "gateway" --to "Mainline - Demo" --format json` → each hit has keys exactly
   `id, from, subject, snippet`, and the snippet contains `[gateway]`. `--fields id,snippet` → keys exactly
-  `id, snippet`. `--fields bogus` → `ok:false`, exit 2.
+  `id, snippet`. `--fields bogus` → `ok:false`, exit 2. (Supersedes the old-default assertion in
+  `tests/test_axi_disclosure.py` l.509, which RED updates to the new default.)
 - [ ] **AC2** — Pi `sandesh_search({recipient, query, fields:["id","snippet"]})` passes
   `--fields id,snippet` to the CLI (fake `exec` argv assertion), and the result decodes with `snippet`.
 - [ ] **AC3** — `thread --id <m> --as "Mainline - Demo" --format json` with no `SANDESH_ADDRESS` in the
   env → `bodies` has `<m>` containing `gateway timeout`, and there is no `withheld` key.
-- [ ] **AC4** — the same with no `--as` and no `SANDESH_ADDRESS`/`WF_TRACK` → `bodies` is empty,
-  `withheld: 1`, and `help[]` contains `--as`. With `--as "Track 2 - Demo"` (registered, not a party) →
-  `withheld: 1`. With `--as "Mainline - Other"` → `ok:false`, error naming the address.
-- [ ] **AC5** — Pi `sandesh_thread({msg_id, as:"Mainline - Demo"})` passes `--as "Mainline - Demo"`.
-- [ ] **AC6** — MCP (in-process FastMCP client): `sandesh_thread(msg_id=m, caller="Mainline - Demo")` →
-  the chain dict for `m` has `body` containing `gateway timeout`; without `caller` no dict has `body`;
-  `caller="Mainline - Other"` → `ToolError`.
+- [ ] **AC4** — the same with no `--as` and no `SANDESH_ADDRESS`/`WF_TRACK` → `rc 0`, `bodies` is
+  empty, `withheld: 1`, and `help[]` contains `--as`. With `--as "Track 2 - Demo"` (registered, not a
+  party) → `withheld: 1`. With `--as "Mainline - Other"` → `ok:false`, error naming the address. With
+  no `--as` and `SANDESH_ADDRESS="Mainline - Other"` in the env → `rc 0`, `withheld: 1` (env caller
+  treated as absent). A chain of subject-only messages has no `withheld` key.
+- [ ] **AC5** — Pi `sandesh_thread({msg_id, requester:"Mainline - Demo"})` passes
+  `--as Mainline - Demo` (one argv element) to the CLI.
+- [ ] **AC6** — MCP (in-process FastMCP client): `sandesh_thread(msg_id=m, requester="Mainline - Demo")`
+  → the chain dict for `m` has `body` containing `gateway timeout`; without `requester` no dict has
+  `body`; `requester="Mainline - Other"` → `ToolError`.
 - [ ] **AC7** — seed a second message `#u` to `Mainline - Demo`, left unread.
   `inbox --to "Mainline - Demo" --all --with-body --format json` → `bodies["<m>"]` contains
   `gateway timeout` and `bodies["<u>"]` is present. Afterwards `inbox --to "Mainline - Demo"` (unread
@@ -148,17 +167,31 @@ from `Track 1 - Demo` to `Mainline - Demo` with a body containing `gateway timeo
 - [ ] **AC9** — `addressbook --project demo --format json` → `ok:false`, error contains
   `unknown project 'demo'`, `known projects:` and `did you mean 'Demo'?`, `help[]` names `projects`;
   `--project Nope` → no `did you mean`. Each of `inbox`, `fetch`, `thread`, `status` with
-  `--project demo` → `ok:false` with `unknown project`. An archived project still answers `addressbook`.
-  MCP `sandesh_addressbook(project_id="demo")` → `ToolError` with the same text.
+  `--project demo` → `ok:false` with `unknown project` (for `status`, with
+  `SANDESH_ADDRESS="Mainline - Demo"`, the unknown-project error, not the address error). An archived
+  project still answers `addressbook`. MCP `sandesh_addressbook(project_id="demo")` → `ToolError` with
+  the same text. Unit: `sandesh_db.require_known_project` raises for `demo`, returns for `Demo` active
+  and archived.
 - [ ] **AC10** — docs pins: PRD-inbox-search Change Control mentions `snippet` and `--fields`;
+  PRD-axi-toon has a 1.6 Change Control row and its P2 row contains `id,from,subject,snippet`;
   USER_GUIDE and `usage-scenarios.md` contain `thread --id` with `--as` and `--with-body`; the Pi README
-  rows for `sandesh_thread` / `sandesh_inbox` / `sandesh_search` name `as`, `with_body` and `fields`.
-  Pi `MIN_CLI_VERSION` is `0.4.2` (the existing version-gate test drives a 0.4.1 CLI to a refusal).
-  Full Python gate and full `bun test` green.
+  rows for `sandesh_thread` / `sandesh_inbox` / `sandesh_search` name `requester`, `with_body` and
+  `fields`.
+- [ ] **AC11** — Pi version gate: a `sandesh 0.4.1` probe takes the too-old path and its notice names
+  `0.4.2`; a `sandesh 0.4.2` probe arms normally. Full Python gate and full `bun test` green.
 
 **VERIFY audit (not a test):** grep that `axi_search` reads `args.fields`, that `axi_thread` reads
-`args.as_`, that the Pi tools push `--fields` / `--as` / `--with-body`, and that MCP `sandesh_thread`
-and `sandesh_inbox` read `caller` / `with_body`.
+`args.as_`, that the Pi tools push `--fields` / `--as` / `--with-body`, that MCP `sandesh_thread`
+and `sandesh_inbox` read `requester` / `with_body`, and that each of the five read verbs and the MCP
+`sandesh_addressbook` calls `require_known_project`.
+
+## Gap analysis (2026-10-07) — READY after this update
+
+Baseline measured on `develop` @ `aa3268d`: Python 1786/1786 (83.9% lines), Bun 477/477. Findings folded
+in above: PRD-axi-toon P2/P3/§4.4 rows (DRIFT-1); the env-caller rule kept, only explicit `--as` fails
+(DRIFT-2); `test_axi_disclosure.py` l.509 superseded (DRIFT-3); `require_known_project` reuses the
+existing wording and allows archived (DRIFT-4); `MIN_CLI_VERSION` 0.4.2 with its fixture moves (DRIFT-5,
+owner ruling); `requester` for Pi + MCP (DRIFT-6, owner ruling); doc items pinned in AC10 (DRIFT-7).
 
 ## Estimated size
 
