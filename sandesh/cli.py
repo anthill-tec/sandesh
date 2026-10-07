@@ -925,6 +925,18 @@ def _truncate(text):
     return f"{text[:BODY_LIMIT]} (truncated, {len(text)} chars total)", True
 
 
+def _read_body_text(con, projects_dir, message):
+    """The body text of a message row that HAS a `body_path` — read from its
+    resolved path; a missing file yields `(body file missing: <path>)`.
+    Never marks anything read (shared by `thread` and `inbox --with-body`)."""
+    path = sdb.message_body_path(con, projects_dir, message)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return f"(body file missing: {path})"
+
+
 def _fields_arg(valid):
     """argparse `type` for `--fields <csv>`: a subset of `valid` (given order
     kept); an unknown name → ArgumentTypeError naming it AND the valid set, which
@@ -967,7 +979,7 @@ def axi_addressbook(args):
 
 
 def axi_inbox(args):
-    project, _, con = _ctx(args)
+    project, store, con = _ctx(args)
     who = _require_own_addr(args, "to", "--to '<address>'")
     cols = args.fields or INBOX_DEFAULT
     rows = _inbox_rows(con, args, who, not args.all)
@@ -989,7 +1001,22 @@ def axi_inbox(args):
         help_ = [_tmpl(project, "fetch --to <addr>"), _tmpl(project, "thread --id <id>")]
     else:
         help_ = [_tmpl(project, _SEND_TMPL)]
-    return 0, {"messages": messages, "unread": f"{unread} of {len(everything)}"}, help_
+    payload = {"messages": messages, "unread": f"{unread} of {len(everything)}"}
+    if args.with_body:
+        # CR-SAN-054 §S4: re-read the LISTED rows' bodies (after --limit); never marks read.
+        projects_dir = os.path.dirname(os.path.normpath(store))
+        bodies, cut = {}, False
+        for r in rows:
+            if not r["body_path"]:
+                continue
+            body = _read_body_text(con, projects_dir, r)
+            text, was_cut = (body, False) if args.full else _truncate(body)
+            bodies[str(r["id"])] = text
+            cut = cut or was_cut
+        payload["bodies"] = bodies
+        if cut:
+            help_.append(_tmpl(project, "inbox --to <addr> --all --with-body --full"))
+    return 0, payload, help_
 
 
 def axi_fetch(args):
@@ -1195,12 +1222,7 @@ def axi_thread(args):
                 (message["id"], caller)).fetchone()):
             withheld += 1
             continue
-        path = sdb.message_body_path(con, projects_dir, message)
-        try:
-            with open(path, encoding="utf-8") as fh:
-                body = fh.read()
-        except FileNotFoundError:
-            body = f"(body file missing: {path})"
+        body = _read_body_text(con, projects_dir, message)
         text, was_cut = (body, False) if args.full else _truncate(body)
         bodies[str(message["id"])] = text
         cut = cut or was_cut
@@ -1440,6 +1462,10 @@ def build_parser(axi_format="human", axi_context=None):
                         f"{','.join(INBOX_FIELDS)}; default {','.join(INBOX_DEFAULT)})")
     p.add_argument("--limit", type=_positive_int, default=INBOX_LIMIT,
                    help=f"machine-mode row cap (default {INBOX_LIMIT}; the aggregate is unsliced)")
+    p.add_argument("--with-body", dest="with_body", action="store_true",
+                   help="machine-mode: add the listed rows' bodies (never marks read)")
+    p.add_argument("--full", action="store_true",
+                   help=f"machine-mode: complete bodies (default: first {BODY_LIMIT} chars)")
     p.set_defaults(fn=cmd_inbox)
 
     p = sub.add_parser("fetch", parents=[common], help="consolidate + read unread messages")

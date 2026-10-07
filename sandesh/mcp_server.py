@@ -66,12 +66,24 @@ def _derive_or_resolve(project_id, addr):
     return proj
 
 
+def _read_body_text(con, message):
+    """The full body text of a message row that HAS a `body_path`, read from its
+    resolved path; a missing file yields the CLI's `(body file missing: <path>)`
+    text. Never marks anything read (shared by thread + inbox body disclosure)."""
+    projects_dir = os.path.join(sandesh_db.root_dir(), "projects")
+    path = sandesh_db.message_body_path(con, projects_dir, message)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return f"(body file missing: {path})"
+
+
 def _attach_thread_bodies(con, chain, requester):
     """Add `body` (the full text) to each chain dict whose message has a body and to
     which `requester` is a party (its sender, or a `message_recipient` row) — the
     same party rule as the CLI `thread --as` (CR-SAN-054 §S3). A missing body file
     yields the CLI's `(body file missing: <path>)` text. Never marks anything read."""
-    projects_dir = os.path.join(sandesh_db.root_dir(), "projects")
     for message in chain:
         if "warning" in message or not message.get("body_path"):
             continue
@@ -79,12 +91,7 @@ def _attach_thread_bodies(con, chain, requester):
                 "SELECT 1 FROM message_recipient WHERE message_id=? AND recipient=?",
                 (message["id"], requester)).fetchone():
             continue
-        path = sandesh_db.message_body_path(con, projects_dir, message)
-        try:
-            with open(path, encoding="utf-8") as fh:
-                message["body"] = fh.read()
-        except FileNotFoundError:
-            message["body"] = f"(body file missing: {path})"
+        message["body"] = _read_body_text(con, message)
 
 
 if _MCP_AVAILABLE:
@@ -237,6 +244,12 @@ was lazily rebuilt first (harmless)."""
             Field(description="Case-insensitive literal substring the subject must "
                   "contain. None (default) = no constraint."),
         ] = None,
+        with_body: Annotated[
+            bool,
+            Field(description="When True, each returned row that has a body gains `body` "
+                  "(its full text) \u2014 a batch re-read of your mail, read or unread. "
+                  "Nothing is marked read. Default False (envelopes only)."),
+        ] = False,
     ) -> list[dict]:
         """List an address's messages — a quick triage glance at what's pending. Unread by
         default; pass unread_only=False to include read messages too.
@@ -249,10 +262,15 @@ was lazily rebuilt first (harmless)."""
         con = None
         try:
             con = sandesh_db.connect()
-            return [dict(r) for r in sandesh_db.inbox(
+            rows = [dict(r) for r in sandesh_db.inbox(
                 con, recipient, unread_only, sender=sender,
                 sender_project=sender_project, kind=kind, since=since,
                 until=until, subject_like=subject_like)]
+            if with_body:
+                for row in rows:
+                    if row.get("body_path"):
+                        row["body"] = _read_body_text(con, row)
+            return rows
         except (ValueError, PermissionError) as e:
             raise ToolError(str(e)) from e
         finally:
