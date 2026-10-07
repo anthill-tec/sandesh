@@ -1,45 +1,39 @@
-"""test_mcp_thread_requester.py — RED tests for CR-SAN-054 Cycle 3 (§S3, AC6).
+"""test_mcp_thread_requester.py — RED tests for CR-SAN-054 Cycle 3 (\u00a7S3, AC6).
 
 Covers the MCP `sandesh_thread` tool gaining an optional `requester: str | None`
 parameter: with a valid requester that is a party (sender or recipient) of a
 message that has a body, the returned chain dict for that message gains a
 `body` key with the full text. Subject-only messages never gain `body`. A
 non-party valid requester, or no requester at all, leaves the result without
-any `body` keys. A malformed requester, or a well-formed requester whose
-address does not belong to the thread's project, raises `ToolError` (AC6:
-`requester="Mainline - Other"` -> `ToolError`).
+any `body` keys.
+
+Amended (owner ruling 2026-10-07, spec commit 3c3ae9b): validation mirrors the
+CLI's `--as` + `--project` \u2014 the existing, previously-unused `project_id`
+parameter becomes the project check. With `project_id` set, `requester` must
+pass `sandesh_db.validate_address(requester, project_id)`; a failure (bad
+format, or a well-formed address in a different project) raises `ToolError`
+with the `validate_address` message. Without `project_id`, only the address
+FORMAT is checked \u2014 a well-formed requester in a different project is
+accepted with no error, and (being a non-party) sees no `body`. The project is
+never derived from the thread itself.
 
   python-crucible.py test --tests tests.test_mcp_thread_requester --agent CR-SAN-054-C3-RED
 
-ESCALATION (documented, not guessed): the dispatch prompt's case 6 wording
-("Mainline - Other" (well-formed, registered, not a party) -> no body, no
-error) DEVIATES from AC6, which states explicitly:
-    `requester="Mainline - Other"` -> `ToolError`.
-This test file follows AC6 (the authoritative acceptance criterion) and
-asserts ToolError for `requester="Mainline - Other"`, not the dispatch
-prompt's alternative "no body, no error" outcome. §S3's prose ("An invalid
-`requester` raises `ToolError` with the `validate_address` message") does not
-by itself explain why a well-formed, registered address in a different
-project would be "invalid" — the only coherent reading that satisfies AC6 is
-that the implementation validates `requester` against a project derived from
-the thread (as the CLI's `--as` does against `--project`, see `cli.py`
-`axi_thread` l.1171-1176), so a cross-project well-formed address still fails
-`validate_address(requester, project)`'s project-mismatch branch. Both
-candidate error messages from `sandesh_db.validate_address` (the malformed-
-format branch and the project-mismatch branch) are asserted precisely
-below, each for the case that actually produces it.
-
-Expected RED (confirmed by the actual first run — see below): FastMCP's
+Expected RED (confirmed by the actual first run \u2014 see below): FastMCP's
 `call_tool` does NOT reject an unknown `requester` kwarg on `sandesh_thread`
 (unlike `sandesh_inbox`'s `sender_project`, whose rejection other sibling
-tests rely on) — the extra field is silently ignored, so every call that
+tests rely on) \u2014 the extra field is silently ignored, so every call that
 passes `requester=...` today returns the SAME `thread()` output as if
 `requester` had been omitted: no `body` key anywhere. This makes the
 "body present for a party" tests (and the two merged withheld/omitted
-control-case assertions) fail for the right reason — the missing `body` key
-— and the two ToolError tests fail because no `ToolError` is raised at all
-yet (`validate_address` on `requester` is never reached). The schema test
-fails because `requester` is absent from `sandesh_thread`'s `inputSchema`.
+control-case assertions) fail for the right reason \u2014 the missing `body` key
+\u2014 and the malformed-address ToolError test fails because no `ToolError` is
+raised at all yet (`validate_address` on `requester` is never reached). The
+project-mismatch ToolError test fails for the same reason (no error raised at
+all, since `project_id` is still unused), and the no-project_id control test
+fails on its party-requester control assertion (no `body` key disclosed yet).
+The schema test fails because `requester` is absent from `sandesh_thread`'s
+`inputSchema`.
 """
 
 import os, sys; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root — CR-SAN-049 guard bootstrap
@@ -348,27 +342,72 @@ class ThreadRequesterInvalidAddressTest(_McpThreadRequesterBase):
             f"got: {err_msg!r}",
         )
 
-    async def test_requester_well_formed_different_project_address_raises_toolerror(self):
-        """AC6 (authoritative — see file-level ESCALATION docstring):
-        requester='Mainline - Other' (well-formed, registered, but not of the
-        thread's project) -> ToolError.
+    async def test_requester_well_formed_different_project_with_project_id_raises_toolerror(self):
+        """AC6, amended 2026-10-07 owner ruling (\u00a7S3): requester='Mainline - Other'
+        with project_id='Demo' -> ToolError naming the project mismatch
+        (validate_address's project-mismatch branch: "address project 'Other' !=
+        project_id 'Demo'").
 
-        RED: currently a ToolError too (unknown 'requester' field, since the
-        parameter does not exist yet) — but for the wrong reason: the message
-        does not name the 'Other' project the way validate_address's
-        project-mismatch branch does, so the message assertion below fails
-        until requester-project validation is implemented.
+        RED: currently NO ToolError is raised at all (project_id is still unused
+        by sandesh_thread, and the unknown 'requester' field is silently ignored),
+        so assertRaises(ToolError) itself fails to catch anything \u2014 the call
+        succeeds and returns a chain instead.
         """
         with self.assertRaises(ToolError) as ctx:
             await mcp_server.mcp.call_tool(
                 "sandesh_thread",
-                {"msg_id": self.mid_m, "requester": MAINLINE_OTHER},
+                {"msg_id": self.mid_m, "requester": MAINLINE_OTHER, "project_id": PROJ},
             )
         err_msg = str(ctx.exception)
         self.assertIn(
-            "Other", err_msg,
-            f"ToolError for a well-formed but wrong-project requester must name "
-            f"the project 'Other'; got: {err_msg!r}",
+            "!= project_id", err_msg,
+            f"ToolError for a well-formed requester outside project_id must carry "
+            f"validate_address's project-mismatch wording; got: {err_msg!r}",
+        )
+        self.assertIn(
+            repr(PROJ), err_msg,
+            f"ToolError must name the project_id {PROJ!r} it was checked against; "
+            f"got: {err_msg!r}",
+        )
+
+    async def test_requester_well_formed_different_project_without_project_id_no_error_no_body(self):
+        """AC6, amended 2026-10-07 owner ruling (\u00a7S3): requester='Mainline - Other'
+        with NO project_id -> no error, and \u2014 since Mainline - Other is not a
+        party to #m \u2014 no chain dict gains a 'body' key. Paired, in the SAME
+        test, with the positive party-requester control case (requester=Mainline -
+        Demo) so this is not a vacuous pre-feature pass: it fails today on the
+        control assertion, proving the body-disclosure mechanism itself is not
+        implemented yet.
+
+        RED: the non-party/no-project_id call raises no error today either (the
+        'requester' field is silently ignored) so that half coincidentally holds,
+        but the paired control assertion fails \u2014 'body' is absent for the party
+        requester \u2014 because no body-disclosure logic exists yet.
+        """
+        other_result = await mcp_server.mcp.call_tool(
+            "sandesh_thread",
+            {"msg_id": self.mid_m, "requester": MAINLINE_OTHER},
+        )
+        other_chain = _data(other_result)
+        bodies = [d["id"] for d in other_chain if "body" in d]
+        self.assertEqual(
+            bodies, [],
+            f"a well-formed, non-party, cross-project requester with no project_id "
+            f"must raise no error and see no 'body' key anywhere; dicts with body: "
+            f"{bodies!r}",
+        )
+
+        party_result = await mcp_server.mcp.call_tool(
+            "sandesh_thread",
+            {"msg_id": self.mid_m, "requester": MAINLINE},
+        )
+        party_chain = _data(party_result)
+        party_dict_m = self._chain_by_id(party_chain, self.mid_m)
+        self.assertIn(
+            "body", party_dict_m,
+            f"control case: party requester {MAINLINE!r} must see a 'body' key "
+            f"for #{self.mid_m}, in contrast to the non-party call above: "
+            f"{party_dict_m!r}",
         )
 
 
