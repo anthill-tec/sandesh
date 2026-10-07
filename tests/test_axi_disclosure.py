@@ -506,7 +506,7 @@ class RemainingVerbsEnvelopeTest(_BaseFixture):
         rows = axi["hits"]
         self.assertEqual(len(rows), 1)
         for row in rows:
-            self.assertEqual(set(row.keys()), {"id", "from", "subject"})
+            self.assertEqual(set(row.keys()), {"id", "from", "subject", "snippet"})
         self.assertIn("total", axi)
         self.assertIsInstance(axi["total"], int)
         self.assertEqual(axi["total"], 1)
