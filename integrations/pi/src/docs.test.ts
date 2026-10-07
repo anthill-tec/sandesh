@@ -243,3 +243,27 @@ describe("integrations/pi/README.md §Wake — sub-agent wording (CR-SAN-053, AC
   });
 });
 
+describe("integrations/pi/README.md — tool table documents CR-SAN-054 read-mail params (AC10)", () => {
+  const readme = fs.readFileSync(README_PATH, "utf-8");
+  const rows = readme.split("\n");
+  const threadRow = rows.find((line) => line.startsWith("| `sandesh_thread`"));
+  const inboxRow = rows.find((line) => line.startsWith("| `sandesh_inbox`"));
+  const searchRow = rows.find((line) => line.startsWith("| `sandesh_search`"));
+
+  test("the sandesh_thread row names the requester parameter", () => {
+    expect(threadRow).toBeDefined();
+    expect(threadRow as string).toContain("requester");
+  });
+
+  test("the sandesh_inbox row names the with_body parameter", () => {
+    expect(inboxRow).toBeDefined();
+    expect(inboxRow as string).toContain("with_body");
+  });
+
+  test("the sandesh_search row names the fields parameter", () => {
+    expect(searchRow).toBeDefined();
+    expect(searchRow as string).toContain("fields");
+  });
+});
+
+
