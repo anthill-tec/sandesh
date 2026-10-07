@@ -175,7 +175,8 @@ Track 2  → reply     #43  (in_reply_to #42) "<overlap map>"
 Mainline → reply     #44  (in_reply_to #43) "per-crate chains — go"
 ```
 Each reply wakes the other party's notifier; the final reply concludes the exchange.
-`thread --id 44` prints the whole chain top-to-bottom so any party can reconstruct context.
+`thread --id 44` prints the whole chain top-to-bottom so any party can reconstruct context;
+add `--as "<your address>"` to get the bodies of the messages you sent or received (S13).
 *Tools: `reply`, `thread`.*
 
 ### S7 — Read ≠ done (completion is signalled by a reply)
@@ -278,6 +279,23 @@ A `reindexed: true` key just means the index was empty and was lazily rebuilt fi
 (one-time, harmless). Index maintenance (`reindex`) is CLI/installer-only — no MCP tool.
 *Tools: `sandesh_inbox`/`sandesh_fetch` (filters), `sandesh_search`.*
 
+### S13 — Re-reading mail you have already read
+`fetch` returns only unread mail, so a request read yesterday needs another route back to its
+body. None of these marks anything read:
+```
+sandesh search --to "Mainline - Nai" "gateway timeout"           # hits carry a snippet → find the id
+sandesh thread --id 41 --as "Mainline - Nai"                     # the chain + bodies you sent/received
+sandesh inbox --to "Mainline - Nai" --all --with-body --limit 10 # batch re-read (cap it with --limit)
+```
+`thread` shows a body only to a party of that message, named by `--as` (else
+`$SANDESH_ADDRESS`); bodies it holds back are counted as `withheld: <n>` with an `--as` hint.
+`inbox --with-body` lists up to 50 rows by default, each body cut at 500 chars (`--full` uncut)
+— pair it with `--limit`. Tools: `sandesh_thread(msg_id=41, requester="Mainline - Nai")`
+(add `project_id` to check the requester belongs to it), `sandesh_inbox(recipient=…,
+unread_only=False, with_body=True)`; the Pi `sandesh_search` takes `fields` (the snippet is in
+the default columns).
+*Tools: `sandesh_search`, `sandesh_thread` (`requester`), `sandesh_inbox` (`with_body`).*
+
 ---
 
 ## 5. Tool-by-tool reference (for the docstrings)
@@ -295,9 +313,9 @@ must equal `project_id`.
 | **`sandesh_addressbook`** | List all participants with active/inactive status and **who is currently listening** (live notifier). | anyone | `project_id` | rows (address, kind, active, listening) |
 | **`sandesh_send`** | Send a message. `subject` is mandatory; omit a body ⇒ subject-only. `to`/`cc` are **lists of addresses**; `to: ["all-tracks"]` broadcasts (minus sender). **To wakes the recipient; Cc is silent.** | Mainline or a Track | `project_id`, `from`, `to?`, `cc?`, `subject`, `kind?` (`request`/`directive`/`fyi`), `body?` | new message id |
 | **`sandesh_reply`** | Reply to a message; threads via `in_reply_to`. Defaults the recipient to the parent's sender and the subject to `"Re: …"`. A recipient uses this to signal **completion** (often subject-only — the subject states what was done). | the recipient of a message | `project_id`, `parent_id` (the original message's id), `from`, `subject?`, `body?` | new message id |
-| **`sandesh_inbox`** | List an address's messages (unread by default; `unread_only=False` includes read). A quick triage view — does **not** mark anything read. Composable filters: `sender`, `sender_project` (the proxy stream), `kind`, `since`, `until`, `subject_like`. | any address (its own) | `project_id`, `recipient` (the address), `unread_only?`, filters? | message rows |
+| **`sandesh_inbox`** | List an address's messages (unread by default; `unread_only=False` includes read). A quick triage view — does **not** mark anything read. Composable filters: `sender`, `sender_project` (the proxy stream), `kind`, `since`, `until`, `subject_like`. `with_body=True` adds each row's `body` (a batch re-read, still never marking). | any address (its own) | `project_id`, `recipient` (the address), `unread_only?`, filters?, `with_body?` | message rows |
 | **`sandesh_fetch`** | The real read: consolidate an address's unread messages (to + cc) into one view — bodies read from file, subject-only entries shown as just the subject — and **mark them read** (`mark=False` renders without marking). This is what a session calls after `notify` wakes it. Takes the same filters as `sandesh_inbox`; a filtered fetch marks only the matching subset read. | any address (its own) | `project_id`, `recipient` (the address), `mark?`, filters? | consolidated messages (+ thread refs) |
-| **`sandesh_thread`** | Print a message's full reply chain (root → leaf) so any party can reconstruct a conversation's context. | anyone | `project_id`, `msg_id` (any message in the thread) | the chain |
+| **`sandesh_thread`** | Print a message's full reply chain (root → leaf) so any party can reconstruct a conversation's context. Pass `requester` (your own address) to get `body` on the messages you sent or received; `project_id`, if given, checks the requester belongs to it. | anyone | `project_id?`, `msg_id` (any message in the thread), `requester?` | the chain (+ `body` per readable message) |
 | **`sandesh_search`** | FTS5 full-text search over the caller's **own mail only** (subjects + bodies, read or unread) — bm25-ranked hits with snippets, paginated via `limit`/`offset` (`total` is the full match count). Never marks anything read; never crosses inbox boundaries. | any address (its own) | `recipient` (the address), `query` (FTS5), `limit?`, `offset?`, `sender_project?` | `{hits, total, limit, offset}` (+`reindexed?`) |
 
 **Not exposed as a tool — `notify` (the wake watcher).** `notify` is a *blocking background

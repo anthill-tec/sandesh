@@ -506,7 +506,7 @@ class RemainingVerbsEnvelopeTest(_BaseFixture):
         rows = axi["hits"]
         self.assertEqual(len(rows), 1)
         for row in rows:
-            self.assertEqual(set(row.keys()), {"id", "from", "subject"})
+            self.assertEqual(set(row.keys()), {"id", "from", "subject", "snippet"})
         self.assertIn("total", axi)
         self.assertIsInstance(axi["total"], int)
         self.assertEqual(axi["total"], 1)
@@ -806,6 +806,9 @@ class HomeViewTest(_BaseFixture):
         self.assertEqual(applied, 0, "status must not auto-apply migrations")
 
     def test_status_rejects_an_address_from_a_different_project(self):
+        sdb.setup("Beta")  # CR-SAN-054 S5: must be a KNOWN project so the
+        # unknown-project guard doesn't preempt this test's real target, the
+        # address/project MISMATCH error.
         env = {"SANDESH_ADDRESS": "Mainline - Demo"}
         rc_human, _, err_human = self.run_cli(
             ["--format", "human", "--project", "Beta", "status"], env=env,

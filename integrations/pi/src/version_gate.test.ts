@@ -1,13 +1,15 @@
 /**
- * CR-SAN-032 C2 — RED: version gate + error pins + docs markers (AC3, AC4, AC5)
+ * CR-SAN-054 C7 — RED: CLI version gate raised to MIN_CLI_VERSION [0,4,2] (AC11).
  *
  * AC3 — version gate (§S3):
  *   The session-start probe parses `sandesh --version` stdout against
- *   `^sandesh (\d+)\.(\d+)\.(\d+)`. A version below 0.4.0 takes the
+ *   `^sandesh (\d+)\.(\d+)\.(\d+)`. A version below 0.4.2 takes the
  *   missing-CLI path: one-time ctx.ui.notify warning naming the required
- *   minimum (0.4.0) + upgrade hint; wake loop NOT armed. Unparseable output
- *   counts as too-old. `sandesh 0.4.0` and `sandesh 0.4.1` arm normally.
- *   (Minimum raised 0.2.0 → 0.4.0 by CR-SAN-048 §S1b.)
+ *   minimum (0.4.2) + upgrade hint; wake loop NOT armed. Unparseable output
+ *   counts as too-old. `sandesh 0.4.2` and any version above (e.g. `0.4.3`)
+ *   arm normally.
+ *   (Minimum raised 0.2.0 → 0.4.0 by CR-SAN-048 §S1b, then 0.4.0 → 0.4.2 by
+ *   CR-SAN-054 §S6/AC11 — the extension now passes flags 0.4.1 does not know.)
  *   Missing-CLI path (non-zero / throw) is unchanged from today.
  *
  * AC4 — error passthrough pins (§S4):
@@ -23,7 +25,7 @@
  *   4. search description / promptSnippet contains pagination / offset wording
  *
  * Harness: mirrors wake.test.ts (makeFakePi with execSequence / makeFakeCtx).
- * Note: existing tests feed `sandesh 1.0.0` as the probe stdout (≥0.4.0),
+ * Note: existing tests feed `sandesh 1.0.0` as the probe stdout (≥0.4.2),
  * so those tests stay green under the version gate implementation.
  */
 
@@ -202,10 +204,10 @@ function countNotifyCalls(
 // AC3 — version gate
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () => {
+describe("AC3 — version gate: sandesh below 0.4.2 takes missing-CLI path", () => {
   /**
-   * §S3: version below 0.4.0 → one-time ctx.ui.notify warning naming the
-   * required minimum (0.4.0) + upgrade hint; wake loop NOT armed.
+   * §S3: version below 0.4.2 → one-time ctx.ui.notify warning naming the
+   * required minimum (0.4.2) + upgrade hint; wake loop NOT armed.
    * RED reason: today the probe only checks exit code 0; it does NOT parse
    * the version string, so 0.1.0 wrongly arms the wake loop.
    */
@@ -232,7 +234,7 @@ describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () 
     expect(notifyCalls.length).toBe(1);
   });
 
-  test("AC3b — probe stdout 'sandesh 0.1.0' → notice names required minimum '0.4.0'", async () => {
+  test("AC3b — probe stdout 'sandesh 0.1.0' → notice names required minimum '0.4.2'", async () => {
     process.env.SANDESH_ADDRESS = "Mainline - TestProj";
     process.env.SANDESH_PROJECT = "TestProj";
 
@@ -251,7 +253,7 @@ describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () 
     // Notice must name the required minimum version
     const notice = notifyCalls[0];
     expect(notice).toBeDefined();
-    expect(notice.msg).toContain("0.4.0");
+    expect(notice.msg).toContain("0.4.2");
   });
 
   test("AC3c — probe stdout 'sandesh 0.1.0' → notice is warning severity", async () => {
@@ -296,7 +298,7 @@ describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () 
     expect(countNotifyCalls(execMock)).toBe(0);
   });
 
-  test("AC3e — probe stdout 'sandesh 0.3.6' (still below 0.4.0) → too-old path", async () => {
+  test("AC3e — probe stdout 'sandesh 0.3.6' (still below 0.4.2) → too-old path, notice names 0.4.2 (CR-SAN-054 AC11)", async () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
 
@@ -314,6 +316,7 @@ describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () 
 
     // Too-old path: exactly one notice fired (branches are mutually exclusive), no notify exec
     expect(notifyCalls.length).toBe(1);
+    expect(notifyCalls[0].msg).toContain("0.4.2");
     expect(countNotifyCalls(execMock)).toBe(0);
   });
 
@@ -339,7 +342,7 @@ describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () 
     expect(countNotifyCalls(execMock)).toBe(0);
   });
 
-  test("AC3g — garbage stdout ('flooble') → notice mentions 0.4.0", async () => {
+  test("AC3g — garbage stdout ('flooble') → notice mentions 0.4.2", async () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
 
@@ -357,7 +360,7 @@ describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () 
 
     const notice = notifyCalls[0];
     expect(notice).toBeDefined();
-    expect(notice.msg).toContain("0.4.0");
+    expect(notice.msg).toContain("0.4.2");
   });
 
   test("AC3h — empty stdout → treated as too-old", async () => {
@@ -380,14 +383,14 @@ describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () 
     expect(countNotifyCalls(execMock)).toBe(0);
   });
 
-  test("AC3i — probe stdout 'sandesh 0.4.0' (exact minimum) → armed (notify exec called)", async () => {
+  test("AC3i — probe stdout 'sandesh 0.4.2' (exact minimum, CR-SAN-054 AC11) → armed (notify exec called)", async () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
     process.env.SANDESH_AUTOSTART = "1"; // CR-SAN-048 §S5: arming is opt-in
 
-    // 0.4.0 meets minimum — loop should arm; exit-3 terminates immediately
+    // 0.4.2 meets minimum — loop should arm; exit-3 terminates immediately
     const { fakePi, execMock } = makeFakePi({
-      execSequence: [ok("sandesh 0.4.0"), exit(3)],
+      execSequence: [ok("sandesh 0.4.2"), exit(3)],
     });
     registerExtension(fakePi);
 
@@ -399,14 +402,14 @@ describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () 
     await fireSessionStart(handler, fakeCtx);
 
     // No version-gate notice (not the too-old path)
-    const versionGateNotice = notifyCalls.find((c) => c.msg.includes("0.4.0"));
+    const versionGateNotice = notifyCalls.find((c) => c.msg.includes("too old"));
     expect(versionGateNotice).toBeUndefined();
 
     // Loop armed: notify exec was called
     expect(countNotifyCalls(execMock)).toBeGreaterThanOrEqual(1);
   });
 
-  test("AC3j — probe stdout 'sandesh 0.4.1' (above minimum) → armed (notify exec called)", async () => {
+  test("AC3j — probe stdout 'sandesh 0.4.1' (below new 0.4.2 minimum, CR-SAN-054 AC11) → too-old path, notice names 0.4.2", async () => {
     process.env.SANDESH_ADDRESS = "Track 1 - Demo";
     process.env.SANDESH_PROJECT = "Demo";
     process.env.SANDESH_AUTOSTART = "1"; // CR-SAN-048 §S5: arming is opt-in
@@ -423,7 +426,30 @@ describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () 
     const { fakeCtx, notifyCalls } = makeFakeCtx();
     await fireSessionStart(handler, fakeCtx);
 
-    const versionGateNotice = notifyCalls.find((c) => c.msg.includes("0.4.0"));
+    // 0.4.1 is below the new 0.4.2 minimum: exactly one too-old notice naming 0.4.2, loop NOT armed
+    expect(notifyCalls.length).toBe(1);
+    expect(notifyCalls[0].msg).toContain("0.4.2");
+    expect(countNotifyCalls(execMock)).toBe(0);
+  });
+
+  test("AC3j2 — probe stdout 'sandesh 0.4.3' (above new 0.4.2 minimum, CR-SAN-054 AC11) → armed (notify exec called)", async () => {
+    process.env.SANDESH_ADDRESS = "Track 1 - Demo";
+    process.env.SANDESH_PROJECT = "Demo";
+    process.env.SANDESH_AUTOSTART = "1"; // CR-SAN-048 §S5: arming is opt-in
+
+    const { fakePi, execMock } = makeFakePi({
+      execSequence: [ok("sandesh 0.4.3"), exit(5)],
+    });
+    registerExtension(fakePi);
+
+    const handler = ((fakePi.on as ReturnType<typeof mock>).mock.calls as Array<[string, unknown]>).find(
+      ([e]: [string, unknown]) => e === "session_start",
+    )![1] as SessionStartHandler;
+
+    const { fakeCtx, notifyCalls } = makeFakeCtx();
+    await fireSessionStart(handler, fakeCtx);
+
+    const versionGateNotice = notifyCalls.find((c) => c.msg.includes("too old"));
     expect(versionGateNotice).toBeUndefined();
 
     expect(countNotifyCalls(execMock)).toBeGreaterThanOrEqual(1);
@@ -447,7 +473,7 @@ describe("AC3 — version gate: sandesh below 0.4.0 takes missing-CLI path", () 
     const { fakeCtx, notifyCalls } = makeFakeCtx();
     await fireSessionStart(handler, fakeCtx);
 
-    const versionGateNotice = notifyCalls.find((c) => c.msg.includes("0.4.0"));
+    const versionGateNotice = notifyCalls.find((c) => c.msg.includes("too old"));
     expect(versionGateNotice).toBeUndefined();
     expect(countNotifyCalls(execMock)).toBeGreaterThanOrEqual(1);
   });

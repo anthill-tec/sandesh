@@ -75,6 +75,14 @@ describe("integrations/pi/README.md — tool table (CR-SAN-048 §S6)", () => {
   });
 });
 
+describe("integrations/pi/README.md — CLI minimum version (CR-SAN-054 §S6/AC11)", () => {
+  const readme = fs.readFileSync(README_PATH, "utf-8");
+
+  test("names the raised 0.4.2 minimum CLI version", () => {
+    expect(readme).toContain("0.4.2");
+  });
+});
+
 describe("integrations/pi/README.md — wake supervision contract", () => {
   const readme = fs.readFileSync(README_PATH, "utf-8");
   const supervision = readme.split("Supervision rules:\n")[1]?.split("\n\nInspect")[0] ?? "";
@@ -108,6 +116,10 @@ describe("docs/USER_GUIDE.md §Pi — 0.4.0 arming behaviour change (CR-SAN-048 
 
   test("names the 0.4.0 release that introduces the arming behaviour change", () => {
     expect(piSection).toContain("0.4.0");
+  });
+
+  test("names the raised 0.4.2 minimum CLI version (CR-SAN-054 §S6/AC11)", () => {
+    expect(piSection).toContain("0.4.2");
   });
 });
 
@@ -230,4 +242,28 @@ describe("integrations/pi/README.md §Wake — sub-agent wording (CR-SAN-053, AC
     expect(row as string).toContain("ok:false");
   });
 });
+
+describe("integrations/pi/README.md — tool table documents CR-SAN-054 read-mail params (AC10)", () => {
+  const readme = fs.readFileSync(README_PATH, "utf-8");
+  const rows = readme.split("\n");
+  const threadRow = rows.find((line) => line.startsWith("| `sandesh_thread`"));
+  const inboxRow = rows.find((line) => line.startsWith("| `sandesh_inbox`"));
+  const searchRow = rows.find((line) => line.startsWith("| `sandesh_search`"));
+
+  test("the sandesh_thread row names the requester parameter", () => {
+    expect(threadRow).toBeDefined();
+    expect(threadRow as string).toContain("requester");
+  });
+
+  test("the sandesh_inbox row names the with_body parameter", () => {
+    expect(inboxRow).toBeDefined();
+    expect(inboxRow as string).toContain("with_body");
+  });
+
+  test("the sandesh_search row names the fields parameter", () => {
+    expect(searchRow).toBeDefined();
+    expect(searchRow as string).toContain("fields");
+  });
+});
+
 

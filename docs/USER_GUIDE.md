@@ -130,7 +130,7 @@ once, and start pi from that directory. If the identity is in `./.env` but not e
 the extension warns at session start — until you fix that there is no ambient status
 and no wake.
 
-> Pi needs the `sandesh` CLI **≥ 0.4.0** available on the machine (installed, or run
+> Pi needs the `sandesh` CLI **≥ 0.4.2** available on the machine (installed, or run
 > on demand via `uvx`) — the extension shells out to it and refuses an older CLI at
 > session start. See [docs/INSTALL.md](INSTALL.md).
 
@@ -153,6 +153,34 @@ mirror them):
   ```bash
   sandesh fetch --to "<you>"
   ```
+
+### Re-reading mail you have already read
+
+`fetch` returns only unread mail, so once a request is read its body has to come back
+another way. None of these marks anything read:
+
+- **One conversation:** `thread` returns the whole reply chain with the bodies of the
+  messages you sent or received — name yourself with `--as`:
+  ```bash
+  sandesh thread --id <id> --as '<your address>'
+  ```
+  Without `--as` (and no `$SANDESH_ADDRESS`), the chain comes back without bodies and
+  the machine envelope counts them as `withheld: <n>` with a hint to add `--as`. An
+  `--as` that is not a valid address for the project is an error.
+- **A batch:** `inbox --with-body` adds the bodies of the listed rows, read or unread:
+  ```bash
+  sandesh inbox --to '<your address>' --all --with-body --limit 10
+  ```
+  Pair it with `--limit`: without it you get up to 50 rows, each body up to 500
+  characters (`--full` removes the cut) — a lot of text for an agent's context.
+- **Find it first:** `search` hits carry a `snippet` of the matching text, so you can
+  spot the right message id before reading it
+  (`sandesh search --to '<your address>' "gateway timeout"`; `--fields` picks columns).
+
+The MCP and Pi tools take the same options: `sandesh_thread(msg_id, requester="<your
+address>")`, `sandesh_inbox(recipient, unread_only=False, with_body=True)` (Pi also
+takes `full`), and `sandesh_search(..., fields=["id", "snippet"])` (Pi; the MCP
+`sandesh_search` always returns the snippet).
 
 ### Cross-project sending
 
@@ -196,15 +224,19 @@ branch on `$?` keep working; parse stdout, ignore stderr.
   errors — unknown flag/verb, bad `--fields` — exit 2 with a `help[]` naming `--help`).
 - **Keep it small:** lists show a 2–4-column default; `--fields <csv>` widens
   `addressbook` (`address,kind,status,listening,registered`), `inbox`
-  (`id,from,to,cc,kind,subject,created,re,unread`) and `thread`
-  (`id,from,subject,created,re`) — an unknown name exits 2 listing the valid set.
+  (`id,from,to,cc,kind,subject,created,re,unread`), `thread`
+  (`id,from,subject,created,re`) and `search`
+  (`id,from,subject,kind,created,role,snippet`; default `id,from,subject,snippet`) —
+  an unknown name exits 2 listing the valid set.
   `inbox --limit N` caps rows (default 50; the `unread: n of total` aggregate is never
   sliced). `fetch` bodies are cut at **500 chars** with a
   `(truncated, N chars total)` suffix and a `help[]` pointing at `fetch … --full`;
   `--full` (also accepted by `thread`) returns complete bodies. `thread` bodies follow
   the same 500-char cut (with a `help[]` pointing at `thread … --full`) and are shown
-  per message only when `$SANDESH_ADDRESS` is that message's sender or a recipient;
-  other messages in the chain list without a body.
+  per message only when the caller — `--as '<address>'`, else `$SANDESH_ADDRESS` —
+  is that message's sender or a recipient; other messages in the chain list without a
+  body and are counted as `withheld: <n>`. A read verb given an unknown `--project`
+  fails with the known project ids (and a `did you mean` on a case-only mismatch).
 - **Idempotent no-ops are `ok: true`:** `register` of an existing address →
   `result: already`; `unregister` of an absent one → `result: absent`; `archive` of an
   archived project → `result: already` (human mode still exits as before).

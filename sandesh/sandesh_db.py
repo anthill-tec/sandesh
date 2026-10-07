@@ -333,6 +333,23 @@ def _require_active_project(con, project_id):
         raise ValueError(f"project '{project_id}' is tombstoned")
 
 
+def require_known_project(con, project_id):
+    """Enrollment guard for the read verbs (CR-SAN-054 §S5): raises ValueError
+    when `project_id` was never enrolled, naming the known (active + archived)
+    ids, sorted, plus a `did you mean` when exactly one matches case-insensitively.
+    Archived and tombstoned projects return normally (reads keep their own rules)."""
+    if project_state(con, project_id) is not None:
+        return
+    known = [row["project_id"] for row in con.execute(
+        "SELECT project_id FROM project WHERE state != 'tombstoned' "
+        "ORDER BY project_id").fetchall()]
+    message = f"unknown project '{project_id}' — known projects: {', '.join(known)}"
+    similar = [p for p in known if p.lower() == project_id.lower()]
+    if len(similar) == 1:
+        message += f" — did you mean '{similar[0]}'?"
+    raise ValueError(message)
+
+
 # --------------------------------------------------------------------------- #
 # admin + cross-project grant (CR-SAN-023 §S2 / §S2b)
 
@@ -507,8 +524,16 @@ def message_body_path(con, projects_dir, message):
     return path
 
 
-# --------------------------------------------------------------------------- #
-# sending
+def read_body(path):
+    """The text (utf-8) of the body file at `path`, or `(body file missing: <path>)`
+    when it does not exist. File I/O only — no DB access; never marks anything read.
+    The one body-read idiom shared by `fetch()`, the CLI and the MCP server."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return f"(body file missing: {path})"
+
 
 def _expand_recipients(con, to_list, cc_list, sender, sender_project):
     """(recipient, role) pairs: expand `all-tracks` (within the sender's project),
@@ -740,12 +765,7 @@ def fetch(con, store, recipient, mark=True, *, sender=None, sender_project=None,
     for r in rows:
         body = None
         if r["body_path"]:
-            path = message_body_path(con, projects_dir, r)
-            try:
-                with open(path, encoding="utf-8") as fh:   # compiled from the full path
-                    body = fh.read()
-            except FileNotFoundError:
-                body = f"(body file missing: {path})"
+            body = read_body(message_body_path(con, projects_dir, r))   # the full path
         parent = None
         if r["in_reply_to"]:
             p = con.execute("SELECT subject FROM message WHERE id=?", (r["in_reply_to"],)).fetchone()
