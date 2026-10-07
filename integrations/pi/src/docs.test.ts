@@ -75,6 +75,14 @@ describe("integrations/pi/README.md — tool table (CR-SAN-048 §S6)", () => {
   });
 });
 
+describe("integrations/pi/README.md — CLI minimum version (CR-SAN-054 §S6/AC11)", () => {
+  const readme = fs.readFileSync(README_PATH, "utf-8");
+
+  test("names the raised 0.4.2 minimum CLI version", () => {
+    expect(readme).toContain("0.4.2");
+  });
+});
+
 describe("integrations/pi/README.md — wake supervision contract", () => {
   const readme = fs.readFileSync(README_PATH, "utf-8");
   const supervision = readme.split("Supervision rules:\n")[1]?.split("\n\nInspect")[0] ?? "";
@@ -108,6 +116,10 @@ describe("docs/USER_GUIDE.md §Pi — 0.4.0 arming behaviour change (CR-SAN-048 
 
   test("names the 0.4.0 release that introduces the arming behaviour change", () => {
     expect(piSection).toContain("0.4.0");
+  });
+
+  test("names the raised 0.4.2 minimum CLI version (CR-SAN-054 §S6/AC11)", () => {
+    expect(piSection).toContain("0.4.2");
   });
 });
 

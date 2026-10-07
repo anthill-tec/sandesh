@@ -50,7 +50,7 @@ function makeFakeExec(opts?: { versionOk?: boolean }) {
   const exec = mock((cmd: string, args: string[], _opts?: unknown): Promise<ExecResult> => {
     calls.push({ cmd, args });
     if (args.includes("--version")) {
-      if (versionOk) return Promise.resolve({ stdout: "sandesh 0.4.0", stderr: "", code: 0, killed: false });
+      if (versionOk) return Promise.resolve({ stdout: "sandesh 0.4.2", stderr: "", code: 0, killed: false });
       return Promise.reject(new Error("ENOENT: sandesh not found"));
     }
     if (args.includes("init")) {

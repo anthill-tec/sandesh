@@ -41,7 +41,7 @@ function makeFakeExec() {
   const notifyDeferreds: NotifyDeferred[] = [];
   const exec = mock((_cmd: string, args: string[], opts?: { signal?: AbortSignal }): Promise<ExecResult> => {
     if (args.includes("--version")) {
-      return Promise.resolve({ stdout: "sandesh 0.4.0", stderr: "", code: 0, killed: false });
+      return Promise.resolve({ stdout: "sandesh 0.4.2", stderr: "", code: 0, killed: false });
     }
     if (args.includes("notify")) {
       const d = makeDeferred<ExecResult>();

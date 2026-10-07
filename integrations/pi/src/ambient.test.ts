@@ -54,7 +54,7 @@ function makeFakeExec(statusResult: ExecResult) {
   const exec = mock((cmd: string, args: string[], _opts?: unknown): Promise<ExecResult> => {
     calls.push({ cmd, args });
     if (args.includes("--version")) {
-      return Promise.resolve({ stdout: "sandesh 0.4.0", stderr: "", code: 0, killed: false });
+      return Promise.resolve({ stdout: "sandesh 0.4.2", stderr: "", code: 0, killed: false });
     }
     if (args.includes("init")) {
       return Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false });
