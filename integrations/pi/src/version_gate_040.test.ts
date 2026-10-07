@@ -1,18 +1,18 @@
 /**
- * CR-SAN-048 §S1b — RED: CLI version gate raised to MIN_CLI_VERSION [0,4,0] (AC1b).
+ * CR-SAN-054 C7 — RED: CLI version gate raised to MIN_CLI_VERSION [0,4,2] (AC11).
  *
- * Every tool now passes `--format toon`, which a CLI below 0.4.0 rejects
- * with exit 2 — so the session_start version probe must reject anything
- * below 0.4.0 (not 0.2.0) and name "0.4.0" in the too-old notice.
+ * The Pi extension now passes flags 0.4.1 does not know — so the
+ * session_start version probe must reject anything below 0.4.2 (not 0.4.0)
+ * and name "0.4.2" in the too-old notice.
  *
  * Harness mirrors `version_gate.test.ts`'s exec-sequence harness (makeFakePi
  * / makeFakeCtx / fireSessionStart), just with different probe stdout
  * fixtures. `MIN_CLI_VERSION` is not exported from `src/index.ts` today, so
  * the minimum is asserted via the notice text only, per spec.
  *
- * RED reason: today's gate constant is `[0, 2, 0]` and the notice names
- * "0.2.0" — so "sandesh 0.3.6" (below the NEW 0.4.0 minimum, above the OLD
- * 0.2.0 minimum) wrongly arms the wake loop today instead of taking the
+ * RED reason: today's gate constant is `[0, 4, 0]` and the notice names
+ * "0.4.0" — so "sandesh 0.4.1" (below the NEW 0.4.2 minimum, above the OLD
+ * 0.4.0 minimum) wrongly arms the wake loop today instead of taking the
  * too-old path.
  */
 
@@ -155,11 +155,11 @@ afterEach(() => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// AC1b — version gate raised to 0.4.0
+// AC11 — version gate raised to 0.4.2 (CR-SAN-054 §S6)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("AC1b — version gate: MIN_CLI_VERSION is [0,4,0]", () => {
-  test("probe stdout 'sandesh 0.3.6' (below the NEW 0.4.0 minimum) → too-old notice naming '0.4.0'", async () => {
+describe("AC11 — version gate: MIN_CLI_VERSION is [0,4,2]", () => {
+  test("probe stdout 'sandesh 0.3.6' (below the NEW 0.4.2 minimum) → too-old notice naming '0.4.2'", async () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
 
@@ -173,19 +173,38 @@ describe("AC1b — version gate: MIN_CLI_VERSION is [0,4,0]", () => {
     await fireSessionStart(handler, fakeCtx);
 
     expect(notifyCalls.length).toBe(1);
-    expect(notifyCalls[0].msg).toContain("0.4.0");
+    expect(notifyCalls[0].msg).toContain("0.4.2");
     expect(["warning", "error"]).toContain(notifyCalls[0].type ?? "");
     // Too old: the wake loop must not have armed (no `notify` exec call).
     expect(countNotifyExecCalls(execMock)).toBe(0);
   });
 
-  test("probe stdout 'sandesh 0.4.0' (exact new minimum) → armed, no too-old notice", async () => {
+  test("probe stdout 'sandesh 0.4.1' (below the NEW 0.4.2 minimum, CR-SAN-054 AC11) → too-old path, notice names '0.4.2'", async () => {
+    process.env.SANDESH_ADDRESS = "Track 1 - Demo";
+    process.env.SANDESH_PROJECT = "Demo";
+
+    const { fakePi, execMock, getSessionStartHandler } = makeFakePi({
+      execSequence: [ok("sandesh 0.4.1"), exit(5)],
+    });
+    registerExtension(fakePi);
+
+    const handler = getSessionStartHandler()!;
+    const { fakeCtx, notifyCalls } = makeFakeCtx();
+    await fireSessionStart(handler, fakeCtx);
+
+    expect(notifyCalls.length).toBe(1);
+    expect(notifyCalls[0].msg).toContain("0.4.2");
+    expect(["warning", "error"]).toContain(notifyCalls[0].type ?? "");
+    expect(countNotifyExecCalls(execMock)).toBe(0);
+  });
+
+  test("probe stdout 'sandesh 0.4.2' (exact new minimum) → armed, no too-old notice", async () => {
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
     process.env.SANDESH_AUTOSTART = "1"; // CR-SAN-048 §S5: arming is opt-in
 
     const { fakePi, execMock, getSessionStartHandler } = makeFakePi({
-      execSequence: [ok("sandesh 0.4.0"), exit(3)],
+      execSequence: [ok("sandesh 0.4.2"), exit(3)],
     });
     registerExtension(fakePi);
 
@@ -198,13 +217,13 @@ describe("AC1b — version gate: MIN_CLI_VERSION is [0,4,0]", () => {
     expect(countNotifyExecCalls(execMock)).toBeGreaterThanOrEqual(1);
   });
 
-  test("probe stdout 'sandesh 0.4.1' (above the new minimum) → armed, no too-old notice", async () => {
+  test("probe stdout 'sandesh 0.4.3' (above the new minimum) → armed, no too-old notice", async () => {
     process.env.SANDESH_ADDRESS = "Track 1 - Demo";
     process.env.SANDESH_PROJECT = "Demo";
     process.env.SANDESH_AUTOSTART = "1"; // CR-SAN-048 §S5: arming is opt-in
 
     const { fakePi, execMock, getSessionStartHandler } = makeFakePi({
-      execSequence: [ok("sandesh 0.4.1"), exit(5)],
+      execSequence: [ok("sandesh 0.4.3"), exit(5)],
     });
     registerExtension(fakePi);
 

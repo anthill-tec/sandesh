@@ -12,6 +12,13 @@ Design contract (WHY + WHAT) for **server-side inbox filtering** — headlined b
 **sender's project** — and **keyword search** over subjects + bodies via SQLite **FTS5** (stdlib,
 zero new dependencies). CRs cite this via `**Design reference:**`.
 
+## Change Control
+
+| Version | Date | Author | Change |
+|---|---|---|---|
+| 1.0 | 2026-06-12 | Mainline - Sandesh | Initial contract; owner resolved O1–O3 (§6). |
+| 1.1 | 2026-10-07 | Mainline - Sandesh | 0.4.2 (CR-SAN-054, Crucible #1422): in CLI machine mode (`--format toon\|json`, also the Pi `sandesh_search` tool) each hit carries its FTS5 `snippet` by default — default columns `id,from,subject,snippet`; `--fields` (Pi `fields`) selects from `id,from,subject,kind,created,role,snippet`. Human mode and the MCP `sandesh_search` already returned the snippet and are unchanged. |
+
 ---
 
 ## 1. Why

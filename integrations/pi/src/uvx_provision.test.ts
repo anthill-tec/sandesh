@@ -12,7 +12,7 @@
  *     3. the `notify` wake-loop call
  *
  * §S2 — provision nudge:
- *   After a successful ≥0.4.0 version check, the session_start handler runs
+ *   After a successful ≥0.4.2 version check, the session_start handler runs
  *   `sandesh init --check`. On non-zero exit, it emits a one-line
  *   ctx.ui.notify naming `sandesh init`. On exit 0, no nudge is emitted.
  *
@@ -204,12 +204,12 @@ describe("AC1 — uvx-on-demand: probe site — version check uses uvx when sand
     process.env.SANDESH_ADDRESS = "Mainline - Demo";
     process.env.SANDESH_PROJECT = "Demo";
 
-    // Sequence: direct sandesh probe fails, uvx probe succeeds with 0.4.0,
+    // Sequence: direct sandesh probe fails, uvx probe succeeds with 0.4.2,
     // then init --check succeeds (0), then notify exits 3 (terminal).
     const { fakePi, execMock } = makeFakePi({
       execSequence: [
         exit(127, "sandesh: command not found"),
-        ok("sandesh 0.4.0"),
+        ok("sandesh 0.4.2"),
         ok(""),         // init --check → 0 (provisioned)
         exit(3),        // notify → terminal
       ],
@@ -238,7 +238,7 @@ describe("AC1 — uvx-on-demand: probe site — version check uses uvx when sand
     const { fakePi, execMock } = makeFakePi({
       execSequence: [
         "reject",               // direct sandesh --version throws
-        ok("sandesh 0.4.0"),   // uvx sandesh --version succeeds
+        ok("sandesh 0.4.2"),   // uvx sandesh --version succeeds
         ok(""),                 // init --check
         exit(3),                // notify terminal
       ],
@@ -264,7 +264,7 @@ describe("AC1 — uvx-on-demand: probe site — version check uses uvx when sand
     const { fakePi, execMock } = makeFakePi({
       execSequence: [
         exit(127),
-        ok("sandesh 0.4.0"),
+        ok("sandesh 0.4.2"),
         ok(""),
         exit(3),
       ],
@@ -290,7 +290,7 @@ describe("AC1 — uvx-on-demand: probe site — version check uses uvx when sand
     const { fakePi, execMock } = makeFakePi({
       execSequence: [
         exit(127),
-        ok("sandesh 0.4.0"),
+        ok("sandesh 0.4.2"),
         ok(""),
         exit(3),
       ],
@@ -322,7 +322,7 @@ describe("AC1 — uvx-on-demand: local sandesh present → uses 'sandesh' direct
 
     const { fakePi, execMock } = makeFakePi({
       execSequence: [
-        ok("sandesh 0.4.0"),  // direct sandesh --version succeeds
+        ok("sandesh 0.4.2"),  // direct sandesh --version succeeds
         ok(""),               // init --check
         exit(3),              // notify terminal
       ],
@@ -392,7 +392,7 @@ describe("AC1 — uvx-on-demand: verb exec site uses uvx when sandesh is absent"
     // probe, uvx-probe, init --check, notify… — with the verb result last.)
     const execSequence: Array<ExecResult | "reject"> = [
       exit(127, "sandesh: command not found"),  // direct probe fails
-      ok("sandesh 0.4.0"),                      // uvx probe succeeds
+      ok("sandesh 0.4.2"),                      // uvx probe succeeds
       ok(""),                                   // init --check (provisioned)
       exit(3),                                  // notify terminal (wake loop stops)
       ok("setup done"),                         // setup verb call
@@ -458,7 +458,7 @@ describe("AC1 — uvx-on-demand: verb exec site uses uvx when sandesh is absent"
     const { fakePi, execMock } = makeFakePi({
       execSequence: [
         exit(127),              // direct sandesh --version fails
-        ok("sandesh 0.4.0"),   // uvx sandesh --version succeeds
+        ok("sandesh 0.4.2"),   // uvx sandesh --version succeeds
         ok(""),                 // init --check (provisioned)
         exit(2),                // status (ambient) → undecodable, skipped
         exit(3),                // notify → no envelope → stop
@@ -494,7 +494,7 @@ describe("AC2 — provision nudge: init --check is called after version check", 
 
     const { fakePi, execMock } = makeFakePi({
       execSequence: [
-        ok("sandesh 0.4.0"),  // --version probe passes
+        ok("sandesh 0.4.2"),  // --version probe passes
         ok(""),               // init --check → 0 (provisioned)
         exit(3),              // notify terminal
       ],
@@ -519,7 +519,7 @@ describe("AC2 — provision nudge: init --check is called after version check", 
 
     const { fakePi, execMock } = makeFakePi({
       execSequence: [
-        ok("sandesh 0.4.0"),
+        ok("sandesh 0.4.2"),
         ok(""),               // init --check
         exit(3),
       ],
@@ -594,7 +594,7 @@ describe("AC2 — provision nudge: non-zero init --check → nudge emitted", () 
 
     const { fakePi } = makeFakePi({
       execSequence: [
-        ok("sandesh 0.4.0"),                              // version ok
+        ok("sandesh 0.4.2"),                              // version ok
         exit(1, "store not provisioned: DB absent"),      // init --check fails
         exit(3),                                          // notify terminal (not armed)
       ],
@@ -615,7 +615,7 @@ describe("AC2 — provision nudge: non-zero init --check → nudge emitted", () 
 
     const { fakePi } = makeFakePi({
       execSequence: [
-        ok("sandesh 0.4.0"),
+        ok("sandesh 0.4.2"),
         exit(1, "store not provisioned: DB absent"),
         exit(3),
       ],
@@ -640,7 +640,7 @@ describe("AC2 — provision nudge: non-zero init --check → nudge emitted", () 
     const storeAbsentMsg = "store not provisioned: DB absent";
     const { fakePi } = makeFakePi({
       execSequence: [
-        ok("sandesh 0.4.0"),
+        ok("sandesh 0.4.2"),
         exit(1, storeAbsentMsg),
         exit(3),
       ],
@@ -663,7 +663,7 @@ describe("AC2 — provision nudge: non-zero init --check → nudge emitted", () 
     const adminUnsetMsg = "store present but admin not assigned";
     const { fakePi } = makeFakePi({
       execSequence: [
-        ok("sandesh 0.4.0"),
+        ok("sandesh 0.4.2"),
         exit(1, adminUnsetMsg),
         exit(3),
       ],
@@ -684,7 +684,7 @@ describe("AC2 — provision nudge: non-zero init --check → nudge emitted", () 
 
     const { fakePi } = makeFakePi({
       execSequence: [
-        ok("sandesh 0.4.0"),
+        ok("sandesh 0.4.2"),
         exit(1, "store not provisioned"),
         exit(3),
       ],
@@ -704,7 +704,7 @@ describe("AC2 — provision nudge: exit 0 from init --check → NO nudge", () =>
 
     const { fakePi } = makeFakePi({
       execSequence: [
-        ok("sandesh 0.4.0"),  // version ok
+        ok("sandesh 0.4.2"),  // version ok
         ok(""),               // init --check → 0 (provisioned)
         exit(3),              // notify terminal
       ],
@@ -730,7 +730,7 @@ describe("AC2 — provision nudge: exit 0 from init --check → NO nudge", () =>
     // CR-SAN-048 §S5 "wake is tool-started" info line (no SANDESH_AUTOSTART)
     const { fakePi } = makeFakePi({
       execSequence: [
-        ok("sandesh 0.4.0"),
+        ok("sandesh 0.4.2"),
         ok(""),
         exit(3),
       ],
@@ -773,7 +773,7 @@ describe("AC3 — version gate preserved: out-of-date CLI still fires warning", 
     // Exactly one notice: the outdated-CLI warning
     expect(notifyCalls.length).toBe(1);
     const notice = notifyCalls[0];
-    expect(notice.msg).toContain("0.4.0");
+    expect(notice.msg).toContain("0.4.2");
     // It must NOT be the provision nudge
     expect(notice.msg.toLowerCase()).not.toContain("sandesh init");
   });
@@ -818,7 +818,7 @@ describe("AC3 — version gate preserved: out-of-date CLI still fires warning", 
     await fireSessionStart(handler, fakeCtx);
 
     // No version-gate notice
-    const versionGateNotice = notifyCalls.find((c) => c.msg.includes("0.4.0"));
+    const versionGateNotice = notifyCalls.find((c) => c.msg.includes("too old"));
     expect(versionGateNotice).toBeUndefined();
 
     // Wake loop armed: notify was called
@@ -835,7 +835,7 @@ describe("AC3 — version gate preserved: out-of-date CLI still fires warning", 
 describe("AC4 — no new provisioning tools (tool count 16 per CR-SAN-048, no init/check/admin/migrate)", () => {
   test("AC4a — registerTool is called exactly 16 times", () => {
     const { fakePi, capturedTools } = makeFakePi({
-      execSequence: [ok("sandesh 0.4.0")],
+      execSequence: [ok("sandesh 0.4.2")],
     });
     registerExtension(fakePi);
     expect(capturedTools.size).toBe(16); // CR-SAN-048 AC1: 12 verbs + sandesh_status + 3 notify
@@ -843,7 +843,7 @@ describe("AC4 — no new provisioning tools (tool count 16 per CR-SAN-048, no in
 
   test("AC4b — no registered tool name contains 'init'", () => {
     const { fakePi, capturedTools } = makeFakePi({
-      execSequence: [ok("sandesh 0.4.0")],
+      execSequence: [ok("sandesh 0.4.2")],
     });
     registerExtension(fakePi);
     for (const name of capturedTools.keys()) {
@@ -853,7 +853,7 @@ describe("AC4 — no new provisioning tools (tool count 16 per CR-SAN-048, no in
 
   test("AC4c — no registered tool name contains 'check'", () => {
     const { fakePi, capturedTools } = makeFakePi({
-      execSequence: [ok("sandesh 0.4.0")],
+      execSequence: [ok("sandesh 0.4.2")],
     });
     registerExtension(fakePi);
     for (const name of capturedTools.keys()) {
@@ -863,7 +863,7 @@ describe("AC4 — no new provisioning tools (tool count 16 per CR-SAN-048, no in
 
   test("AC4d — no registered tool name contains 'admin'", () => {
     const { fakePi, capturedTools } = makeFakePi({
-      execSequence: [ok("sandesh 0.4.0")],
+      execSequence: [ok("sandesh 0.4.2")],
     });
     registerExtension(fakePi);
     for (const name of capturedTools.keys()) {
@@ -873,7 +873,7 @@ describe("AC4 — no new provisioning tools (tool count 16 per CR-SAN-048, no in
 
   test("AC4e — no registered tool name contains 'migrate'", () => {
     const { fakePi, capturedTools } = makeFakePi({
-      execSequence: [ok("sandesh 0.4.0")],
+      execSequence: [ok("sandesh 0.4.2")],
     });
     registerExtension(fakePi);
     for (const name of capturedTools.keys()) {
@@ -883,7 +883,7 @@ describe("AC4 — no new provisioning tools (tool count 16 per CR-SAN-048, no in
 
   test("AC4f — the 16 exact tool names (CR-SAN-048) contain no provisioning tool", () => {
     const { fakePi, capturedTools } = makeFakePi({
-      execSequence: [ok("sandesh 0.4.0")],
+      execSequence: [ok("sandesh 0.4.2")],
     });
     registerExtension(fakePi);
     const names = Array.from(capturedTools.keys()).sort();
@@ -961,7 +961,7 @@ describe("AC5 — error passthrough: CLI errors surface verbatim, no self-instal
     const { fakePi, execMock } = makeFakePi({
       execSequence: [
         exit(127),              // direct probe fails
-        ok("sandesh 0.4.0"),   // uvx probe succeeds
+        ok("sandesh 0.4.2"),   // uvx probe succeeds
         ok(""),                 // init --check
         exit(3),                // notify terminal
       ],
@@ -1025,7 +1025,7 @@ describe("AC5 — error passthrough: CLI errors surface verbatim, no self-instal
     const provisionStderr = "store not provisioned: DB absent at /path/to/sandesh.db";
     const { fakePi } = makeFakePi({
       execSequence: [
-        ok("sandesh 0.4.0"),
+        ok("sandesh 0.4.2"),
         exit(1, provisionStderr),   // init --check: non-zero with message
         exit(3),
       ],

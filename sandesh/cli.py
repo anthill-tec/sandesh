@@ -58,6 +58,29 @@ def _ctx(args):
     return project, store, _con()
 
 
+class _UnknownProject(ValueError):
+    """An unenrolled --project on a read verb (CR-SAN-054 §S5): machine mode
+    emits `ok:false` with `help[]` naming `projects`; human mode the house
+    `[sandesh] ERROR: …` exit (main())."""
+
+    help = ["sandesh projects  (list the known projects)"]
+
+
+def _require_known(con, project):
+    """sdb.require_known_project, re-raised as _UnknownProject."""
+    try:
+        sdb.require_known_project(con, project)
+    except ValueError as exc:
+        raise _UnknownProject(str(exc)) from exc
+
+
+def _known_ctx(args):
+    """_ctx() for the read verbs: the project must be enrolled (§S5)."""
+    project, store, con = _ctx(args)
+    _require_known(con, project)
+    return project, store, con
+
+
 def _close_connections():
     while _CONNECTIONS:
         _CONNECTIONS.pop().close()
@@ -224,6 +247,7 @@ def _run_machine(args, fmt):
             axi.emit(axi.error_envelope(verb, ValueError(msg), context), fmt)
             return 1
     rc, error, fields, help_, exited = 0, None, {}, [], False
+    error_help = None
     try:
         with contextlib.redirect_stdout(sys.stderr):
             if fn is not None:
@@ -238,6 +262,8 @@ def _run_machine(args, fmt):
         rc, error, fields = exc.rc, str(exc), exc.fields
     except sdb.MigrationRequired as exc:
         rc, error = 1, str(exc)
+    except _UnknownProject as exc:
+        rc, error, error_help = 1, str(exc), list(exc.help)
     except (ValueError, PermissionError, FileNotFoundError, RuntimeError, sqlite3.Error) as exc:
         rc, error = 1, str(exc)
     except SystemExit as exc:
@@ -253,6 +279,8 @@ def _run_machine(args, fmt):
         env = axi.Envelope(verb, True, fields, context, help_)
     else:
         env = axi.error_envelope(verb, ValueError(error), context)
+        if error_help:
+            env.help = error_help
         if fields:                      # _Failed: the partial result + error
             env.fields = {**fields, **env.fields}
     axi.emit(env, fmt)
@@ -347,7 +375,7 @@ def _print_addressbook(project, book):
 
 
 def cmd_addressbook(args):
-    project, _, con = _ctx(args)
+    project, _, con = _known_ctx(args)
     book = sdb.addressbook(con, project)
     _print_addressbook(project, book)
     return 0
@@ -422,7 +450,7 @@ def _print_inbox(rows, show_all):
 
 
 def cmd_inbox(args):
-    _, _, con = _ctx(args)
+    _, _, con = _known_ctx(args)
     who = _require_own_addr(args, "to", "--to '<address>'")
     try:
         rows = _inbox_rows(con, args, who, not args.all)
@@ -450,7 +478,7 @@ def _print_fetch(items, who, peek):
 
 
 def cmd_fetch(args):
-    _, store, con = _ctx(args)
+    _, store, con = _known_ctx(args)
     who = _require_own_addr(args, "to", "--to '<address>'")
     try:
         items = _fetch_items(con, store, args, who)
@@ -477,7 +505,7 @@ def _print_thread(chain):
 
 
 def cmd_thread(args):
-    _, _, con = _ctx(args)
+    _, _, con = _known_ctx(args)
     chain = sdb.thread(con, args.id)
     if not chain:
         sys.exit(f"[sandesh] no such message #{args.id}")
@@ -847,6 +875,12 @@ def _status_identity(args):
     if not project or not address:
         raise _UsageError("the home view needs your identity: set $SANDESH_PROJECT "
                           "(or pass --project) and $SANDESH_ADDRESS")
+    con = sdb.connect_readonly()      # an absent store is checked by nothing (all zeros)
+    if con is not None:
+        try:
+            _require_known(con, project)
+        finally:
+            con.close()
     try:
         sdb.validate_address(address, project)
     except ValueError as exc:
@@ -880,7 +914,7 @@ def cmd_status(args):
     """`sandesh status` (§S4b) — the read-only dashboard, human form."""
     try:
         project, address = _status_identity(args)
-    except _UsageError as exc:
+    except (_UsageError, _UnknownProject) as exc:
         sys.exit(f"[sandesh] ERROR: {exc}")
     f = _status_fields(project, address)
     state = "● listening" if f["listening"] else "○ not listening"
@@ -902,7 +936,8 @@ INBOX_DEFAULT = ("id", "from", "subject", "unread")
 INBOX_LIMIT = 50
 THREAD_FIELDS = ("id", "from", "subject", "created", "re")
 THREAD_DEFAULT = ("id", "from", "subject")
-SEARCH_DEFAULT = ("id", "from", "subject")
+SEARCH_FIELDS = ("id", "from", "subject", "kind", "created", "role", "snippet")
+SEARCH_DEFAULT = ("id", "from", "subject", "snippet")
 BODY_LIMIT = 500          # P3: fetch bodies are cut here unless --full
 
 
@@ -922,6 +957,14 @@ def _truncate(text):
     if len(text) <= BODY_LIMIT:
         return text, False
     return f"{text[:BODY_LIMIT]} (truncated, {len(text)} chars total)", True
+
+
+def _read_body_text(con, projects_dir, message):
+    """The body text of a message row that HAS a `body_path` — read from its
+    resolved path; a missing file yields `(body file missing: <path>)`.
+    Never marks anything read (shared by `thread` and `inbox --with-body`)."""
+    path = sdb.message_body_path(con, projects_dir, message)
+    return sdb.read_body(path)
 
 
 def _fields_arg(valid):
@@ -947,7 +990,7 @@ def _joined(recipients, role):
 
 
 def axi_addressbook(args):
-    project, _, con = _ctx(args)
+    project, _, con = _known_ctx(args)
     cols = args.fields or ADDRESSBOOK_DEFAULT
     book = sdb.addressbook(con, project)
     _print_addressbook(project, book)
@@ -966,7 +1009,7 @@ def axi_addressbook(args):
 
 
 def axi_inbox(args):
-    project, _, con = _ctx(args)
+    project, store, con = _known_ctx(args)
     who = _require_own_addr(args, "to", "--to '<address>'")
     cols = args.fields or INBOX_DEFAULT
     rows = _inbox_rows(con, args, who, not args.all)
@@ -988,11 +1031,26 @@ def axi_inbox(args):
         help_ = [_tmpl(project, "fetch --to <addr>"), _tmpl(project, "thread --id <id>")]
     else:
         help_ = [_tmpl(project, _SEND_TMPL)]
-    return 0, {"messages": messages, "unread": f"{unread} of {len(everything)}"}, help_
+    payload = {"messages": messages, "unread": f"{unread} of {len(everything)}"}
+    if args.with_body:
+        # CR-SAN-054 §S4: re-read the LISTED rows' bodies (after --limit); never marks read.
+        projects_dir = os.path.dirname(os.path.normpath(store))
+        bodies, cut = {}, False
+        for r in rows:
+            if not r["body_path"]:
+                continue
+            body = _read_body_text(con, projects_dir, r)
+            text, was_cut = (body, False) if args.full else _truncate(body)
+            bodies[str(r["id"])] = text
+            cut = cut or was_cut
+        payload["bodies"] = bodies
+        if cut:
+            help_.append(_tmpl(project, "inbox --to <addr> --all --with-body --full"))
+    return 0, payload, help_
 
 
 def axi_fetch(args):
-    project, store, con = _ctx(args)
+    project, store, con = _known_ctx(args)
     who = _require_own_addr(args, "to", "--to '<address>'")
     items = _fetch_items(con, store, args, who, mark=False)
     if not items:
@@ -1149,51 +1207,62 @@ def axi_search(args):
     result = sdb.search(_con(), args.to, args.query, limit=args.limit,
                         offset=args.offset, sender_project=args.from_project)
     _print_search(args, result)
-    hits = [_pick(h, SEARCH_DEFAULT) for h in result["hits"]] or f'0 for "{args.query}"'
+    cols = args.fields or SEARCH_DEFAULT
+    hits = [_pick({"id": h["id"], "from": h["from"], "subject": h["subject"],
+                   "kind": h["kind"], "created": h["created_at"], "role": h["role"],
+                   "snippet": h["snippet"]}, cols)
+            for h in result["hits"]] or f'0 for "{args.query}"'
     help_ = [_tmpl(project, "thread --id <id>")] if result["hits"] else []
     return 0, {"hits": hits, "total": result["total"], "limit": result["limit"],
                "offset": result["offset"]}, help_
 
 
 def axi_thread(args):
-    project, store, con = _ctx(args)
+    project, store, con = _known_ctx(args)
     cols = args.fields or THREAD_DEFAULT
     chain = sdb.thread(con, args.id)
     if not chain:
         raise ValueError(f"no such message #{args.id}")
     _print_thread(chain)
     projects_dir = os.path.dirname(os.path.normpath(store))
-    caller = os.environ.get("SANDESH_ADDRESS") or os.environ.get("WF_TRACK")
+    caller = getattr(args, "as_", None)
     if caller:
         try:
             sdb.validate_address(caller, project)
-        except ValueError:
-            caller = None
-    rows, bodies, cut = [], {}, False
+        except ValueError as e:
+            raise ValueError(f"--as {caller!r}: {e}") from e
+    else:
+        caller = os.environ.get("SANDESH_ADDRESS") or os.environ.get("WF_TRACK")
+        if caller:
+            try:
+                sdb.validate_address(caller, project)
+            except ValueError:
+                caller = None  # an invalid env caller is treated as absent (0.4.0 rule)
+    rows, bodies, cut, withheld = [], {}, False, 0
     for message in chain:
         if _is_hole(message):
             continue
         rows.append(_pick({"id": message["id"], "from": message["from_addr"],
                            "subject": message["subject"], "created": message["created_at"],
                            "re": message["in_reply_to"]}, cols))
-        if not message["body_path"] or not caller:
+        if not message["body_path"]:
             continue
-        if caller != message["from_addr"] and not con.execute(
+        if not caller or (caller != message["from_addr"] and not con.execute(
                 "SELECT 1 FROM message_recipient WHERE message_id=? AND recipient=?",
-                (message["id"], caller)).fetchone():
+                (message["id"], caller)).fetchone()):
+            withheld += 1
             continue
-        path = sdb.message_body_path(con, projects_dir, message)
-        try:
-            with open(path, encoding="utf-8") as fh:
-                body = fh.read()
-        except FileNotFoundError:
-            body = f"(body file missing: {path})"
+        body = _read_body_text(con, projects_dir, message)
         text, was_cut = (body, False) if args.full else _truncate(body)
         bodies[str(message["id"])] = text
         cut = cut or was_cut
     help_ = [_tmpl(project, "thread --id <id> --full  (complete bodies)")] if cut else []
-    return 0, {"chain": rows, "bodies": bodies,
-               "incomplete": any(_is_hole(m) for m in chain)}, help_
+    payload = {"chain": rows, "bodies": bodies,
+               "incomplete": any(_is_hole(m) for m in chain)}
+    if withheld:
+        payload["withheld"] = withheld
+        help_.append(_tmpl(project, "thread --id <id> --as '<your address>'"))
+    return 0, payload, help_
 
 
 def axi_projects(args):
@@ -1423,6 +1492,10 @@ def build_parser(axi_format="human", axi_context=None):
                         f"{','.join(INBOX_FIELDS)}; default {','.join(INBOX_DEFAULT)})")
     p.add_argument("--limit", type=_positive_int, default=INBOX_LIMIT,
                    help=f"machine-mode row cap (default {INBOX_LIMIT}; the aggregate is unsliced)")
+    p.add_argument("--with-body", dest="with_body", action="store_true",
+                   help="machine-mode: add the listed rows' bodies (never marks read)")
+    p.add_argument("--full", action="store_true",
+                   help=f"machine-mode: complete bodies (default: first {BODY_LIMIT} chars)")
     p.set_defaults(fn=cmd_inbox)
 
     p = sub.add_parser("fetch", parents=[common], help="consolidate + read unread messages")
@@ -1450,6 +1523,8 @@ def build_parser(axi_format="human", axi_context=None):
                         f"{','.join(THREAD_FIELDS)}; default {','.join(THREAD_DEFAULT)})")
     p.add_argument("--full", action="store_true",
                    help=f"machine-mode: complete bodies (default: first {BODY_LIMIT} chars)")
+    p.add_argument("--as", dest="as_",
+                   help="your address (default $SANDESH_ADDRESS, then $WF_TRACK)")
     p.set_defaults(fn=cmd_thread)
 
     p = sub.add_parser(
@@ -1518,7 +1593,10 @@ def build_parser(axi_format="human", axi_context=None):
     p.add_argument("query", help="the FTS5 query")
     p.add_argument("--to", required=True, help="your address (whose mail to search)")
     p.add_argument("--from-project", dest="from_project",
-                   help="only hits whose sender belongs to this project")
+                        help="only hits whose sender belongs to this project")
+    p.add_argument("--fields", type=_fields_arg(SEARCH_FIELDS), default=None, metavar="CSV",
+                   help="machine-mode columns (subset of "
+                        f"{','.join(SEARCH_FIELDS)}; default {','.join(SEARCH_DEFAULT)})")
     p.add_argument("--limit", type=_positive_int, default=20, help="page size (default 20)")
     p.add_argument("--offset", type=int, default=0, help="page start (default 0)")
     p.set_defaults(fn=cmd_search)
@@ -1646,6 +1724,9 @@ def main(argv=None):
             # message as a clean '[sandesh]' line (never a raw traceback) and exit
             # non-zero (CR-SAN-037 AC4).
             print(f"[sandesh] {exc}", file=sys.stderr)
+            return 1
+        except _UnknownProject as exc:
+            print(f"[sandesh] ERROR: {exc}", file=sys.stderr)
             return 1
     finally:
         _close_connections()
