@@ -73,9 +73,15 @@ unknown-project refusal and `inbox --with-body`.
   the name `sandesh_unregister` already uses for the caller's own address; `as` is a Python keyword).
 - With `requester` set and valid, each returned chain dict for a message whose sender or recipient is
   `requester` and which has a body gains `body` (the full text). Subject-only messages get no `body` key.
-  An invalid `requester` raises `ToolError` with the `validate_address` message. Without `requester` the
+  A well-formed requester that is not a party gets no `body` and no error. Without `requester` the
   result is unchanged.
-- The docstring states that bodies need `requester`.
+- Validation mirrors the CLI's `--as` + `--project` (owner ruling 2026-10-07): the existing, until now
+  unused `project_id` parameter becomes the project check. With `project_id`, `requester` must pass
+  `validate_address(requester, project_id)`; without it, only the address format is checked. A failure
+  raises `ToolError` with the `validate_address` message. The project is never derived from the thread,
+  so a cross-project recipient keeps reading its own mail.
+- The docstring states that bodies need `requester`, and the `project_id` description states its new
+  role.
 
 **Surfaces (verified 2026-10-07):** `sandesh/mcp_server.py` `sandesh_thread` (l.318–345).
 
@@ -155,7 +161,9 @@ from `Track 1 - Demo` to `Mainline - Demo` with a body containing `gateway timeo
   `--as Mainline - Demo` (one argv element) to the CLI.
 - [ ] **AC6** — MCP (in-process FastMCP client): `sandesh_thread(msg_id=m, requester="Mainline - Demo")`
   → the chain dict for `m` has `body` containing `gateway timeout`; without `requester` no dict has
-  `body`; `requester="Mainline - Other"` → `ToolError`.
+  `body`; `requester="Track 2 - Demo"` (not a party) → no `body`, no error; `requester="not an
+  address"` → `ToolError`; `requester="Mainline - Other", project_id="Demo"` → `ToolError` naming the
+  project mismatch; `requester="Mainline - Other"` with no `project_id` → no error, no `body`.
 - [ ] **AC7** — seed a second message `#u` to `Mainline - Demo`, left unread.
   `inbox --to "Mainline - Demo" --all --with-body --format json` → `bodies["<m>"]` contains
   `gateway timeout` and `bodies["<u>"]` is present. Afterwards `inbox --to "Mainline - Demo"` (unread
