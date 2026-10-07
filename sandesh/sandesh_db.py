@@ -333,6 +333,23 @@ def _require_active_project(con, project_id):
         raise ValueError(f"project '{project_id}' is tombstoned")
 
 
+def require_known_project(con, project_id):
+    """Enrollment guard for the read verbs (CR-SAN-054 §S5): raises ValueError
+    when `project_id` was never enrolled, naming the known (active + archived)
+    ids, sorted, plus a `did you mean` when exactly one matches case-insensitively.
+    Archived and tombstoned projects return normally (reads keep their own rules)."""
+    if project_state(con, project_id) is not None:
+        return
+    known = [row["project_id"] for row in con.execute(
+        "SELECT project_id FROM project WHERE state != 'tombstoned' "
+        "ORDER BY project_id").fetchall()]
+    message = f"unknown project '{project_id}' — known projects: {', '.join(known)}"
+    similar = [p for p in known if p.lower() == project_id.lower()]
+    if len(similar) == 1:
+        message += f" — did you mean '{similar[0]}'?"
+    raise ValueError(message)
+
+
 # --------------------------------------------------------------------------- #
 # admin + cross-project grant (CR-SAN-023 §S2 / §S2b)
 

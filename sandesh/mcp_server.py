@@ -186,6 +186,7 @@ was lazily rebuilt first (harmless)."""
         con = None
         try:
             project, _store, con = _ctx(project_id)
+            sandesh_db.require_known_project(con, project)
             return sandesh_db.addressbook(con, project)
         except (ValueError, PermissionError) as e:
             raise ToolError(str(e)) from e

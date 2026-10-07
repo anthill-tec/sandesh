@@ -58,6 +58,29 @@ def _ctx(args):
     return project, store, _con()
 
 
+class _UnknownProject(ValueError):
+    """An unenrolled --project on a read verb (CR-SAN-054 §S5): machine mode
+    emits `ok:false` with `help[]` naming `projects`; human mode the house
+    `[sandesh] ERROR: …` exit (main())."""
+
+    help = ["sandesh projects  (list the known projects)"]
+
+
+def _require_known(con, project):
+    """sdb.require_known_project, re-raised as _UnknownProject."""
+    try:
+        sdb.require_known_project(con, project)
+    except ValueError as exc:
+        raise _UnknownProject(str(exc)) from exc
+
+
+def _known_ctx(args):
+    """_ctx() for the read verbs: the project must be enrolled (§S5)."""
+    project, store, con = _ctx(args)
+    _require_known(con, project)
+    return project, store, con
+
+
 def _close_connections():
     while _CONNECTIONS:
         _CONNECTIONS.pop().close()
@@ -224,6 +247,7 @@ def _run_machine(args, fmt):
             axi.emit(axi.error_envelope(verb, ValueError(msg), context), fmt)
             return 1
     rc, error, fields, help_, exited = 0, None, {}, [], False
+    error_help = None
     try:
         with contextlib.redirect_stdout(sys.stderr):
             if fn is not None:
@@ -238,6 +262,8 @@ def _run_machine(args, fmt):
         rc, error, fields = exc.rc, str(exc), exc.fields
     except sdb.MigrationRequired as exc:
         rc, error = 1, str(exc)
+    except _UnknownProject as exc:
+        rc, error, error_help = 1, str(exc), list(exc.help)
     except (ValueError, PermissionError, FileNotFoundError, RuntimeError, sqlite3.Error) as exc:
         rc, error = 1, str(exc)
     except SystemExit as exc:
@@ -253,6 +279,8 @@ def _run_machine(args, fmt):
         env = axi.Envelope(verb, True, fields, context, help_)
     else:
         env = axi.error_envelope(verb, ValueError(error), context)
+        if error_help:
+            env.help = error_help
         if fields:                      # _Failed: the partial result + error
             env.fields = {**fields, **env.fields}
     axi.emit(env, fmt)
@@ -347,7 +375,7 @@ def _print_addressbook(project, book):
 
 
 def cmd_addressbook(args):
-    project, _, con = _ctx(args)
+    project, _, con = _known_ctx(args)
     book = sdb.addressbook(con, project)
     _print_addressbook(project, book)
     return 0
@@ -422,7 +450,7 @@ def _print_inbox(rows, show_all):
 
 
 def cmd_inbox(args):
-    _, _, con = _ctx(args)
+    _, _, con = _known_ctx(args)
     who = _require_own_addr(args, "to", "--to '<address>'")
     try:
         rows = _inbox_rows(con, args, who, not args.all)
@@ -450,7 +478,7 @@ def _print_fetch(items, who, peek):
 
 
 def cmd_fetch(args):
-    _, store, con = _ctx(args)
+    _, store, con = _known_ctx(args)
     who = _require_own_addr(args, "to", "--to '<address>'")
     try:
         items = _fetch_items(con, store, args, who)
@@ -477,7 +505,7 @@ def _print_thread(chain):
 
 
 def cmd_thread(args):
-    _, _, con = _ctx(args)
+    _, _, con = _known_ctx(args)
     chain = sdb.thread(con, args.id)
     if not chain:
         sys.exit(f"[sandesh] no such message #{args.id}")
@@ -847,6 +875,12 @@ def _status_identity(args):
     if not project or not address:
         raise _UsageError("the home view needs your identity: set $SANDESH_PROJECT "
                           "(or pass --project) and $SANDESH_ADDRESS")
+    con = sdb.connect_readonly()      # an absent store is checked by nothing (all zeros)
+    if con is not None:
+        try:
+            _require_known(con, project)
+        finally:
+            con.close()
     try:
         sdb.validate_address(address, project)
     except ValueError as exc:
@@ -880,7 +914,7 @@ def cmd_status(args):
     """`sandesh status` (§S4b) — the read-only dashboard, human form."""
     try:
         project, address = _status_identity(args)
-    except _UsageError as exc:
+    except (_UsageError, _UnknownProject) as exc:
         sys.exit(f"[sandesh] ERROR: {exc}")
     f = _status_fields(project, address)
     state = "● listening" if f["listening"] else "○ not listening"
@@ -960,7 +994,7 @@ def _joined(recipients, role):
 
 
 def axi_addressbook(args):
-    project, _, con = _ctx(args)
+    project, _, con = _known_ctx(args)
     cols = args.fields or ADDRESSBOOK_DEFAULT
     book = sdb.addressbook(con, project)
     _print_addressbook(project, book)
@@ -979,7 +1013,7 @@ def axi_addressbook(args):
 
 
 def axi_inbox(args):
-    project, store, con = _ctx(args)
+    project, store, con = _known_ctx(args)
     who = _require_own_addr(args, "to", "--to '<address>'")
     cols = args.fields or INBOX_DEFAULT
     rows = _inbox_rows(con, args, who, not args.all)
@@ -1020,7 +1054,7 @@ def axi_inbox(args):
 
 
 def axi_fetch(args):
-    project, store, con = _ctx(args)
+    project, store, con = _known_ctx(args)
     who = _require_own_addr(args, "to", "--to '<address>'")
     items = _fetch_items(con, store, args, who, mark=False)
     if not items:
@@ -1188,7 +1222,7 @@ def axi_search(args):
 
 
 def axi_thread(args):
-    project, store, con = _ctx(args)
+    project, store, con = _known_ctx(args)
     cols = args.fields or THREAD_DEFAULT
     chain = sdb.thread(con, args.id)
     if not chain:
@@ -1694,6 +1728,9 @@ def main(argv=None):
             # message as a clean '[sandesh]' line (never a raw traceback) and exit
             # non-zero (CR-SAN-037 AC4).
             print(f"[sandesh] {exc}", file=sys.stderr)
+            return 1
+        except _UnknownProject as exc:
+            print(f"[sandesh] ERROR: {exc}", file=sys.stderr)
             return 1
     finally:
         _close_connections()

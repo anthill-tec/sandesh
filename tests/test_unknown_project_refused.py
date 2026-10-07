@@ -289,7 +289,7 @@ class ArchivedProjectStillKnownTest(_BaseFixture):
             env_arch["ok"],
             f"an archived project must still answer addressbook reads; "
             f"out={out_arch!r} err={err_arch!r}")
-        self.assertEqual(env_arch["participants"], f"0 registered in {PROJ_ARCH}")
+        self.assertEqual([p["address"] for p in env_arch["participants"]], [MAINLINE_ARCH])
 
 
 # =========================================================================== #
