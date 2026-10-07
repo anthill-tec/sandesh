@@ -902,7 +902,8 @@ INBOX_DEFAULT = ("id", "from", "subject", "unread")
 INBOX_LIMIT = 50
 THREAD_FIELDS = ("id", "from", "subject", "created", "re")
 THREAD_DEFAULT = ("id", "from", "subject")
-SEARCH_DEFAULT = ("id", "from", "subject")
+SEARCH_FIELDS = ("id", "from", "subject", "kind", "created", "role", "snippet")
+SEARCH_DEFAULT = ("id", "from", "subject", "snippet")
 BODY_LIMIT = 500          # P3: fetch bodies are cut here unless --full
 
 
@@ -1149,7 +1150,11 @@ def axi_search(args):
     result = sdb.search(_con(), args.to, args.query, limit=args.limit,
                         offset=args.offset, sender_project=args.from_project)
     _print_search(args, result)
-    hits = [_pick(h, SEARCH_DEFAULT) for h in result["hits"]] or f'0 for "{args.query}"'
+    cols = args.fields or SEARCH_DEFAULT
+    hits = [_pick({"id": h["id"], "from": h["from"], "subject": h["subject"],
+                   "kind": h["kind"], "created": h["created_at"], "role": h["role"],
+                   "snippet": h["snippet"]}, cols)
+            for h in result["hits"]] or f'0 for "{args.query}"'
     help_ = [_tmpl(project, "thread --id <id>")] if result["hits"] else []
     return 0, {"hits": hits, "total": result["total"], "limit": result["limit"],
                "offset": result["offset"]}, help_
@@ -1518,7 +1523,10 @@ def build_parser(axi_format="human", axi_context=None):
     p.add_argument("query", help="the FTS5 query")
     p.add_argument("--to", required=True, help="your address (whose mail to search)")
     p.add_argument("--from-project", dest="from_project",
-                   help="only hits whose sender belongs to this project")
+                        help="only hits whose sender belongs to this project")
+    p.add_argument("--fields", type=_fields_arg(SEARCH_FIELDS), default=None, metavar="CSV",
+                   help="machine-mode columns (subset of "
+                        f"{','.join(SEARCH_FIELDS)}; default {','.join(SEARCH_DEFAULT)})")
     p.add_argument("--limit", type=_positive_int, default=20, help="page size (default 20)")
     p.add_argument("--offset", type=int, default=0, help="page start (default 0)")
     p.set_defaults(fn=cmd_search)
