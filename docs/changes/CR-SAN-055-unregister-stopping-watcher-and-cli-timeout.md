@@ -58,19 +58,23 @@ instructions text (l.~784).
 **Surfaces (verified 2026-10-16):** `integrations/pi/src/index.ts` `sandesh_unregister` (l.771–792),
 `stopWatchers` (l.473–); `integrations/pi/src/wake.ts` `WakeSupervisor.stop` (l.157–192).
 
-### §S3 — every sandesh-pi CLI verb call has a timeout (bun)
+### §S3 — every sandesh-pi CLI call has a timeout, except the wake watcher (bun)
 
-- `runSandeshText` passes `timeout: CLI_TIMEOUT_MS` to `pi.exec`. **PROPOSED — pending decision:**
-  `CLI_TIMEOUT_MS = 120_000` (above the CLI's own worst case: one 30 s `busy_timeout` wait per statement, the
-  `_retry_locked` backoff, and §S1's one-poll wait).
+- `CLI_TIMEOUT_MS = 120_000` (owner ruling 2026-10-16: above the CLI's own worst case — one 30 s `busy_timeout`
+  wait per statement, the `_retry_locked` backoff, and §S1's one-poll wait).
+- Every `pi.exec` of the `sandesh` CLI passes `timeout: CLI_TIMEOUT_MS`: the verb path `runSandeshText`, and the
+  session-start calls — the `--version` probes and `init --check` (owner ruling 2026-10-16: a stuck CLI must not
+  hang session start either).
 - A result with `killed: true` is a timeout regardless of its `code` (Pi reports a signal-killed child as `0`):
-  the tool fails with an `Error` whose message names the verb and `timed out after <n>s` (the same failure path
-  as a CLI crash).
+  - a verb tool fails with an `Error` whose message names the verb and `timed out after <n>s` (the same failure
+    path as a CLI crash);
+  - a timed-out `--version` probe counts as unreachable, and a timed-out `init --check` as a failed check — the
+    session-start paths each already have.
 - The wake watcher (`sandesh notify`, spawned by `WakeSupervisor`) is long-running by design and gets no timeout.
 - Test seam: `index.ts` exports `__setCliTimeoutMs(ms)`; `resetExtensionState()` restores the default.
 
 **Surfaces (verified 2026-10-16):** `integrations/pi/src/index.ts` `runSandeshText` (l.387–399), `runSandesh`
-(l.407–414).
+(l.407–414), the `--version` probes (l.227, l.237), `init --check` (l.1358).
 
 ### §S4 — docs
 
@@ -100,17 +104,27 @@ All Python criteria run against a temp store (`XDG_DATA_HOME` in the process / s
   the watcher's exec signal before the CLI `unregister` exec is called (recorded call order), posts no UI
   `notify`, leaves the watcher `running:false`, and returns the CLI envelope. For an address with no watcher in
   this session, no watcher is touched.
-- [ ] **AC6** — Pi unit/integration: a verb tool (e.g. `sandesh_inbox`) calls `pi.exec` with
-  `timeout === CLI_TIMEOUT_MS`; the wake watcher's `notify` exec has no `timeout`. A fake exec returning
-  `{ killed: true, code: 0, stdout: "" }` makes the tool fail with a message containing the verb and
-  `timed out`.
+- [ ] **AC6** — Pi integration (production `registerExtension`, fake `pi`):
+  - a verb tool (e.g. `sandesh_inbox`) calls `pi.exec` with `timeout === CLI_TIMEOUT_MS` (120 000);
+  - the session-start `--version` probe and `init --check` calls carry the same `timeout`;
+  - the wake watcher's `notify` exec has no `timeout`;
+  - a fake exec returning `{ killed: true, code: 0, stdout: "" }` for a verb makes the tool fail with a message
+    containing the verb and `timed out`; for the `--version` probe it takes the CLI-unreachable path.
 - [ ] **AC7** — docs pins: the Pi README `sandesh_unregister` row mentions stopping the session's own watcher;
-  `docs/USER_GUIDE.md` and `usage-scenarios.md` mention the bounded wait. Full Python gate and full `bun test`
-  green.
+  `docs/USER_GUIDE.md` and `usage-scenarios.md` mention the bounded wait; the MCP `sandesh_unregister`
+  docstring and the server instructions describe the one-poll-interval wait (no unconditional "re-run once
+  offline"); `CLAUDE.md` locked semantic #8 states the wait. Full Python gate and full `bun test` green.
 
-**VERIFY audit (not a test):** `unregister` and `_evict_project_notifiers` share one bounded-wait helper;
-`runSandeshText` is the only verb exec path and always passes the timeout; `sandesh_unregister` calls the
-supervisor's requested stop.
+**Approved existing-test edits:** `tests/test_sandesh.py` (l.~218), `tests/test_axi_verbs.py`
+(`test_unregister_live_notifier_ok_true_result_tombstoned_exit_3_unchanged`, l.~633) and
+`tests/test_mcp_mutating_tools.py` (`test_unregister_with_live_notifier_returns_tombstoned`, l.~614) hold their
+notifier with the test's own pid, so it never goes offline and `tombstoned` stays the answer. Each bounds the new
+wait (`wait_secs` in the library call; `SANDESH_POLL_SECONDS=3` for the CLI and MCP paths) and keeps its
+assertions.
+
+**VERIFY audit (not a test):** `unregister` and `_evict_project_notifiers` share one bounded-wait helper; every
+`pi.exec` of the CLI except the wake watcher passes the timeout; `sandesh_unregister` calls the supervisor's
+requested stop.
 
 ## Estimated size
 
