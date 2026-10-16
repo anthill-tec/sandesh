@@ -38,7 +38,11 @@ import type {
   ExtensionHandler,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import registerExtension, { resetExtensionState, __setStartSettleMs } from "./index";
+import registerExtension, {
+  resetExtensionState,
+  __setStartSettleMs,
+  __setCliTimeoutMs,
+} from "./index";
 
 /** Owner ruling (2026-10-16, CR-SAN-055 §S3): the CLI's own worst case tops
  * out at ~200s (6 locked-write retries x 30s busy_timeout, plus the §S1
@@ -346,6 +350,81 @@ describe("AC6 — killed:true verb result: aborted vs timed out", () => {
     expect(msg).toContain("inbox");
     expect(msg).toContain("aborted");
     expect(msg).not.toContain("timed out");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AC8 — __setCliTimeoutMs test seam drives every CLI call's timeout and its
+// message; resetExtensionState() restores the default
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("AC8 — __setCliTimeoutMs test seam drives every CLI call's timeout and its message", () => {
+  test("after __setCliTimeoutMs(50): a verb call, the --version probe and init --check each carry timeout === 50, and a killed verb call (signal not aborted) fails with 'timed out after 0.05s'", async () => {
+    __setCliTimeoutMs(50);
+
+    // a verb tool's pi.exec call carries timeout === 50
+    const { fakePi: verbPi, capturedTools: verbTools, execMock: verbExec } = makeFakePi([ok("")]);
+    registerExtension(verbPi);
+    const inboxTool = getTool(verbTools, "sandesh_inbox");
+    await inboxTool.execute("call-id", { recipient: "Mainline - Demo" }, undefined, undefined, {} as any);
+    const verbCalls = execCalls(verbExec);
+    expect(verbCalls[0][2]?.timeout).toBe(50);
+
+    // the --version probe and init --check calls carry timeout === 50
+    const { fakePi: probePi, execMock: probeExec, getSessionStartHandler } = makeFakePi([
+      ok("sandesh 0.4.2"),
+      ok(""),
+    ]);
+    registerExtension(probePi);
+    const handler = getSessionStartHandler();
+    const { fakeCtx } = makeFakeCtx();
+    await fireSessionStart(handler, fakeCtx);
+    const probeCalls = execCalls(probeExec);
+    const versionProbeCall = probeCalls.find(([, args]) => args.includes("--version"));
+    const initCheckCall = probeCalls.find(([, args]) => args.includes("init") && args.includes("--check"));
+    expect(versionProbeCall).toBeDefined();
+    expect(initCheckCall).toBeDefined();
+    expect(versionProbeCall![2]?.timeout).toBe(50);
+    expect(initCheckCall![2]?.timeout).toBe(50);
+
+    // a killed verb call under the 50ms timeout, signal NOT aborted, fails
+    // with "timed out after 0.05s" (50 / 1000)
+    const { fakePi: killedPi, capturedTools: killedTools } = makeFakePi([killed(0)]);
+    registerExtension(killedPi);
+    const killedInboxTool = getTool(killedTools, "sandesh_inbox");
+    const controller = new AbortController(); // never aborted
+
+    let caught: unknown;
+    try {
+      await killedInboxTool.execute(
+        "call-id",
+        { recipient: "Mainline - Demo" },
+        controller.signal,
+        undefined,
+        {} as any,
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const msg = (caught as Error).message;
+    expect(msg).toContain("inbox");
+    expect(msg).toContain("timed out after 0.05s");
+
+    resetExtensionState();
+  });
+
+  test("resetExtensionState() restores timeout === CLI_TIMEOUT_MS (240000) after __setCliTimeoutMs(50)", async () => {
+    __setCliTimeoutMs(50);
+    resetExtensionState();
+
+    const { fakePi, capturedTools, execMock } = makeFakePi([ok("")]);
+    registerExtension(fakePi);
+    const inboxTool = getTool(capturedTools, "sandesh_inbox");
+    await inboxTool.execute("call-id", { recipient: "Mainline - Demo" }, undefined, undefined, {} as any);
+
+    const calls = execCalls(execMock);
+    expect(calls[0][2]?.timeout).toBe(CLI_TIMEOUT_MS);
   });
 });
 
