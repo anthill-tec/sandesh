@@ -136,6 +136,11 @@ All Python criteria run against a temp store (`XDG_DATA_HOME` in the process / s
   already done (none contains "re-run once"); `CLAUDE.md` locked semantic #8 states the wait. Full Python gate
   and full `bun test` green.
 
+- [ ] **AC8** — Pi integration (production `registerExtension`, fake `pi`), added after VERIFY: after
+  `__setCliTimeoutMs(50)`, a verb tool, the `--version` probe and `init --check` each call `pi.exec` with
+  `timeout === 50`, and a verb call the fake exec kills at that timeout (signal not aborted) fails with
+  `timed out after 0.05s`; after `resetExtensionState()` the same calls carry `timeout === 240000` again.
+
 **Approved existing-test edits:** `tests/test_sandesh.py` (l.~218), `tests/test_axi_verbs.py`
 (`test_unregister_live_notifier_ok_true_result_tombstoned_exit_3_unchanged`, l.~633) and
 `tests/test_mcp_mutating_tools.py` (`test_unregister_with_live_notifier_returns_tombstoned`, l.~614) hold their
