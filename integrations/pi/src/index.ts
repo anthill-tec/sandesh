@@ -64,6 +64,19 @@ export function __setStartSettleMs(ms: number): void {
 }
 
 /**
+ * Timeout for every `sandesh` CLI exec except the long-running wake watcher
+ * (CR-SAN-055 §S3). Sits above the CLI's own worst case: 6 locked-write
+ * retries x 30 s busy_timeout, plus the unregister wait of two poll intervals.
+ */
+const CLI_TIMEOUT_MS = 240_000;
+let cliTimeoutMs = CLI_TIMEOUT_MS;
+
+/** Test seam (never called by production code): override the CLI exec timeout. */
+export function __setCliTimeoutMs(ms: number): void {
+  cliTimeoutMs = ms;
+}
+
+/**
  * Test seam (never called by production code): stop every watcher of every
  * supervisor registered since the last reset, clear that registry, reset
  * the resolved binary choice so a fresh `session_start` re-probes, and restore
@@ -74,6 +87,7 @@ export function resetExtensionState(): void {
   registeredSupervisors.clear();
   resetBinaryResolution();
   startSettleMs = START_SETTLE_MS;
+  cliTimeoutMs = CLI_TIMEOUT_MS;
 }
 
 /**
@@ -224,8 +238,8 @@ interface ProbeResult {
 async function probeVersion(pi: ExtensionAPI): Promise<ProbeResult> {
   const bin = explicitBinary();
   try {
-    const r = await pi.exec(bin ?? "sandesh", ["--version"]);
-    if (r.code === 0) return { reachable: true, stdout: r.stdout };
+    const r = await pi.exec(bin ?? "sandesh", ["--version"], { timeout: cliTimeoutMs });
+    if (r.code === 0 && !r.killed) return { reachable: true, stdout: r.stdout };
   } catch {
     // Local binary not found — fall through to the uvx retry.
   }
@@ -234,8 +248,8 @@ async function probeVersion(pi: ExtensionAPI): Promise<ProbeResult> {
   useUvx = true;
   try {
     const [cmd, args] = resolveSandesh(["--version"]);
-    const r = await pi.exec(cmd, args);
-    if (r.code === 0) return { reachable: true, stdout: r.stdout };
+    const r = await pi.exec(cmd, args, { timeout: cliTimeoutMs });
+    if (r.code === 0 && !r.killed) return { reachable: true, stdout: r.stdout };
   } catch {
     // uvx probe also rejected — CLI is unreachable.
   }
@@ -382,7 +396,10 @@ function isEnvelope(stdout: string): boolean {
  *     unregister `tombstoned` disposition on exit 3 — CR-SAN-019 §S1 — are all
  *     envelopes the agent reads, not failures),
  *   - non-zero with undecodable/empty stdout (CLI missing, crash) → throw
- *     Error(verb + exit code + stderr); Pi catches it and sets isError.
+ *     Error(verb + exit code + stderr); Pi catches it and sets isError,
+ *   - killed by Pi (`killed:true`, `code` meaningless — CR-SAN-055 §S3) →
+ *     throw: `aborted` when the caller's signal is aborted, otherwise the
+ *     {@link cliTimeoutMs} timeout fired → `timed out after <n>s`.
  */
 async function runSandeshText(
   pi: ExtensionAPI,
@@ -391,7 +408,11 @@ async function runSandeshText(
   signal?: AbortSignal,
 ): Promise<string> {
   const [cmd, resolvedArgs] = resolveSandesh(["--format", "toon", ...args]);
-  const r = await pi.exec(cmd, resolvedArgs, { signal });
+  const r = await pi.exec(cmd, resolvedArgs, { signal, timeout: cliTimeoutMs });
+  if (r.killed) {
+    if (signal?.aborted) throw new Error(`sandesh ${verb} aborted`);
+    throw new Error(`sandesh ${verb} timed out after ${cliTimeoutMs / 1000}s`);
+  }
   if (r.code !== 0 && !isEnvelope(r.stdout)) {
     throw new Error(`sandesh ${verb} failed (exit ${r.code}): ${r.stderr}`);
   }
@@ -785,6 +806,10 @@ export default function registerExtension(pi: ExtensionAPI): void {
       project_id: projectIdParam,
     }),
     execute: async (_callId, params: UnregisterParams, signal) => {
+      // CR-SAN-055 §S2: stop this registration's own watcher for the address
+      // first (a requested, quiet stop) so the CLI's bounded wait sees it go
+      // offline; an address this session does not watch is untouched.
+      stopWatchers(sup, params.address, undefined);
       const args = [...projectPrefix(params.project_id), "unregister", "--address", params.address];
       if (params.requester !== undefined) args.push("--as", params.requester);
       return runSandesh(pi, "unregister", args, signal);
@@ -1355,8 +1380,8 @@ export default function registerExtension(pi: ExtensionAPI): void {
     // message verbatim. Exit 0 (provisioned) → no nudge. Never throws.
     try {
       const [checkCmd, checkArgs] = resolveSandesh(["init", "--check"]);
-      const check = await pi.exec(checkCmd, checkArgs);
-      if (check.code !== 0) {
+      const check = await pi.exec(checkCmd, checkArgs, { timeout: cliTimeoutMs });
+      if (check.code !== 0 || check.killed) {
         const reason = (check.stderr || check.stdout).trim();
         ctx.ui.notify(`${PROVISION_NUDGE_PREFIX} ${reason}`.trim(), "warning");
       }

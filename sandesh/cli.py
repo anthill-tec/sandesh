@@ -346,8 +346,9 @@ def cmd_register(args):
 
 def _print_unregister(args, verdict, pid):
     if verdict == "tombstoned":
-        print(f"tombstone set on {args.address} (notifier pid {pid}). It stops within one poll; "
-              f"re-run once `addressbook` shows it offline.")
+        print(f"tombstone set on {args.address} (notifier pid {pid}). Its watcher was still live "
+              f"after waiting two poll intervals, so the address stays registered; stop that "
+              f"watcher, then unregister.")
         return 3
     print(f"unregistered: {args.address}")
     return 0

@@ -190,7 +190,9 @@ tombstoned id).
 8. **Cooperative tombstone eviction.** You can't cross-session-kill another's watcher.
    `notifier_tombstone(recipient)` sets a flag the watcher sees on its next poll →
    it self-terminates (exit 3). `unregister` of a *live* address tombstones first,
-   returns `('tombstoned', pid)`; the caller retries once it's offline, then soft-deletes.
+   waits up to two poll intervals for the watcher to exit, then soft-deletes (CR-SAN-055);
+   it returns `('tombstoned', pid)` — address left active — only when the watcher outlives
+   that wait.
    **Terminology (two concepts, one word):** the `notifier.tombstone` column here is the
    *per-watcher cooperative-shutdown flag*; the project lifecycle state `tombstoned`
    (CR-SAN-024, see #5) is the *permanent retirement of a whole project*. They are

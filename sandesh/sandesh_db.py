@@ -1020,16 +1020,21 @@ def unregister_guards(con, recipient, requester, project=None):
     return req_proj
 
 
-def unregister(con, recipient, requester, project=None):
+def unregister(con, recipient, requester, project=None, *, wait_secs=None):
     """Remove a participant. Auth: within a project, Mainline may remove anyone and
     anyone may remove self; a foreign project's address may NOT be removed.
-    Live notifier → tombstone it, return ('tombstoned', pid); else reap stale, soft-delete,
-    return ('unregistered', None)."""
+    Live notifier → tombstone it, then wait up to `wait_secs` (default 2 poll
+    intervals, CR-SAN-055 §S1) for it to go offline; still live after the wait →
+    return ('tombstoned', pid), address left active. Otherwise reap stale,
+    soft-delete, return ('unregistered', None)."""
     unregister_guards(con, recipient, requester, project)
     live = notifier_live(con, recipient)
     if live is not None:
         notifier_tombstone(con, recipient)
-        return ("tombstoned", live["pid"])
+        if wait_secs is None:
+            wait_secs = 2 * poll_interval()
+        if _await_notifiers_offline(con, [recipient], wait_secs):
+            return ("tombstoned", live["pid"])
     notifier_reap_if_stale(con, recipient)
     deactivate(con, recipient)
     return ("unregistered", None)
@@ -1048,6 +1053,20 @@ def poll_interval():
     except ValueError:
         val = DEFAULT_POLL_SECS
     return max(val, POLL_FLOOR_SECS)
+
+
+def _await_notifiers_offline(con, recipients, wait_secs):
+    """Bounded wait (up to `wait_secs`) for each recipient's notifier to go offline
+    (`notifier_live()` → None: released, stale, or pid gone). Returns the recipients
+    still live when the wait ends (empty list = all offline). Shared by unregister()
+    and _evict_project_notifiers() (CR-SAN-055 §S1)."""
+    live = [a for a in recipients if notifier_live(con, a) is not None]
+    if live:
+        deadline = time.monotonic() + wait_secs
+        while live and time.monotonic() < deadline:
+            time.sleep(0.05)
+            live = [a for a in live if notifier_live(con, a) is not None]
+    return live
 
 
 def _require_project_mainline(project_id, by):
@@ -1080,11 +1099,7 @@ def _evict_project_notifiers(con, project_id, *, force, wait_secs, op):
     live = [a for a in addresses if notifier_live(con, a) is not None]
     for addr in live:
         notifier_tombstone(con, addr)
-    if live:
-        deadline = time.monotonic() + wait_secs
-        while live and time.monotonic() < deadline:
-            time.sleep(0.05)
-            live = [a for a in live if notifier_live(con, a) is not None]
+    _await_notifiers_offline(con, live, wait_secs)
     for addr in addresses:
         notifier_reap_if_stale(con, addr)
     still_live = [a for a in addresses if notifier_live(con, a) is not None]

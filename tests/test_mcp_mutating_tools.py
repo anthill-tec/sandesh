@@ -621,14 +621,25 @@ class McpMutatingToolsTest(unittest.IsolatedAsyncioTestCase):
         sdb.notifier_acquire(con, TRACK1, os.getpid(), "tok-live", "localhost")
         con.close()
 
-        result = await mcp_server.mcp.call_tool(
-            "sandesh_unregister",
-            {
-                "project_id": PROJ,
-                "recipient": TRACK1,
-                "requester": MAINLINE,
-            },
-        )
+        # CR-SAN-055 \u00a7S1: this notifier is held by the test's own pid (never
+        # goes offline on its own); SANDESH_POLL_SECONDS bounds the new wait
+        # (2 poll intervals = 6s) instead of the 20s default.
+        prev_poll = os.environ.get("SANDESH_POLL_SECONDS")
+        os.environ["SANDESH_POLL_SECONDS"] = "3"
+        try:
+            result = await mcp_server.mcp.call_tool(
+                "sandesh_unregister",
+                {
+                    "project_id": PROJ,
+                    "recipient": TRACK1,
+                    "requester": MAINLINE,
+                },
+            )
+        finally:
+            if prev_poll is None:
+                os.environ.pop("SANDESH_POLL_SECONDS", None)
+            else:
+                os.environ["SANDESH_POLL_SECONDS"] = prev_poll
         value = _scalar(result)
         self.assertEqual(len(value), 2)
         self.assertEqual(value[0], "tombstoned")
