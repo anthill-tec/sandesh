@@ -57,7 +57,7 @@ first turn.
 | ----------------------- | -------------------------------------------------------------------------------- |
 | `sandesh_setup`         | provision a project (idempotent).                                                |
 | `sandesh_register`      | add an address to the project's addressbook.                                     |
-| `sandesh_unregister`    | remove (soft-delete) an address; tombstones a live watcher first.                |
+| `sandesh_unregister`    | remove (soft-delete) an address; stops this session's own watcher for it first, and a live watcher elsewhere is tombstoned and waited for up to two poll intervals. |
 | `sandesh_addressbook`   | list the project's registered addresses.                                         |
 | `sandesh_send`          | send a message (subject, optional body, `to`/`cc`, kind).                        |
 | `sandesh_reply`         | reply to a message (threads on the parent; subject defaults to `Re: …`).         |
@@ -81,7 +81,9 @@ includes complete message bodies on `fetch`/`thread` (`--full`), and `limit: N` 
 `inbox`/`search` (`--limit N`). Omitted knobs add no flag. **Errors are results, not
 throws:** a CLI failure that still emits an envelope comes back as `ok: false` with `error`
 and `help[]`, so the agent can read and recover; only an undecodable failure (no envelope on
-stdout) throws with the verb, exit code and stderr.
+stdout) throws with the verb, exit code and stderr. Every CLI call (tool verbs, `--version`
+probes, `init --check`; never the `notify` watcher) times out after 240 s; a timeout throws
+`sandesh <verb> timed out after 240s`, a cancelled call throws `sandesh <verb> aborted`.
 
 ## Wake
 

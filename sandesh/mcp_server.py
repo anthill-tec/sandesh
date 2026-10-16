@@ -530,9 +530,10 @@ was lazily rebuilt first (harmless)."""
         any address may remove itself.
 
         Called by Mainline (or an address on itself) to retire a participant. If the target's
-        `notify` watcher is still live it cannot be cross-session killed — this tombstones it
-        first (returns ('tombstoned', pid)); re-run once the watcher is offline to complete
-        the soft-delete. Otherwise returns ('unregistered', None).
+        `notify` watcher is still live it cannot be cross-session killed — this tombstones it,
+        waits up to two poll intervals for the watcher to exit, then soft-deletes and returns
+        ('unregistered', None). ('tombstoned', pid) means the watcher outlived that wait: the
+        address stays registered — stop that watcher, then unregister.
         """
         con = None
         try:
@@ -783,7 +784,9 @@ was lazily rebuilt first (harmless)."""
             f"Call the sandesh_unregister tool with recipient='{recipient}' and "
             f"requester='{requester}'. Mainline may remove anyone; any address may "
             "remove itself. If the target's notify watcher is still live the call "
-            "returns ('tombstoned', pid) — re-run sandesh_unregister once it is offline."
+            "tombstones it and waits up to two poll intervals for it to exit before "
+            "soft-deleting; ('tombstoned', pid) means the watcher outlived that wait and "
+            "the address stays registered — stop that watcher, then unregister."
         )
 
 

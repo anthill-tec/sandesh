@@ -216,7 +216,10 @@ class SandeshTest(unittest.TestCase):
     def test_unregister_tombstones_live_notifier_first(self):
         self._roster()
         s.notifier_acquire(self.con, T1, os.getpid(), "tok-a", "h")
-        self.assertEqual(s.unregister(self.con, T1, requester=MAINLINE, project=PROJ)[0], "tombstoned")
+        # CR-SAN-055 \u00a7S1: this notifier is held by the test's own pid (never
+        # goes offline on its own), so `tombstoned` stays the answer; wait_secs
+        # bounds the new wait instead of taking its default (2 poll intervals).
+        self.assertEqual(s.unregister(self.con, T1, requester=MAINLINE, project=PROJ, wait_secs=0.3)[0], "tombstoned")
         self.assertTrue(s.is_active(self.con, T1))
         s.notifier_release(self.con, T1, "tok-a")
         self.assertEqual(s.unregister(self.con, T1, requester=MAINLINE, project=PROJ)[0], "unregistered")

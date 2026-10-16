@@ -195,6 +195,17 @@ sandesh grant --cross-project --project <id> --by <admin>
 If a send fails with *"cross-project sending not approved …"*, ask a human to run
 that grant — there is no MCP/Pi tool for it, and you should not retry on your own.
 
+### Removing an address
+
+To retire an address, **stop its watcher, then unregister** it. `unregister` (CLI,
+`sandesh_unregister` tool) cannot kill another session's watcher: if the address's
+watcher is still live, it sets a tombstone the watcher sees on its next poll, waits
+up to two poll intervals for the watcher to exit, then removes the address. The Pi
+`sandesh_unregister` tool first stops this session's own watcher for that address,
+so unregistering yourself from Pi completes in one call. A `tombstoned` result means
+the watcher outlived that wait and the address is still registered — stop that
+watcher, then unregister.
+
 ### Pausing and retiring a project
 
 - **Archive** pauses a project — a reversible, read-only freeze; `unarchive` brings
