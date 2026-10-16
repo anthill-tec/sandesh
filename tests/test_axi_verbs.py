@@ -632,9 +632,13 @@ class RegisterUnregisterIdempotenceTest(_BaseFixture):
 
     def test_unregister_live_notifier_ok_true_result_tombstoned_exit_3_unchanged(self):
         sdb.notifier_acquire(self.con, "Track 2 - Demo", os.getpid(), "tok", "host")
+        # CR-SAN-055 \u00a7S1: this notifier is held by the test's own pid (never
+        # goes offline on its own); SANDESH_POLL_SECONDS bounds the new wait
+        # (2 poll intervals = 6s) instead of the 20s default.
         rc, out, err = self.run_cli(
             ["--format", "toon", "unregister", "--project", "Demo",
-             "--address", "Track 2 - Demo", "--as", "Mainline - Demo"])
+             "--address", "Track 2 - Demo", "--as", "Mainline - Demo"],
+            env={"SANDESH_POLL_SECONDS": "3"})
         self.assertEqual(rc, 3, f"tombstoned exit code must stay 3 (unchanged); err={err!r}")
         axi = _toon.decode(out)["axi"]
         self.assertIs(axi["ok"], True, "P6: this is a successful cooperative eviction, not a failure")
