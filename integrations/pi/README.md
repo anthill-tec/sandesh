@@ -57,7 +57,7 @@ first turn.
 | ----------------------- | -------------------------------------------------------------------------------- |
 | `sandesh_setup`         | provision a project (idempotent).                                                |
 | `sandesh_register`      | add an address to the project's addressbook.                                     |
-| `sandesh_unregister`    | remove (soft-delete) an address; tombstones a live watcher first.                |
+| `sandesh_unregister`    | remove (soft-delete) an address; stops this session's own watcher for it first, and a live watcher elsewhere is tombstoned and waited for up to two poll intervals. |
 | `sandesh_addressbook`   | list the project's registered addresses.                                         |
 | `sandesh_send`          | send a message (subject, optional body, `to`/`cc`, kind).                        |
 | `sandesh_reply`         | reply to a message (threads on the parent; subject defaults to `Re: …`).         |

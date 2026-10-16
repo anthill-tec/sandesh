@@ -206,7 +206,8 @@ sandesh unregister --address "Track 4 - Nai" --as "Mainline - Nai"   # retire (M
 ```
 Removing an address whose watcher is *live* doesn't kill it directly (you can't cross-session
 kill); `unregister` sets a **tombstone** the watcher sees on its next poll and self-terminates,
-then the address is deactivated. *Tools: `setup`, `register`, `addressbook`, `unregister`.*
+waits up to two poll intervals for it to exit, then deactivates the address (`tombstoned` only
+if the watcher outlives that wait). Recommended order: stop the watcher, then unregister. *Tools: `setup`, `register`, `addressbook`, `unregister`.*
 
 ### S10 — Cross-Track awareness (Track → Track)
 Usually Tracks route through Mainline, but a Track can directly inform another about something
@@ -309,7 +310,7 @@ must equal `project_id`.
 |---|---|---|---|---|
 | **`sandesh_setup`** | Provision a project's store (create DB + dirs). Idempotent — run once before anything else. | anyone (bootstrap) | `project_id` | the store path |
 | **`sandesh_register`** | Add an address to the addressbook (self-register). Rejects an active duplicate; reactivates a previously-removed one. | a joining orchestrator | `project_id`, `address`, `kind?` (`mainline`/`track`), `name?` | confirmation |
-| **`sandesh_unregister`** | Remove an address. **Mainline may remove anyone; any address may remove itself.** If its watcher is live, tombstones it first (returns "tombstoned"; re-run once offline). | Mainline (or self) | `project_id`, `address`, `as` (requester) | `unregistered` or `tombstoned`+pid |
+| **`sandesh_unregister`** | Remove an address. **Mainline may remove anyone; any address may remove itself.** If its watcher is live, tombstones it and waits up to two poll intervals for it to exit before soft-deleting ("tombstoned" means the watcher outlived that wait). | Mainline (or self) | `project_id`, `address`, `as` (requester) | `unregistered` or `tombstoned`+pid |
 | **`sandesh_addressbook`** | List all participants with active/inactive status and **who is currently listening** (live notifier). | anyone | `project_id` | rows (address, kind, active, listening) |
 | **`sandesh_send`** | Send a message. `subject` is mandatory; omit a body ⇒ subject-only. `to`/`cc` are **lists of addresses**; `to: ["all-tracks"]` broadcasts (minus sender). **To wakes the recipient; Cc is silent.** | Mainline or a Track | `project_id`, `from`, `to?`, `cc?`, `subject`, `kind?` (`request`/`directive`/`fyi`), `body?` | new message id |
 | **`sandesh_reply`** | Reply to a message; threads via `in_reply_to`. Defaults the recipient to the parent's sender and the subject to `"Re: …"`. A recipient uses this to signal **completion** (often subject-only — the subject states what was done). | the recipient of a message | `project_id`, `parent_id` (the original message's id), `from`, `subject?`, `body?` | new message id |
