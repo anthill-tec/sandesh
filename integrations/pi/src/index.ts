@@ -785,6 +785,10 @@ export default function registerExtension(pi: ExtensionAPI): void {
       project_id: projectIdParam,
     }),
     execute: async (_callId, params: UnregisterParams, signal) => {
+      // CR-SAN-055 §S2: stop this registration's own watcher for the address
+      // first (a requested, quiet stop) so the CLI's bounded wait sees it go
+      // offline; an address this session does not watch is untouched.
+      stopWatchers(sup, params.address, undefined);
       const args = [...projectPrefix(params.project_id), "unregister", "--address", params.address];
       if (params.requester !== undefined) args.push("--as", params.requester);
       return runSandesh(pi, "unregister", args, signal);
