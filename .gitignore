@@ -16,3 +16,5 @@ coverage.lcov
 .kiro/
 .lean-ctx/
 crucible.toml
+# Pi harness per-project config rendered by modelb-axi (agents, permission policy) — local
+.pi/
