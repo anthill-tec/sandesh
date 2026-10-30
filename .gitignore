@@ -15,6 +15,7 @@ coverage.lcov
 # Kiro IDE steering / lean-ctx agent tooling (local, not part of the deliverable)
 .kiro/
 .lean-ctx/
+.lean-ctx.toml
 crucible.toml
 # Pi harness per-project config rendered by modelb-axi (agents, permission policy) — local
 .pi/
